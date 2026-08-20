@@ -1,0 +1,26 @@
+# Binaries
+drmt
+drmt.exe
+*.exe
+*.out
+*.app
+
+# Database files
+drmt.db
+*.db
+*.db-shm
+*.db-wal
+
+# Credentials and Secrets
+static/*.csv
+plato_client_credentials.csv
+*.env
+
+# Go workspace/build files
+vendor/
+go.work
+go.work.sum
+
+# OS Specific
+.DS_Store
+Thumbs.db
