@@ -92,6 +92,7 @@ func (a *FlattradeWSAdapter) listen(ctx context.Context, url string, cred models
 		"source":      "API",
 		"accesstoken": cred.AccessToken,
 	}
+	log.Printf("Flattrade WS SENDING Auth Payload for %s: %+v", cred.ClientID, connectMsg)
 	if err := conn.WriteJSON(connectMsg); err != nil {
 		return fmt.Errorf("write auth: %w", err)
 	}
@@ -123,8 +124,10 @@ func (a *FlattradeWSAdapter) listen(ctx context.Context, url string, cred models
 						"t":     "p",
 						"actid": cred.ClientID,
 					}
+					log.Printf("Flattrade WS SENDING Pos Sub Payload for %s: %+v", cred.ClientID, subMsg)
 					conn.WriteJSON(subMsg)
 				} else {
+					log.Printf("Flattrade WS Auth REJECTED for %s. Response: %+v", cred.ClientID, msg)
 					errChan <- fmt.Errorf("auth failed: %v", msg)
 					return
 				}

@@ -13,6 +13,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"drmt/internal/config"
+	"drmt/internal/credentials"
 	"drmt/internal/models"
 )
 
@@ -20,15 +21,18 @@ type FlattradeAdapter struct {
 	db       *sqlx.DB
 	client   *http.Client
 	interval time.Duration
+	proxyURL string
 }
 
 func NewFlattradeAdapter(db *sqlx.DB, proxyURL string) *FlattradeAdapter {
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := credentials.NewHTTPClientWithProxy(proxyURL)
+	client.Timeout = 10 * time.Second
 
 	return &FlattradeAdapter{
 		db:       db,
 		client:   client,
-		interval: 3 * time.Second, // Poll every 3 seconds
+		interval: 5 * time.Second, // Poll every 5 seconds
+		proxyURL: proxyURL,
 	}
 }
 
@@ -68,44 +72,73 @@ func (a *FlattradeAdapter) poll(feed chan<- models.Position) {
 }
 
 func (a *FlattradeAdapter) fetchPositionsForCred(cred models.Credential, feed chan<- models.Position) {
-	url := "https://piconnect.flattrade.in/PiConnectAPI/PositionBook"
+	url := "https://emergeapi.flattrade.in/getPositonBook"
 	
-	jData := fmt.Sprintf(`{"uid":"%s","actid":"%s"}`, cred.ClientID, cred.ClientID)
-	payload := fmt.Sprintf("jData=%s&jKey=%s", jData, cred.AccessToken)
+	payloadMap := map[string]string{
+		"uid":   cred.ClientID,
+		"actid": cred.ClientID,
+		"jkey":  cred.AccessToken,
+	}
+	payloadBytes, _ := json.Marshal(payloadMap)
 
-	req, err := http.NewRequest("POST", url, strings.NewReader(payload))
+	req, err := http.NewRequest("POST", url, strings.NewReader(string(payloadBytes)))
 	if err != nil {
+		log.Printf("[FLATTRADE Debug] Request creation error: %v", err)
 		return
 	}
 
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("source", "WEB")
+	req.Header.Set("device", "Chrome")
+	req.Header.Set("Origin", "https://emerge.flattrade.in")
+	req.Header.Set("Referer", "https://emerge.flattrade.in/")
 
 	resp, err := a.client.Do(req)
 	if err != nil {
+		log.Printf("[FLATTRADE Debug] Network error for %s: %v", cred.ClientID, err)
 		return
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return
-	}
-
 	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		log.Printf("Flattrade API auth failed (HTTP %d) for %s, triggering refresh...", resp.StatusCode, cred.ClientID)
+		go credentials.RefreshAccessToken(a.db, &cred, a.proxyURL)
+		return
+	} else if resp.StatusCode != http.StatusOK {
+		log.Printf("[FLATTRADE Debug] Non-200 status for %s: %d, body: %s", cred.ClientID, resp.StatusCode, string(body))
+		return
+	}
 	
-	// Flattrade returns an array of objects for success, or a single object for failure
-	// We'll try to unmarshal as array first
-	var result []map[string]interface{}
+	var result struct {
+		Status          string                   `json:"status"`
+		ErrMsg          string                   `json:"errMsg"`
+		PositionBookArr []map[string]interface{} `json:"positionBookArr"`
+	}
+
 	if err := json.Unmarshal(body, &result); err != nil {
-		// Could be a failure object like {"stat":"Not_Ok", "emsg": ...}
+		log.Printf("[FLATTRADE Debug] Unmarshal error for %s: %v. Body: %s", cred.ClientID, err, string(body))
+		
+		// Fallback for completely different failure schema (just in case)
+		var failResult map[string]interface{}
+		if err2 := json.Unmarshal(body, &failResult); err2 == nil {
+			if failResult["stat"] == "Not_Ok" {
+				log.Printf("Flattrade API failed for %s, triggering refresh...", cred.ClientID)
+				go credentials.RefreshAccessToken(a.db, &cred, a.proxyURL)
+			}
+		}
 		return
 	}
 
-	for _, pMap := range result {
-		if pMap["stat"] != "Ok" {
-			continue
-		}
+	if result.Status != "S" {
+		log.Printf("Flattrade WEB API returned error for %s: %s, triggering refresh...", cred.ClientID, result.ErrMsg)
+		go credentials.RefreshAccessToken(a.db, &cred, a.proxyURL)
+		return
+	}
 
+	for _, pMap := range result.PositionBookArr {
 		netQtyStr := fmt.Sprintf("%v", pMap["netqty"])
 		var netQty int
 		fmt.Sscanf(netQtyStr, "%d", &netQty)

@@ -29,7 +29,7 @@ func NewAliceBlueAdapter(db *sqlx.DB, proxyURL string) *AliceBlueAdapter {
 	return &AliceBlueAdapter{
 		db:       db,
 		client:   client,
-		interval: 3 * time.Second, // Poll every 3 seconds
+		interval: 5 * time.Second, // Poll every 5 seconds
 		proxyURL: proxyURL,
 	}
 }
@@ -101,6 +101,11 @@ func (a *AliceBlueAdapter) fetchPositionsForCred(cred models.Credential, feed ch
 	}
 
 	if result["status"] != "Ok" {
+		// "EC920" means "No positions found for this user." This is not an auth error.
+		if statStr, ok := result["status"].(string); ok && statStr == "EC920" {
+			return
+		}
+
 		log.Printf("AliceBlue API failed for %s: %s, triggering refresh...", cred.ClientID, string(body))
 		go credentials.RefreshAccessToken(a.db, &cred, a.proxyURL)
 		return
@@ -145,6 +150,7 @@ func (a *AliceBlueAdapter) fetchPositionsForCred(cred models.Credential, feed ch
 			ClientID:        cred.ClientID,
 			UserID:          cred.UserID,
 			Symbol:          symbol,
+			Token:           fmt.Sprintf("%v", pMap["instrumentId"]),
 			Exchange:        fmt.Sprintf("%v", pMap["exchange"]),
 			ProductType:     fmt.Sprintf("%v", pMap["product"]),
 			Quantity:        netQty,

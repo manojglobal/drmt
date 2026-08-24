@@ -3,6 +3,7 @@ package position
 import (
 	"context"
 	"fmt"
+"sort"
 	"log"
 	"sync"
 	"time"
@@ -40,7 +41,11 @@ func (m *Manager) Start(ctx context.Context) {
 			}
 
 			m.mu.Lock()
-			m.positions[pos.ID] = pos
+			if pos.Quantity == 0 {
+				delete(m.positions, pos.ID)
+			} else {
+				m.positions[pos.ID] = pos
+			}
 			m.mu.Unlock()
 		}
 	}
@@ -55,6 +60,12 @@ func (m *Manager) GetAll() []models.Position {
 	for _, p := range m.positions {
 		result = append(result, p)
 	}
+
+	// Sort to ensure stable UI rendering
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].ID < result[j].ID
+	})
+
 	return result
 }
 
@@ -69,5 +80,20 @@ func (m *Manager) GetByClient(clientID string) []models.Position {
 			result = append(result, p)
 		}
 	}
+
+	// Sort to ensure stable UI rendering
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].ID < result[j].ID
+	})
+
 	return result
+}
+
+// GetByID returns a specific position by its unique ID
+func (m *Manager) GetByID(id string) (models.Position, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	
+	pos, exists := m.positions[id]
+	return pos, exists
 }

@@ -24,13 +24,13 @@ type MStockAdapter struct {
 }
 
 func NewMStockAdapter(db *sqlx.DB, proxyURL string) *MStockAdapter {
-	// Simple HTTP client (you can enhance with proxy later if needed)
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := credentials.NewHTTPClientWithProxy(proxyURL)
+	client.Timeout = 10 * time.Second
 	
 	return &MStockAdapter{
 		db:       db,
 		client:   client,
-		interval: 3 * time.Second, // Poll every 3 seconds
+		interval: 5 * time.Second, // Poll every 5 seconds
 		proxyURL: proxyURL,
 	}
 }
@@ -82,6 +82,9 @@ func (a *MStockAdapter) fetchPositionsForCred(cred models.Credential, feed chan<
 	req.Header.Set("X-PrivateKey", cred.APIKey)
 	req.Header.Set("Authorization", "Bearer "+cred.AccessToken)
 	req.Header.Set("User-Agent", "Mozilla/5.0")
+	if cred.StaticIP != "" {
+		req.Header.Set("X-Static-IP", cred.StaticIP)
+	}
 
 	resp, err := a.client.Do(req)
 	if err != nil {
@@ -114,6 +117,53 @@ func (a *MStockAdapter) fetchPositionsForCred(cred models.Credential, feed chan<
 		go credentials.RefreshAccessToken(a.db, &cred, a.proxyURL)
 		return
 	}
+
+	// --- DUMMY POSITIONS FOR TESTING ---
+	/*
+	// fake_row8
+	feed <- models.Position{
+		Broker:          config.BrokerMStock,
+		ClientID:        cred.ClientID, // Use valid cred so exit works
+		UserID:          cred.UserID,
+		Symbol:          "NIFTY-16Dec2025-25950-PE",
+		Token:           "35462",
+		Exchange:        "NSE",
+		ProductType:     "CARRYFORWARD",
+		Quantity:        75,
+		AvgPrice:        228.6,
+		TransactionType: "BUY",
+		PnL:             -4983.75,
+	}
+	// fake_row9
+	feed <- models.Position{
+		Broker:          config.BrokerMStock,
+		ClientID:        cred.ClientID,
+		UserID:          cred.UserID,
+		Symbol:          "SENSEX-01Jan2026-84800-CE",
+		Token:           "1158017",
+		Exchange:        "BSE",
+		ProductType:     "CARRYFORWARD",
+		Quantity:        20,
+		AvgPrice:        254.49,
+		TransactionType: "BUY",
+		PnL:             0.0,
+	}
+	// fake_row10
+	feed <- models.Position{
+		Broker:          config.BrokerMStock,
+		ClientID:        cred.ClientID,
+		UserID:          cred.UserID,
+		Symbol:          "SBIN",
+		Token:           "3045",
+		Exchange:        "NSE",
+		ProductType:     "INTRADAY",
+		Quantity:        76,
+		AvgPrice:        1019.8,
+		TransactionType: "BUY",
+		PnL:             0.0,
+	}
+	*/
+	// ----------------------------------
 
 	dataObj, ok := result["data"].([]interface{})
 	if !ok {
@@ -153,6 +203,7 @@ func (a *MStockAdapter) fetchPositionsForCred(cred models.Credential, feed chan<
 			ClientID:        cred.ClientID,
 			UserID:          cred.UserID,
 			Symbol:          symbol,
+			Token:           fmt.Sprintf("%v", pMap["symboltoken"]),
 			Exchange:        fmt.Sprintf("%v", pMap["exchange"]),
 			ProductType:     fmt.Sprintf("%v", pMap["producttype"]),
 			Quantity:        netQty,
