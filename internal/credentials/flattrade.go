@@ -97,16 +97,25 @@ func jsonEncode(v interface{}) string {
 	return string(b)
 }
 func (g *FlattradeGenerator) ValidateToken(cred *models.Credential) bool {
-	url := "https://piconnect.flattrade.in/PiConnectAPI/PositionBook"
-	jData := fmt.Sprintf(`{"uid":"%s","actid":"%s"}`, cred.ClientID, cred.ClientID)
-	payload := fmt.Sprintf("jData=%s&jKey=%s", jData, cred.AccessToken)
+	url := "https://emergeapi.flattrade.in/getPositonBook"
+	
+	payloadMap := map[string]string{
+		"uid":   cred.ClientID,
+		"actid": cred.ClientID,
+		"jkey":  cred.AccessToken,
+	}
+	payloadBytes, _ := json.Marshal(payloadMap)
 
-	req, err := http.NewRequest("POST", url, strings.NewReader(payload))
+	req, err := http.NewRequest("POST", url, strings.NewReader(string(payloadBytes)))
 	if err != nil {
 		return false
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("source", "WEB")
+	req.Header.Set("device", "Chrome")
+	req.Header.Set("Origin", "https://emerge.flattrade.in")
+	req.Header.Set("Referer", "https://emerge.flattrade.in/")
 
 	resp, err := g.client.Do(req)
 	if err != nil {
@@ -114,24 +123,30 @@ func (g *FlattradeGenerator) ValidateToken(cred *models.Credential) bool {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	log.Printf("Flattrade ValidateToken for %s response: %s", cred.ClientID, string(body))
-	var result []map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
-		// Could be single failure object
-		var single map[string]interface{}
-		if err2 := json.Unmarshal(body, &single); err2 == nil {
-			if single["stat"] == "Not_Ok" {
-				emsg, _ := single["emsg"].(string)
-				if strings.Contains(emsg, "no data") {
-					log.Printf("Flattrade ValidateToken accepted no data for %s", cred.ClientID)
-					return true
-				}
-				return false
-			}
-		}
+	if resp.StatusCode != http.StatusOK {
 		return false
 	}
 
-	return len(result) >= 0 // Any valid array is considered OK
+	body, _ := io.ReadAll(resp.Body)
+	log.Printf("Flattrade ValidateToken for %s response: %s", cred.ClientID, string(body))
+	
+	var result struct {
+		Status string `json:"status"`
+		ErrMsg string `json:"errMsg"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return false
+	}
+
+	if result.Status == "S" {
+		return true
+	}
+	
+	// Handle Flattrade "No data" correctly without failing
+	if strings.Contains(strings.ToLower(result.ErrMsg), "no data") {
+		return true
+	}
+
+	return false
 }

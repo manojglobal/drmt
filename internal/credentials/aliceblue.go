@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 
 	"drmt/internal/config"
 	"drmt/internal/models"
@@ -24,7 +25,7 @@ type AliceBlueGenerator struct {
 
 func NewAliceBlueGenerator(proxyURL string) *AliceBlueGenerator {
 	return &AliceBlueGenerator{
-		client: NewHTTPClientWithProxy(proxyURL),
+		client: &http.Client{Timeout: config.HTTPTimeoutSeconds * time.Second},
 		commonHeaders: map[string]string{
 			"Content-Type": "application/json",
 			"User-Agent":   "Mozilla/5.0",

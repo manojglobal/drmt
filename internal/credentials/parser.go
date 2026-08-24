@@ -120,16 +120,32 @@ func extractCredentialFields(cred *ParsedCredential, m map[string]interface{}) {
 		return ""
 	}
 
+	// Common fields for all brokers
 	cred.ClientID = getString("client_id")
 	cred.Password = getString("password")
-	cred.TOTPSecret = getString("totp_secret")
-	cred.TOTPSecret = getString("totp_secret_key") // Flattrade uses different key
-	cred.APIKey = getString("api_key")
-	cred.APIKeyEncrypted = getString("api_key") // MSTOCK api_key is encrypted
-	cred.AppCode = getString("app_code")
-	cred.APISecret = getString("api_secret")
 	cred.AccessToken = getString("access_token")
 	cred.AccessTokenCreatedAt = parseTime(getString("access_token_created_at"))
+
+	// Strict per-broker mapping to prevent key collisions
+	switch cred.Broker {
+	case "MSTOCK":
+		cred.TOTPSecret = getString("totp_secret")
+		cred.APIKeyEncrypted = getString("api_key")
+		cred.APIKey = getString("api_key")
+
+	case "FLATTRADE":
+		cred.TOTPSecret = getString("totp_secret_key")
+
+	case "ALICE BLUE":
+		cred.TOTPSecret = getString("totp")
+		cred.AppCode = getString("app_code")
+		cred.APISecret = getString("api_secret")
+		
+		// Some ALICE BLUE rows might use api_key instead of api_secret
+		if cred.APISecret == "" {
+			cred.APISecret = getString("api_key")
+		}
+	}
 }
 
 func parseTime(s string) *time.Time {

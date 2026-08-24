@@ -5,6 +5,7 @@ import (
 	"log"
 
 	"drmt/internal/config"
+	"drmt/internal/models"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -31,29 +32,30 @@ func NewInitializer(db *sqlx.DB, cfg *config.Config) *Initializer {
 }
 
 func (i *Initializer) Run() error {
-	log.Println("Starting credential initialization...")
+	log.Println("Starting credential initialization (DB Only)...")
 
-	// 1. Download credentials from Dropbox
-	localPath, err := i.dropbox.DownloadCredentials(config.LocalCredentialsDir)
-	if err != nil {
-		return fmt.Errorf("download credentials from Dropbox: %w", err)
+	// 1. Fetch from DB instead of Dropbox/CSV
+	var dbCreds []models.Credential
+	if err := i.db.Select(&dbCreds, "SELECT * FROM credentials"); err != nil {
+		return fmt.Errorf("fetch credentials from db: %w", err)
 	}
-	log.Printf("Downloaded credentials to: %s", localPath)
 
-	// 2. Parse CSV
-	creds, err := ParseCSV(localPath)
-	if err != nil {
-		return fmt.Errorf("parse CSV: %w", err)
+	var creds []ParsedCredential
+	for _, c := range dbCreds {
+		creds = append(creds, ParsedCredential{
+			Credential: c,
+		})
 	}
-	log.Printf("Parsed %d credential entries", len(creds))
+	
+	log.Printf("Loaded %d credential entries from DB", len(creds))
 
-	// 3. Run deduplication and token generation
+	// 2. Run deduplication and token generation
 	if err := i.dedup.ProcessCredentials(creds); err != nil {
 		return fmt.Errorf("process credentials: %w", err)
 	}
 	log.Println("Credential processing completed")
 
-	// 4. Log summary
+	// 3. Log summary
 	i.logSummary()
 
 	return nil

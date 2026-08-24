@@ -24,3 +24,8 @@ go.work.sum
 # OS Specific
 .DS_Store
 Thumbs.db
+
+# Logs and test artifacts
+*.log
+test_*
+

@@ -44,8 +44,10 @@ type Position struct {
 	UserID          int       `json:"user_id"`
 	Username        string    `json:"username"`
 	Symbol          string    `json:"symbol"`
+	Token           string    `json:"token"`
 	Exchange        string    `json:"exchange"`
 	ProductType     string    `json:"product_type"`
+	OrderType       string    `json:"order_type"`
 	Quantity        int       `json:"quantity"`
 	AvgPrice        float64   `json:"avg_price"`
 	LTP             float64   `json:"ltp"`
