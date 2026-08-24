@@ -10,6 +10,7 @@ const (
 	DropboxAppKey       = "DRMT_DROPBOX_APP_KEY"
 	DropboxAppSecret    = "DRMT_DROPBOX_APP_SECRET"
 	DropboxRefreshToken = "DRMT_DROPBOX_REFRESH_TOKEN"
+	DefaultProxyURL     = "https://demoapi.quantivo.in/proxy"
 
 	CredentialsFileName = "plato_client_credentials.csv"
 	DropboxFilePath     = "/" + CredentialsFileName

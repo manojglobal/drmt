@@ -21,7 +21,7 @@ func Load() *Config {
 		DropboxAppKey:       getEnv(DropboxAppKey, "7yn83e37zk7108e"),
 		DropboxAppSecret:    getEnv(DropboxAppSecret, "yneynsmqfcsudzo"),
 		DropboxRefreshToken: getEnv(DropboxRefreshToken, "RzxxlOoW8wsAAAAAAAAAAVEUsAsPaTo7e-2fA2UYN95IOlCh3zL6Gg28BATK79Su"),
-		ProxyURL:            getEnv("DRMT_PROXY_URL", ""),
+		ProxyURL:            getEnv("DRMT_PROXY_URL", DefaultProxyURL),
 		StaticIP:            getEnv("DRMT_STATIC_IP", ""),
 	}
 }

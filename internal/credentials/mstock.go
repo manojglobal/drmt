@@ -50,6 +50,9 @@ func (g *MStockGenerator) GenerateToken(cred *models.Credential) (string, error)
 	loginReq.Header.Set("X-Mirae-Version", "1")
 	loginReq.Header.Set("Content-Type", "application/json")
 	loginReq.Header.Set("User-Agent", "Mozilla/5.0")
+	if cred.StaticIP != "" {
+		loginReq.Header.Set("X-Static-IP", cred.StaticIP)
+	}
 
 	loginResp, err := g.client.Do(loginReq)
 	if err != nil {
@@ -106,6 +109,9 @@ func (g *MStockGenerator) GenerateToken(cred *models.Credential) (string, error)
 	verifyReq.Header.Set("X-PrivateKey", apiKey)
 	verifyReq.Header.Set("Content-Type", "application/json")
 	verifyReq.Header.Set("User-Agent", "Mozilla/5.0")
+	if cred.StaticIP != "" {
+		verifyReq.Header.Set("X-Static-IP", cred.StaticIP)
+	}
 
 	verifyResp, err := g.client.Do(verifyReq)
 	if err != nil {
@@ -150,6 +156,9 @@ func (g *MStockGenerator) ValidateToken(cred *models.Credential) bool {
 	req.Header.Set("X-PrivateKey", cred.APIKey)
 	req.Header.Set("Authorization", "Bearer "+cred.AccessToken)
 	req.Header.Set("User-Agent", "Mozilla/5.0")
+	if cred.StaticIP != "" {
+		req.Header.Set("X-Static-IP", cred.StaticIP)
+	}
 
 	resp, err := g.client.Do(req)
 	if err != nil {
