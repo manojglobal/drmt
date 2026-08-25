@@ -43,3 +43,25 @@ CREATE TABLE IF NOT EXISTS system_logs (
     message TEXT NOT NULL,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS exited_positions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    position_id TEXT,
+    broker TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    token TEXT,
+    exchange TEXT,
+    product_type TEXT,
+    order_type TEXT,
+    transaction_type TEXT,
+    quantity INTEGER NOT NULL,
+    avg_price REAL NOT NULL,
+    exit_price REAL NOT NULL,
+    pnl REAL NOT NULL,
+    exited_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_exited_positions_time ON exited_positions(exited_at);
+CREATE INDEX IF NOT EXISTS idx_exited_positions_client ON exited_positions(client_id);
+

@@ -187,12 +187,12 @@ func (e *Engine) executeMStock(pos models.Position) error {
 		"tradingsymbol":     inst.Name,
 		"symboltoken":       inst.Token,
 		"exchange":          inst.ExchSeg,
-		"transaction_type":  tranType,
-		"order_type":        "MARKET",
+		"transactiontype":   tranType,
+		"ordertype":         "MARKET",
 		"quantity":          fmt.Sprintf("%d", absQty),
 		"producttype":       prd,
 		"price":             "0",
-		"trigger_price":     "0",
+		"triggerprice":      "0",
 		"squareoff":         "0",
 		"stoploss":          "0",
 		"trailingStopLoss":  "",
@@ -228,10 +228,17 @@ func (e *Engine) executeMStock(pos models.Position) error {
 	log.Printf("[MSTOCK EXIT] Response for %s: %s", cred.ClientID, string(body))
 
 	var respData map[string]interface{}
-	json.Unmarshal(body, &respData)
+	var arrData []map[string]interface{}
+	if err := json.Unmarshal(body, &arrData); err == nil && len(arrData) > 0 {
+		respData = arrData[0]
+	} else {
+		json.Unmarshal(body, &respData)
+	}
 
-	if fmt.Sprintf("%v", respData["status"]) == "true" {
-		log.Printf("[MSTOCK EXIT SUCCESS] Order placed for %s", pos.Symbol)
+	statusVal := fmt.Sprintf("%v", respData["status"])
+	msgVal := strings.ToUpper(fmt.Sprintf("%v", respData["message"]))
+	if statusVal == "true" || msgVal == "SUCCESS" {
+		log.Printf("[MSTOCK EXIT SUCCESS] Order placed for %s: %v", pos.Symbol, respData["data"])
 		return nil
 	}
 
@@ -350,12 +357,18 @@ func (e *Engine) executeAliceBlueWeb(pos models.Position) error {
 	var data []map[string]interface{}
 	err = json.Unmarshal(body, &data)
 	if err == nil && len(data) > 0 {
-		if stat, ok := data[0]["stat"].(string); ok && stat == "Ok" {
-			log.Printf("[ALICEBLUE WEB EXIT SUCCESS] Order placed for %s", pos.Symbol)
+		stat, _ := data[0]["stat"].(string)
+		status, _ := data[0]["status"].(string)
+		msg, _ := data[0]["message"].(string)
+		if strings.EqualFold(stat, "ok") || strings.EqualFold(status, "ok") || strings.EqualFold(msg, "success") {
+			log.Printf("[ALICEBLUE WEB EXIT SUCCESS] Order placed for %s: %v", pos.Symbol, data[0]["result"])
 			return nil
 		}
 		
 		errStr := fmt.Sprintf("%v", data[0]["emsg"])
+		if errStr == "" || errStr == "<nil>" {
+			errStr = fmt.Sprintf("%v", data[0]["message"])
+		}
 		lowerErr := strings.ToLower(errStr)
 		if strings.Contains(errStr, "401") || strings.Contains(lowerErr, "unauthorized") || strings.Contains(errStr, "Invalid Session") || strings.Contains(errStr, "Session Expired") {
 			go credentials.RefreshAccessToken(e.db, &cred, e.proxyURL)
@@ -366,6 +379,13 @@ func (e *Engine) executeAliceBlueWeb(pos models.Position) error {
 	// Token expiry check for non-array responses
 	var singleData map[string]interface{}
 	if err := json.Unmarshal(body, &singleData); err == nil {
+		stat, _ := singleData["stat"].(string)
+		status, _ := singleData["status"].(string)
+		msg, _ := singleData["message"].(string)
+		if strings.EqualFold(stat, "ok") || strings.EqualFold(status, "ok") || strings.EqualFold(msg, "success") {
+			log.Printf("[ALICEBLUE WEB EXIT SUCCESS] Order placed for %s: %v", pos.Symbol, singleData["result"])
+			return nil
+		}
 		errStr := fmt.Sprintf("%v", singleData["message"])
 		lowerErr := strings.ToLower(errStr)
 		if strings.Contains(errStr, "401") || strings.Contains(lowerErr, "unauthorized") || strings.Contains(errStr, "Invalid Session") || strings.Contains(errStr, "Session Expired") {
@@ -450,7 +470,10 @@ func (e *Engine) executeAliceBlueAPI(pos models.Position) error {
 	var data map[string]interface{}
 	json.Unmarshal(body, &data)
 
-	if data["status"] == "Ok" {
+	stat, _ := data["stat"].(string)
+	status, _ := data["status"].(string)
+	msg, _ := data["message"].(string)
+	if strings.EqualFold(stat, "ok") || strings.EqualFold(status, "ok") || strings.EqualFold(msg, "success") {
 		log.Printf("[ALICEBLUE EXIT SUCCESS] Order placed for %s", pos.Symbol)
 		return nil
 	}

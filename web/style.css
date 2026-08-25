@@ -386,14 +386,55 @@ body {
     transition: border-color 0.2s;
 }
 
-.filter-select:focus {
-    border-color: var(--border-focus);
-}
-
 .filter-select option {
     background-color: #111827;
     color: var(--text-main);
 }
+
+.date-filter-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.filter-label {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.date-select {
+    min-width: 170px;
+}
+
+.btn-refresh-executed {
+    background-color: #141c2c;
+    border: 1px solid #233044;
+    color: var(--text-muted);
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.btn-refresh-executed:hover {
+    background-color: #1c273e;
+    color: var(--text-main);
+    border-color: #3b82f6;
+}
+
+.cell-timestamp {
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    white-space: nowrap;
+}
+
 
 /* Actions Bar */
 .actions-bar {

@@ -70,3 +70,22 @@ type SystemLog struct {
 	Message   string    `db:"message" json:"message"`
 	Timestamp time.Time `db:"timestamp" json:"timestamp"`
 }
+
+type ExitedPosition struct {
+	ID              int       `db:"id" json:"id"`
+	PositionID      string    `db:"position_id" json:"position_id"`
+	Broker          string    `db:"broker" json:"broker"`
+	ClientID        string    `db:"client_id" json:"client_id"`
+	Symbol          string    `db:"symbol" json:"symbol"`
+	Token           string    `db:"token" json:"token"`
+	Exchange        string    `db:"exchange" json:"exchange"`
+	ProductType     string    `db:"product_type" json:"product_type"`
+	OrderType       string    `db:"order_type" json:"order_type"`
+	TransactionType string    `db:"transaction_type" json:"transaction"`
+	Quantity        int       `db:"quantity" json:"quantity"`
+	AvgPrice        float64   `db:"avg_price" json:"avg_price"`
+	ExitPrice       float64   `db:"exit_price" json:"exit_price"`
+	PnL             float64   `db:"pnl" json:"pnl"`
+	ExitedAt        time.Time `db:"exited_at" json:"exited_at"`
+}
+
