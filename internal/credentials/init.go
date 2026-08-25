@@ -2,7 +2,7 @@ package credentials
 
 import (
 	"fmt"
-	"log"
+	"drmt/internal/logger"
 
 	"drmt/internal/config"
 	"drmt/internal/models"
@@ -32,7 +32,7 @@ func NewInitializer(db *sqlx.DB, cfg *config.Config) *Initializer {
 }
 
 func (i *Initializer) Run() error {
-	log.Println("Starting credential initialization (DB Only)...")
+	logger.Auth.Info("Starting credential initialization (DB Only)...")
 
 	// 1. Fetch from DB instead of Dropbox/CSV
 	var dbCreds []models.Credential
@@ -47,13 +47,13 @@ func (i *Initializer) Run() error {
 		})
 	}
 	
-	log.Printf("Loaded %d credential entries from DB", len(creds))
+	logger.Auth.Info("Loaded %d credential entries from DB", len(creds))
 
 	// 2. Run deduplication and token generation
 	if err := i.dedup.ProcessCredentials(creds); err != nil {
 		return fmt.Errorf("process credentials: %w", err)
 	}
-	log.Println("Credential processing completed")
+	logger.Auth.Info("Credential processing completed")
 
 	// 3. Log summary
 	i.logSummary()
@@ -74,7 +74,7 @@ func (i *Initializer) logSummary() {
 		SELECT status, COUNT(*) as count FROM credentials GROUP BY status
 	`)
 	if err != nil {
-		log.Printf("Failed to get summary: %v", err)
+		logger.Auth.Info("Failed to get summary: %v", err)
 		return
 	}
 	defer rows.Close()
@@ -98,7 +98,7 @@ func (i *Initializer) logSummary() {
 		stats.Total += count
 	}
 
-	log.Printf("Credential Summary: Total=%d, Active=%d, Failed=%d, Skipped=%d, MaxExceeded=%d",
+	logger.Auth.Info("Credential Summary: Total=%d, Active=%d, Failed=%d, Skipped=%d, MaxExceeded=%d",
 		stats.Total, stats.Active, stats.Failed, stats.Skipped, stats.MaxExceeded)
 }
 

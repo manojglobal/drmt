@@ -2,10 +2,10 @@ package execution
 
 import (
 	"bytes"
+	"drmt/internal/logger"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"net/http"
 	"strings"
@@ -30,7 +30,7 @@ func NewEngine(db *sqlx.DB, proxyURL string) *Engine {
 
 	go func() {
 		if err := LoadMStockInstruments(); err != nil {
-			log.Printf("Warning: failed to load MStock instruments: %v", err)
+			logger.Exit.Info("Warning: failed to load MStock instruments: %v", err)
 		}
 	}()
 
@@ -122,7 +122,7 @@ func (e *Engine) executeFlattrade(pos models.Position) error {
 
 	body, _ := io.ReadAll(resp.Body)
 	
-	log.Printf("[FLATTRADE EXIT] Response for %s: %s", cred.ClientID, string(body))
+	logger.Exit.Info("[FLATTRADE EXIT] Response for %s: %s", cred.ClientID, string(body))
 	
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("flattrade returned status %d: %s", resp.StatusCode, string(body))
@@ -132,7 +132,7 @@ func (e *Engine) executeFlattrade(pos models.Position) error {
 	json.Unmarshal(body, &data)
 
 	if data["status"] == "S" {
-		log.Printf("[FLATTRADE EXIT SUCCESS] Order %s placed for %s", data["norenordno"], pos.Symbol)
+		logger.Exit.Info("[FLATTRADE EXIT SUCCESS] Order %s placed for %s", data["norenordno"], pos.Symbol)
 		return nil
 	}
 
@@ -202,7 +202,7 @@ func (e *Engine) executeMStock(pos models.Position) error {
 	}
 
 	payloadBytes, _ := json.Marshal(payload)
-	log.Printf("🚀 [MStock] Sending place_order payload: %s", string(payloadBytes))
+	logger.Exit.Info("🚀 [MStock] Sending place_order payload: %s", string(payloadBytes))
 
 	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(payloadBytes))
 	if err != nil {
@@ -225,7 +225,7 @@ func (e *Engine) executeMStock(pos models.Position) error {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	log.Printf("[MSTOCK EXIT] Response for %s: %s", cred.ClientID, string(body))
+	logger.Exit.Info("[MSTOCK EXIT] Response for %s: %s", cred.ClientID, string(body))
 
 	var respData map[string]interface{}
 	var arrData []map[string]interface{}
@@ -238,7 +238,7 @@ func (e *Engine) executeMStock(pos models.Position) error {
 	statusVal := fmt.Sprintf("%v", respData["status"])
 	msgVal := strings.ToUpper(fmt.Sprintf("%v", respData["message"]))
 	if statusVal == "true" || msgVal == "SUCCESS" {
-		log.Printf("[MSTOCK EXIT SUCCESS] Order placed for %s: %v", pos.Symbol, respData["data"])
+		logger.Exit.Info("[MSTOCK EXIT SUCCESS] Order placed for %s: %v", pos.Symbol, respData["data"])
 		return nil
 	}
 
@@ -260,7 +260,7 @@ func (e *Engine) executeMStock(pos models.Position) error {
 		strings.Contains(lowerCode, "ia403") ||
 		strings.Contains(lowerCode, "ma401") ||
 		strings.Contains(lowerCode, "ma403") {
-		log.Printf("[MSTOCK EXIT] Token exception detected (%s, %s, %s). Triggering token refresh...", errStr, errCode, errType)
+		logger.Exit.Info("[MSTOCK EXIT] Token exception detected (%s, %s, %s). Triggering token refresh...", errStr, errCode, errType)
 		go credentials.RefreshAccessToken(e.db, &cred, e.proxyURL)
 	}
 
@@ -345,7 +345,7 @@ func (e *Engine) executeAliceBlueWeb(pos models.Position) error {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	log.Printf("[ALICEBLUE WEB EXIT] Response for %s: %s", cred.ClientID, string(body))
+	logger.Exit.Info("[ALICEBLUE WEB EXIT] Response for %s: %s", cred.ClientID, string(body))
 
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode == 401 {
@@ -361,7 +361,7 @@ func (e *Engine) executeAliceBlueWeb(pos models.Position) error {
 		status, _ := data[0]["status"].(string)
 		msg, _ := data[0]["message"].(string)
 		if strings.EqualFold(stat, "ok") || strings.EqualFold(status, "ok") || strings.EqualFold(msg, "success") {
-			log.Printf("[ALICEBLUE WEB EXIT SUCCESS] Order placed for %s: %v", pos.Symbol, data[0]["result"])
+			logger.Exit.Info("[ALICEBLUE WEB EXIT SUCCESS] Order placed for %s: %v", pos.Symbol, data[0]["result"])
 			return nil
 		}
 		
@@ -383,7 +383,7 @@ func (e *Engine) executeAliceBlueWeb(pos models.Position) error {
 		status, _ := singleData["status"].(string)
 		msg, _ := singleData["message"].(string)
 		if strings.EqualFold(stat, "ok") || strings.EqualFold(status, "ok") || strings.EqualFold(msg, "success") {
-			log.Printf("[ALICEBLUE WEB EXIT SUCCESS] Order placed for %s: %v", pos.Symbol, singleData["result"])
+			logger.Exit.Info("[ALICEBLUE WEB EXIT SUCCESS] Order placed for %s: %v", pos.Symbol, singleData["result"])
 			return nil
 		}
 		errStr := fmt.Sprintf("%v", singleData["message"])
@@ -461,7 +461,7 @@ func (e *Engine) executeAliceBlueAPI(pos models.Position) error {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	log.Printf("[ALICEBLUE EXIT] Response for %s: %s", cred.ClientID, string(body))
+	logger.Exit.Info("[ALICEBLUE EXIT] Response for %s: %s", cred.ClientID, string(body))
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("aliceblue returned status %d: %s", resp.StatusCode, string(body))
@@ -474,7 +474,7 @@ func (e *Engine) executeAliceBlueAPI(pos models.Position) error {
 	status, _ := data["status"].(string)
 	msg, _ := data["message"].(string)
 	if strings.EqualFold(stat, "ok") || strings.EqualFold(status, "ok") || strings.EqualFold(msg, "success") {
-		log.Printf("[ALICEBLUE EXIT SUCCESS] Order placed for %s", pos.Symbol)
+		logger.Exit.Info("[ALICEBLUE EXIT SUCCESS] Order placed for %s", pos.Symbol)
 		return nil
 	}
 

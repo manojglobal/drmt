@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 "sort"
-	"log"
 	"sync"
+	"drmt/internal/logger"
 	"time"
 
 	"drmt/internal/models"
@@ -27,11 +27,11 @@ func NewManager() *Manager {
 
 // Start listens on the Feed channel and safely writes to the map.
 func (m *Manager) Start(ctx context.Context) {
-	log.Println("Starting central Position Manager...")
+	logger.Monitor.Info("Starting central Position Manager...")
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Position Manager stopping...")
+			logger.Monitor.Info("Position Manager stopping...")
 			return
 		case pos := <-m.Feed:
 			pos.UpdatedAt = time.Now()

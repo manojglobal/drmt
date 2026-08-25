@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"io/fs"
-	"log"
 	"net/http"
 	"os"
 
@@ -12,48 +11,49 @@ import (
 	"drmt/internal/auth"
 	"drmt/internal/config"
 	"drmt/internal/credentials"
+	"drmt/internal/logger"
 	"drmt/internal/execution"
 	"drmt/internal/persistence"
 	"drmt/internal/position"
 )
 
 func main() {
-	log.Println("Starting DRMT V2 Server...")
+	logger.System.Info("Starting DRMT V2 Server...")
 
 	// 1. Load configuration
 	cfg := config.Load()
-	log.Println("[INIT] Configuration loaded")
+	logger.System.Info("[INIT] Configuration loaded")
 
 	// 2. Initialize SQLite database using embedded migrations
-	log.Println("[INIT] Connecting to SQLite Database (data/drmt.db)...")
+	logger.System.Info("[INIT] Connecting to SQLite Database (data/drmt.db)...")
 	os.MkdirAll("data", 0755)
 	db, err := persistence.InitDB("data/drmt.db", drmt.AssetsFS)
 	if err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
+		logger.System.Error("Failed to initialize database: %v", err)
 	}
-	log.Println("[INIT] SQLite Database initialized successfully")
+	logger.System.Info("[INIT] SQLite Database initialized successfully")
 
 	// 3. Ensure a default admin user exists
-	log.Println("[INIT] Verifying Admin User...")
+	logger.System.Info("[INIT] Verifying Admin User...")
 	var count int
 	db.Get(&count, "SELECT COUNT(*) FROM users")
 	if count == 0 {
 		hash, _ := auth.HashPassword("admin")
 		db.Exec("INSERT INTO users (username, password_hash) VALUES (?, ?)", "admin", hash)
-		log.Println("[INIT] Created default admin user (admin/admin). Please change this in production.")
+		logger.System.Info("[INIT] Created default admin user (admin/admin). Please change this in production.")
 	} else {
-		log.Println("[INIT] Admin user verified")
+		logger.System.Info("[INIT] Admin user verified")
 	}
 
 	// 4. Initialize credentials from DB directly (Dropbox bypassed)
-	log.Println("[INIT] Starting Credential Token Validation & Generation...")
+	logger.System.Info("[INIT] Starting Credential Token Validation & Generation...")
 	if err := credentials.InitializeCredentials(db, cfg); err != nil {
-		log.Printf("[INIT] Warning: Credential initialization failed: %v", err)
+		logger.System.Info("[INIT] Warning: Credential initialization failed: %v", err)
 	}
-	log.Println("[INIT] Credential initialization phase complete")
+	logger.System.Info("[INIT] Credential initialization phase complete")
 
 	// 5. Initialize Position Manager & Ingestion Layer
-	log.Println("[INIT] Booting Position Manager & Polling Adapters...")
+	logger.System.Info("[INIT] Booting Position Manager & Polling Adapters...")
 	ctx := context.Background()
 	posManager := position.NewManager()
 	go posManager.Start(ctx)
@@ -67,15 +67,15 @@ func main() {
 
 	flattradeAdapter := position.NewFlattradeAdapter(db, cfg.ProxyURL)
 	go flattradeAdapter.Start(ctx, posManager.Feed)
-	log.Println("[INIT] All Broker Polling Adapters dispatched")
+	logger.System.Info("[INIT] All Broker Polling Adapters dispatched")
 	
 	// Initialize Mass Execution Engine
-	log.Println("[INIT] Starting Mass Execution Engine...")
+	logger.System.Info("[INIT] Starting Mass Execution Engine...")
 	execEngine := execution.NewEngine(db, cfg.ProxyURL)
-	log.Println("[INIT] Mass Execution Engine ready")
+	logger.System.Info("[INIT] Mass Execution Engine ready")
 
 	// 6. Setup Routes
-	log.Println("[INIT] Configuring HTTP API Routes...")
+	logger.System.Info("[INIT] Configuring HTTP API Routes...")
 	mux := http.NewServeMux()
 
 	// API Routes
@@ -86,21 +86,21 @@ func main() {
 	mux.HandleFunc("/api/positions/exit", api.AuthMiddleware(db, api.PositionsExitHandler(db, posManager, execEngine)))
 	mux.HandleFunc("/api/positions/exited", api.AuthMiddleware(db, api.ExitedPositionsHandler(db)))
 	mux.HandleFunc("/api/positions/exited/dates", api.AuthMiddleware(db, api.ExitedDatesHandler(db)))
-	log.Println("[INIT] HTTP API Routes mapped successfully")
+	logger.System.Info("[INIT] HTTP API Routes mapped successfully")
 
 	// 6. Serve Embedded React Frontend
-	log.Println("[INIT] Mounting Embedded React Frontend...")
+	logger.System.Info("[INIT] Mounting Embedded React Frontend...")
 	webSub, err := fs.Sub(drmt.AssetsFS, "web")
 	if err != nil {
-		log.Fatalf("Failed to sub embedded web FS: %v", err)
+		logger.System.Error("Failed to sub embedded web FS: %v", err)
 	}
 	mux.Handle("/", http.FileServer(http.FS(webSub)))
-	log.Println("[INIT] Frontend mounted successfully")
+	logger.System.Info("[INIT] Frontend mounted successfully")
 
 	// 7. Start Server
-	log.Println("[INIT] === DRMT V2 BOOT SEQUENCE COMPLETE ===")
-	log.Println("[INIT] DRMT V2 Server listening on :3100")
+	logger.System.Info("[INIT] === DRMT V2 BOOT SEQUENCE COMPLETE ===")
+	logger.System.Info("[INIT] DRMT V2 Server listening on :3100")
 	if err := http.ListenAndServe(":3100", mux); err != nil {
-		log.Fatalf("Server stopped: %v", err)
+		logger.System.Error("Server stopped: %v", err)
 	}
 }
