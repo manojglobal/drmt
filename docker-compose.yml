@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  drmt:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: drmt_server
+    ports:
+      - "3100:3100"
+    volumes:
+      # Maps a local 'data' folder to the container's '/app/data' folder.
+      # This ensures drmt.db survives container restarts.
+      - ./data:/app/data
+    restart: "no"
+    environment:
+      # Sets the container timezone to match your local logs
+      - TZ=Asia/Kolkata

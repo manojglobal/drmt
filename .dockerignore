@@ -1,0 +1,8 @@
+.git
+.vscode
+.claude
+data/
+drmt.db*
+*.exe
+server.log
+nohup.out
