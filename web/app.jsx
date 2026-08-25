@@ -374,6 +374,48 @@ function Dashboard({ user, onLogout }) {
         }
     };
 
+    const exportToCSV = () => {
+        if (!filteredExecutedPositions || filteredExecutedPositions.length === 0) {
+            showToast("No data to export", "warning");
+            return;
+        }
+
+        const headers = ["USERID", "BROKER", "INSTRUMENT", "EXCHANGE", "PRODUCT", "BUY/SELL", "QUANTITY", "ENTRY PRICE", "EXIT PRICE", "PNL", "EXITED AT"];
+        
+        const csvRows = [headers.join(",")];
+        
+        filteredExecutedPositions.forEach(pos => {
+            const side = (pos.transaction || (pos.quantity > 0 ? 'BUY' : 'SELL')).toUpperCase();
+            const exitDateStr = pos.exited_at ? new Date(pos.exited_at).toLocaleString('en-GB') : 'N/A';
+            
+            const row = [
+                pos.client_id || pos.user_id || "",
+                pos.broker || "",
+                pos.symbol || "",
+                pos.exchange || "",
+                pos.product_type || "",
+                side,
+                pos.quantity || 0,
+                (pos.avg_price || 0).toFixed(2),
+                (pos.exit_price || 0).toFixed(2),
+                (pos.pnl || 0).toFixed(2),
+                `"${exitDateStr}"`
+            ];
+            csvRows.push(row.join(","));
+        });
+
+        const csvString = csvRows.join("\n");
+        const blob = new Blob([csvString], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.setAttribute("href", url);
+        link.setAttribute("download", `drmt_executed_orders_${new Date().toISOString().split('T')[0]}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+        showToast(`Exported ${filteredExecutedPositions.length} positions to CSV`, "success");
+    };
 
     useEffect(() => {
         if (activeTab === 'executed') {
@@ -790,6 +832,14 @@ function Dashboard({ user, onLogout }) {
                                 title="Refresh Executed Positions"
                             >
                                 🔄 Refresh
+                            </button>
+                            <button
+                                onClick={exportToCSV}
+                                className="btn-refresh-executed"
+                                title="Export current filtered view to CSV"
+                                style={{ borderColor: '#10b981', color: '#10b981' }}
+                            >
+                                📥 Export CSV
                             </button>
                         </div>
 
