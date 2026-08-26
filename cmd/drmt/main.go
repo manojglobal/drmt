@@ -12,6 +12,7 @@ import (
 	"drmt/internal/config"
 	"drmt/internal/credentials"
 	"drmt/internal/logger"
+	"drmt/internal/health"
 	"drmt/internal/execution"
 	"drmt/internal/persistence"
 	"drmt/internal/position"
@@ -58,6 +59,10 @@ func main() {
 	posManager := position.NewManager()
 	go posManager.Start(ctx)
 
+	logger.System.Info("[INIT] Booting Server Health Monitor...")
+	healthMonitor := health.NewMonitor()
+	go healthMonitor.Start(ctx)
+
 	// Start broker adapters
 	mstockAdapter := position.NewMStockAdapter(db, cfg.ProxyURL)
 	go mstockAdapter.Start(ctx, posManager.Feed)
@@ -84,6 +89,7 @@ func main() {
 	mux.HandleFunc("/api/me", api.AuthMiddleware(db, api.MeHandler()))
 	mux.HandleFunc("/api/positions", api.AuthMiddleware(db, api.PositionsHandler(posManager)))
 	mux.HandleFunc("/api/positions/exit", api.AuthMiddleware(db, api.PositionsExitHandler(db, posManager, execEngine)))
+	mux.HandleFunc("/api/health/servers", api.AuthMiddleware(db, api.ServersHealthHandler(healthMonitor)))
 	mux.HandleFunc("/api/positions/exited", api.AuthMiddleware(db, api.ExitedPositionsHandler(db)))
 	mux.HandleFunc("/api/positions/exited/dates", api.AuthMiddleware(db, api.ExitedDatesHandler(db)))
 	logger.System.Info("[INIT] HTTP API Routes mapped successfully")

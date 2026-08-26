@@ -823,3 +823,66 @@ body {
     }
 }
 
+
+/* Server Health Monitor Components */
+.health-monitor-group {
+    display: flex;
+    gap: 8px;
+    margin-right: 16px;
+}
+
+.health-pill {
+    display: flex;
+    align-items: center;
+    background: #1B212D;
+    border: 1px solid #2B313F;
+    border-radius: 12px;
+    padding: 4px 10px;
+    font-size: 11px;
+    color: #94A3B8;
+    gap: 6px;
+    position: relative;
+    cursor: default;
+}
+
+.health-pill.status-up {
+    border-color: rgba(34, 197, 94, 0.3);
+}
+
+.health-pill.status-down {
+    border-color: rgba(239, 68, 68, 0.3);
+}
+
+.health-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #94A3B8;
+}
+
+.health-pill.status-up .health-dot {
+    background: #22C55E;
+    box-shadow: 0 0 6px rgba(34, 197, 94, 0.6);
+}
+
+.health-pill.status-down .health-dot {
+    background: #EF4444;
+    box-shadow: 0 0 6px rgba(239, 68, 68, 0.6);
+}
+
+.health-details {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.2;
+}
+
+.health-name {
+    font-weight: 600;
+    color: #E2E8F0;
+    font-size: 11px;
+}
+
+.health-times {
+    font-size: 9px;
+    color: #64748B;
+}

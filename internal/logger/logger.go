@@ -31,6 +31,7 @@ var (
 	Exit    = NewLogger("drmt.exit_order_flow")
 	Monitor = NewLogger("drmt.order_monitoring")
 	System  = NewLogger("drmt.system_startup")
+	Health  = NewLogger("drmt.health_monitor")
 )
 
 func (l *ServiceLogger) Info(format string, v ...interface{}) {

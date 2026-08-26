@@ -46,3 +46,8 @@ const (
 
 	KolkatataTimezone      = "Asia/Kolkata"
 )
+
+var ServersToCheck = map[string]string{
+	"test_server": "https://testpts.quantivo.in/api/health",
+	"demo_server": "https://demopts.quantivo.in/api/health",
+}

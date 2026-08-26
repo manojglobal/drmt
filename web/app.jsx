@@ -1,11 +1,37 @@
 const { useState, useEffect, useMemo } = React;
 
+
+const fetchWithTimeout = async (resource, options = {}) => {
+    const { timeout = 30000 } = options;
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    try {
+        const response = await fetch(resource, { ...options, signal: controller.signal });
+        clearTimeout(id);
+        return response;
+    } catch (error) {
+        clearTimeout(id);
+        throw error;
+    }
+};
+
+function useDebounce(value, delay) {
+    const [debouncedValue, setDebouncedValue] = useState(value);
+    useEffect(() => {
+        const handler = setTimeout(() => {
+            setDebouncedValue(value);
+        }, delay);
+        return () => clearTimeout(handler);
+    }, [value, delay]);
+    return debouncedValue;
+}
+
 function App() {
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        fetch('/api/me')
+        fetchWithTimeout('/api/me', { timeout: 30000 })
             .then(res => {
                 if (res.ok) return res.json();
                 throw new Error('Not authenticated');
@@ -39,14 +65,15 @@ function Login({ onLogin }) {
         setSubmitting(true);
 
         try {
-            const res = await fetch('/api/login', {
+            const res = await fetchWithTimeout('/api/login', { 
+                timeout: 30000,
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ username, password })
             });
 
             if (res.ok) {
-                const meRes = await fetch('/api/me');
+                const meRes = await fetchWithTimeout('/api/me', { timeout: 30000 });
                 const userData = await meRes.json();
                 onLogin(userData);
             } else {
@@ -98,14 +125,65 @@ function Login({ onLogin }) {
     );
 }
 
+
+const ServerHealthMonitor = () => {
+    const [servers, setServers] = React.useState({});
+
+    React.useEffect(() => {
+        const fetchHealth = () => {
+            fetchWithTimeout('/api/health/servers', { timeout: 30000,
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('drmt_token')}` }
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data) setServers(data);
+            })
+            .catch(err => console.error("Health check error:", err));
+        };
+        fetchHealth();
+        const interval = setInterval(fetchHealth, 5000);
+        return () => clearInterval(interval);
+    }, []);
+
+    const serverList = Object.entries(servers).slice(0, 3);
+    if (serverList.length === 0) return null;
+
+    return (
+        <div className="health-monitor-group">
+            {serverList.map(([name, data]) => {
+                const isUp = data.status === 'UP';
+                const pingTime = data.query_time ? data.query_time.split(' ')[1] : '--:--:--';
+                const successTime = data.last_successful_time ? data.last_successful_time.split(' ')[1] : '--:--:--';
+                
+                return (
+                    <div key={name} className={`health-pill ${isUp ? 'status-up' : 'status-down'}`} title={data.message || 'Status OK'}>
+                        <span className="health-dot"></span>
+                        <div className="health-details">
+                            <span className="health-name">{name}</span>
+                            <span className="health-times">Ping: {pingTime} | OK: {successTime}</span>
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+    );
+};
+
 function Dashboard({ user, onLogout }) {
     const [toasts, setToasts] = useState([]);
     const [positions, setPositions] = useState([]);
     const [lastSync, setLastSync] = useState(null);
-    const [activeTab, setActiveTab] = useState('running'); // 'running' | 'pending' | 'executed'
+    const [activeTab, setActiveTab] = useState('running');
+
+    const [isFetchingPositions, setIsFetchingPositions] = useState(false);
+    const [isExporting, setIsExporting] = useState(false);
+    const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+
 
     // Filters
     const [searchQuery, setSearchQuery] = useState('');
+    const debouncedSearchQuery = useDebounce(searchQuery, 500);
     const [selectedBroker, setSelectedBroker] = useState('ALL');
     const [selectedUser, setSelectedUser] = useState('ALL');
     const [selectedTradeType, setSelectedTradeType] = useState('ALL');
@@ -118,6 +196,9 @@ function Dashboard({ user, onLogout }) {
     // Modals & Execution
     const [modalConfig, setModalConfig] = useState(null);
     const [isExiting, setIsExiting] = useState(false);
+    const isActionLocked = isExiting || isExporting || isLoggingOut;
+
+
 
     const addToast = (message, type = 'info') => {
         const id = Date.now() + Math.random();
@@ -135,8 +216,10 @@ function Dashboard({ user, onLogout }) {
     // Polling live positions every 5 seconds
     useEffect(() => {
         const fetchPositions = async () => {
+            if (isActionLocked) return;
+            setIsFetchingPositions(true);
             try {
-                const res = await fetch('/api/positions');
+                const res = await fetchWithTimeout('/api/positions', { timeout: 30000 });
                 if (res.ok) {
                     const data = await res.json();
                     setPositions(data || []);
@@ -144,6 +227,11 @@ function Dashboard({ user, onLogout }) {
                 }
             } catch (err) {
                 console.error("Error fetching positions", err);
+                if (err.name === 'AbortError') {
+                    addToast("Position sync timed out. Retrying...", "warning");
+                }
+            } finally {
+                setIsFetchingPositions(false);
             }
         };
 
@@ -182,8 +270,8 @@ function Dashboard({ user, onLogout }) {
                 if (side !== selectedTradeType) return false;
             }
             // Text Search filter (symbol, token, client_id, broker, exchange, product)
-            if (searchQuery.trim() !== '') {
-                const q = searchQuery.toLowerCase().trim();
+            if (debouncedSearchQuery.trim() !== '') {
+                const q = debouncedSearchQuery.toLowerCase().trim();
                 const matchSymbol = (pos.symbol || '').toLowerCase().includes(q);
                 const matchClient = (pos.client_id || '').toLowerCase().includes(q);
                 const matchBroker = (pos.broker || '').toLowerCase().includes(q);
@@ -195,7 +283,7 @@ function Dashboard({ user, onLogout }) {
             }
             return true;
         });
-    }, [positions, selectedBroker, selectedUser, selectedTradeType, searchQuery]);
+    }, [positions, selectedBroker, selectedUser, selectedTradeType, debouncedSearchQuery]);
 
     // Reset pagination to page 1 on filter change
     useEffect(() => {
@@ -269,7 +357,8 @@ function Dashboard({ user, onLogout }) {
         setIsExiting(true);
 
         try {
-            const res = await fetch('/api/positions/exit', {
+            const res = await fetchWithTimeout('/api/positions/exit', {
+timeout: 30000,
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ position_ids: idsToExit })
@@ -293,7 +382,7 @@ function Dashboard({ user, onLogout }) {
                 addToast("Failed to dispatch exit commands (Server Error).", "error");
             }
         } catch (err) {
-            addToast("Error communicating with server.", "error");
+            if(err.name === "AbortError") { addToast("Execution timed out (30s)!", "error"); } else { addToast("Error communicating with server.", "error"); }
         } finally {
             setIsExiting(false);
         }
@@ -315,6 +404,7 @@ function Dashboard({ user, onLogout }) {
     const [fromDate, setFromDate] = useState(defaultFromISO);
     const [toDate, setToDate] = useState(todayISO);
     const [executedSearchQuery, setExecutedSearchQuery] = useState('');
+    const debouncedExecutedSearchQuery = useDebounce(executedSearchQuery, 500);
     const [executedBroker, setExecutedBroker] = useState('ALL');
     const [executedUser, setExecutedUser] = useState('ALL');
     const [executedTradeType, setExecutedTradeType] = useState('ALL');
@@ -361,60 +451,66 @@ function Dashboard({ user, onLogout }) {
             if (executedBroker !== 'ALL') params.append('broker', executedBroker);
             if (executedUser !== 'ALL') params.append('client_id', executedUser);
 
-            const res = await fetch(`/api/positions/exited?${params.toString()}`);
+            const res = await fetchWithTimeout(`/api/positions/exited?${params.toString()}`, { timeout: 30000 });
             if (res.ok) {
                 const data = await res.json();
                 setExecutedPositions(data || []);
             }
         } catch (err) {
             console.error("Failed to fetch executed positions:", err);
-            showToast("Failed to fetch executed positions", "error");
+            if(err.name === "AbortError") { addToast("Fetch executed positions timed out", "error"); } else { addToast("Failed to fetch executed positions", "error"); }
         } finally {
             setExecutedLoading(false);
         }
     };
 
-    const exportToCSV = () => {
+    const exportToCSV = async () => {
         if (!filteredExecutedPositions || filteredExecutedPositions.length === 0) {
-            showToast("No data to export", "warning");
+            addToast("No data to export", "warning");
             return;
         }
+        setIsExporting(true);
+        // Small delay to allow UI to render spinner
+        await new Promise(resolve => setTimeout(resolve, 100));
 
-        const headers = ["USERID", "BROKER", "INSTRUMENT", "EXCHANGE", "PRODUCT", "BUY/SELL", "QUANTITY", "ENTRY PRICE", "EXIT PRICE", "PNL", "EXITED AT"];
-        
-        const csvRows = [headers.join(",")];
-        
-        filteredExecutedPositions.forEach(pos => {
-            const side = (pos.transaction || (pos.quantity > 0 ? 'BUY' : 'SELL')).toUpperCase();
-            const exitDateStr = pos.exited_at ? new Date(pos.exited_at).toLocaleString('en-GB') : 'N/A';
+        try {
+            const headers = ["USERID", "BROKER", "INSTRUMENT", "EXCHANGE", "PRODUCT", "BUY/SELL", "QUANTITY", "ENTRY PRICE", "EXIT PRICE", "PNL", "EXITED AT"];
+            const csvRows = [headers.join(",")];
             
-            const row = [
-                pos.client_id || pos.user_id || "",
-                pos.broker || "",
-                pos.symbol || "",
-                pos.exchange || "",
-                pos.product_type || "",
-                side,
-                pos.quantity || 0,
-                (pos.avg_price || 0).toFixed(2),
-                (pos.exit_price || 0).toFixed(2),
-                (pos.pnl || 0).toFixed(2),
-                `"${exitDateStr}"`
-            ];
-            csvRows.push(row.join(","));
-        });
+            filteredExecutedPositions.forEach(pos => {
+                const side = (pos.transaction || (pos.quantity > 0 ? 'BUY' : 'SELL')).toUpperCase();
+                const exitDateStr = pos.exited_at ? new Date(pos.exited_at).toLocaleString('en-GB') : 'N/A';
+                
+                const row = [
+                    pos.client_id || pos.user_id || "",
+                    pos.broker || "",
+                    pos.symbol || "",
+                    pos.exchange || "",
+                    pos.product_type || "",
+                    side,
+                    pos.quantity || 0,
+                    (pos.avg_price || 0).toFixed(2),
+                    (pos.exit_price || 0).toFixed(2),
+                    (pos.pnl || 0).toFixed(2),
+                    `"${exitDateStr}"`
+                ];
+                csvRows.push(row.join(","));
+            });
 
-        const csvString = csvRows.join("\n");
-        const blob = new Blob([csvString], { type: "text/csv;charset=utf-8;" });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.setAttribute("href", url);
-        link.setAttribute("download", `drmt_executed_orders_${new Date().toISOString().split('T')[0]}.csv`);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        
-        showToast(`Exported ${filteredExecutedPositions.length} positions to CSV`, "success");
+            const csvString = csvRows.join("");
+            const blob = new Blob([csvString], { type: "text/csv;charset=utf-8;" });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.setAttribute("href", url);
+            link.setAttribute("download", `drmt_executed_orders_${new Date().toISOString().split('T')[0]}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            addToast(`Exported ${filteredExecutedPositions.length} positions to CSV`, "success");
+        } finally {
+            setIsExporting(false);
+        }
     };
 
     useEffect(() => {
@@ -430,8 +526,8 @@ function Dashboard({ user, onLogout }) {
                 const side = (pos.transaction || (pos.quantity > 0 ? 'BUY' : 'SELL')).toUpperCase();
                 if (side !== executedTradeType) return false;
             }
-            if (executedSearchQuery.trim() !== '') {
-                const q = executedSearchQuery.toLowerCase().trim();
+            if (debouncedExecutedSearchQuery.trim() !== '') {
+                const q = debouncedExecutedSearchQuery.toLowerCase().trim();
                 const matchSymbol = (pos.symbol || '').toLowerCase().includes(q);
                 const matchClient = (pos.client_id || '').toLowerCase().includes(q);
                 const matchBroker = (pos.broker || '').toLowerCase().includes(q);
@@ -443,7 +539,7 @@ function Dashboard({ user, onLogout }) {
             }
             return true;
         });
-    }, [executedPositions, executedTradeType, executedSearchQuery]);
+    }, [executedPositions, executedTradeType, debouncedExecutedSearchQuery]);
 
     // Reset pagination on filter change
     useEffect(() => {
@@ -504,7 +600,10 @@ function Dashboard({ user, onLogout }) {
                     <span className="brand-dot"></span>
                     <h1 className="brand-title">Disaster Recovery Management Tool</h1>
                 </div>
+                
                 <div className="nav-right">
+                    <ServerHealthMonitor />
+
                     {/* Placeholder Bell Notification */}
                     <button className="icon-btn bell-btn" title="Notifications">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -519,7 +618,8 @@ function Dashboard({ user, onLogout }) {
                         <div className="avatar-circle">
                             {adminInitial}
                         </div>
-                        <button onClick={handleLogout} className="logout-link-btn" title="Sign Out">
+                        <button onClick={async () => { setIsLoggingOut(true); await handleLogout(); setIsLoggingOut(false); }}
+disabled={isActionLocked} className="logout-link-btn" title="Sign Out">
                             Sign Out
                         </button>
                     </div>
@@ -531,8 +631,9 @@ function Dashboard({ user, onLogout }) {
                 {/* Page Title & Subtitle */}
                 <div className="page-header">
                     <h2 className="page-title">Position Monitor</h2>
-                    <div className="last-sync-text">
-                        Last Sync: {lastSync || 'Waiting for first sync...'}
+                    <div className="last-sync-text" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        {isFetchingPositions && <div className="loading-spinner" style={{ width: '12px', height: '12px', borderWidth: '2px', borderTopColor: '#3B82F6' }}></div>}
+                        <span>Last Sync: {lastSync || 'Waiting for first sync...'}</span>
                     </div>
                 </div>
 
@@ -540,7 +641,8 @@ function Dashboard({ user, onLogout }) {
                 <div className="tabs-bar">
                     <button
                         className={`tab-btn ${activeTab === 'running' ? 'active' : ''}`}
-                        onClick={() => setActiveTab('running')}
+                        onClick={() => !isActionLocked && setActiveTab('running')}
+disabled={isActionLocked}
                     >
                         Running
                     </button>
@@ -552,7 +654,8 @@ function Dashboard({ user, onLogout }) {
                     </button> */}
                     <button
                         className={`tab-btn ${activeTab === 'executed' ? 'active' : ''}`}
-                        onClick={() => setActiveTab('executed')}
+                        onClick={() => !isActionLocked && setActiveTab('executed')}
+disabled={isActionLocked}
                     >
                         Executed
                     </button>
@@ -570,6 +673,7 @@ function Dashboard({ user, onLogout }) {
                                 <input
                                     type="text"
                                     className="filter-input search-input"
+disabled={isActionLocked}
                                     placeholder="Search instrument..."
                                     value={searchQuery}
                                     onChange={(e) => setSearchQuery(e.target.value)}
@@ -578,6 +682,7 @@ function Dashboard({ user, onLogout }) {
 
                             <select
                                 className="filter-select"
+disabled={isActionLocked}
                                 value={selectedBroker}
                                 onChange={(e) => setSelectedBroker(e.target.value)}
                             >
@@ -589,6 +694,7 @@ function Dashboard({ user, onLogout }) {
 
                             <select
                                 className="filter-select"
+disabled={isActionLocked}
                                 value={selectedUser}
                                 onChange={(e) => setSelectedUser(e.target.value)}
                             >
@@ -600,6 +706,7 @@ function Dashboard({ user, onLogout }) {
 
                             <select
                                 className="filter-select"
+disabled={isActionLocked}
                                 value={selectedTradeType}
                                 onChange={(e) => setSelectedTradeType(e.target.value)}
                             >
@@ -613,7 +720,7 @@ function Dashboard({ user, onLogout }) {
                         <div className="actions-bar">
                             <button
                                 onClick={handleCloseAction}
-                                disabled={isExiting || (filteredPositions.length === 0 && selectedIds.size === 0)}
+                                disabled={isActionLocked || (filteredPositions.length === 0 && selectedIds.size === 0)}
                                 className="btn-close-action"
                             >
                                 {isExiting
@@ -624,7 +731,7 @@ function Dashboard({ user, onLogout }) {
 
                             <button
                                 onClick={handleCancelSelection}
-                                disabled={selectedIds.size === 0}
+                                disabled={isActionLocked || selectedIds.size === 0}
                                 className={`btn-cancel-action ${selectedIds.size === 0 ? 'disabled' : ''}`}
                             >
                                 Cancel
@@ -661,7 +768,10 @@ function Dashboard({ user, onLogout }) {
                         </div>
 
                         {/* Compact Table */}
-                        <div className="table-responsive">
+                        
+                        <div className="table-responsive" style={{position: 'relative'}}>
+
+
                             <table className="compact-table">
                                 <thead>
                                     <tr>
@@ -756,6 +866,7 @@ function Dashboard({ user, onLogout }) {
                                 <input
                                     type="text"
                                     className="filter-input search-input"
+disabled={isActionLocked}
                                     placeholder="Search executed instrument..."
                                     value={executedSearchQuery}
                                     onChange={(e) => setExecutedSearchQuery(e.target.value)}
@@ -796,6 +907,7 @@ function Dashboard({ user, onLogout }) {
 
                             <select
                                 className="filter-select"
+disabled={isActionLocked}
                                 value={executedBroker}
                                 onChange={(e) => setExecutedBroker(e.target.value)}
                             >
@@ -807,6 +919,7 @@ function Dashboard({ user, onLogout }) {
 
                             <select
                                 className="filter-select"
+disabled={isActionLocked}
                                 value={executedUser}
                                 onChange={(e) => setExecutedUser(e.target.value)}
                             >
@@ -818,6 +931,7 @@ function Dashboard({ user, onLogout }) {
 
                             <select
                                 className="filter-select"
+disabled={isActionLocked}
                                 value={executedTradeType}
                                 onChange={(e) => setExecutedTradeType(e.target.value)}
                             >
@@ -839,7 +953,7 @@ function Dashboard({ user, onLogout }) {
                                 title="Export current filtered view to CSV"
                                 style={{ borderColor: '#10b981', color: '#10b981' }}
                             >
-                                📥 Export CSV
+                                
                             </button>
                         </div>
 
@@ -877,7 +991,10 @@ function Dashboard({ user, onLogout }) {
                         </div>
 
                         {/* Executed Positions Table */}
-                        <div className="table-responsive">
+                        
+                        <div className="table-responsive" style={{position: 'relative'}}>
+
+
                             <table className="compact-table">
                                 <thead>
                                     <tr>
