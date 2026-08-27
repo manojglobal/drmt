@@ -248,6 +248,18 @@ const ActionLogWidget = () => {
 };
 
 function Dashboard({ user, onLogout }) {
+    // CODE FLIP FOR TESTING: Change to 'true' to force 5s polling regardless of market hours or tab visibility
+    const TEST_MODE_FORCE_POLL = false;
+
+    const [isVisible, setIsVisible] = useState(!document.hidden);
+    const [pollingStatus, setPollingStatus] = useState('Active');
+
+    useEffect(() => {
+        const handleVisibility = () => setIsVisible(!document.hidden);
+        document.addEventListener('visibilitychange', handleVisibility);
+        return () => document.removeEventListener('visibilitychange', handleVisibility);
+    }, []);
+
     const [toasts, setToasts] = useState([]);
     const [positions, setPositions] = useState([]);
     const [lastSync, setLastSync] = useState(null);
@@ -292,31 +304,86 @@ function Dashboard({ user, onLogout }) {
     };
 
     // Polling live positions every 5 seconds
-    useEffect(() => {
-        const fetchPositions = async () => {
-            if (isActionLocked) return;
-            setIsFetchingPositions(true);
-            try {
-                const res = await fetchWithTimeout('/api/positions', { timeout: 30000 });
-                if (res.ok) {
-                    const data = await res.json();
-                    setPositions(data || []);
-                    setLastSync(new Date().toLocaleTimeString());
-                }
-            } catch (err) {
-                console.error("Error fetching positions", err);
-                if (err.name === 'AbortError') {
-                    addToast("Position sync timed out. Retrying...", "warning");
-                }
-            } finally {
-                setIsFetchingPositions(false);
+    const fetchPositions = async () => {
+        if (isActionLocked) return;
+        
+        setIsFetchingPositions(true);
+        try {
+            const res = await fetchWithTimeout('/api/positions', { timeout: 30000 });
+            if (res.ok) {
+                const data = await res.json();
+                setPositions(data || []);
+                setLastSync(new Date().toLocaleTimeString());
             }
-        };
+        } catch (err) {
+            console.error("Error fetching positions", err);
+            if (err.name === 'AbortError') {
+                addToast("Position sync timed out. Retrying...", "warning");
+            }
+        } finally {
+            setIsFetchingPositions(false);
+        }
+    };
 
+    useEffect(() => {
+        // TEST MODE BYPASS
+        if (TEST_MODE_FORCE_POLL) {
+            setPollingStatus("Test Mode (5s)");
+            fetchPositions();
+            const timer = setInterval(fetchPositions, 5000);
+            return () => clearInterval(timer);
+        }
+
+        // Evaluate Market State (IST)
+        let isClosed = false;
+        let isPostMarket = false;
+        try {
+            const istTime = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
+            const day = istTime.getDay();
+            const mins = istTime.getHours() * 60 + istTime.getMinutes();
+            
+            // Closed on weekends or outside 08:50 AM to 11:55 PM
+            isClosed = (day === 0 || day === 6 || mins < 530 || mins > 1435);
+            
+            // Post-Market: After 4:00 PM (960 mins) to 11:55 PM (1435 mins)
+            isPostMarket = (mins >= 960 && mins <= 1435);
+        } catch (e) {
+            isClosed = false; // Fallback to open if timezone fails
+        }
+
+        if (isClosed) {
+            setPollingStatus("Paused (Market Closed)");
+            return;
+        }
+
+        if (!isVisible) {
+            setPollingStatus("Paused (Tab Hidden)");
+            return;
+        }
+
+        // Determine correct polling speed and UI status
+        let intervalTime = 5000;
+        if (activeTab === 'executed') {
+            intervalTime = 30000;
+            setPollingStatus("Throttled (Executed Tab)");
+        } else if (isPostMarket) {
+            intervalTime = 15000;
+            setPollingStatus("Throttled (Post-Market 15s)");
+        } else {
+            intervalTime = 5000;
+            setPollingStatus("Active (5s)");
+        }
+
+        // Fetch instantly when tab becomes active/visible
         fetchPositions();
-        const interval = setInterval(fetchPositions, 5000);
-        return () => clearInterval(interval);
-    }, []);
+
+        const timer = setInterval(() => {
+            fetchPositions();
+        }, intervalTime);
+
+        return () => clearInterval(timer);
+    }, [isVisible, activeTab, isActionLocked]); // Re-evaluate when these change
+
 
     // Extract dynamic dropdown options
     const brokersList = useMemo(() => {
@@ -712,7 +779,10 @@ disabled={isActionLocked} className="logout-link-btn" title="Sign Out">
                     <h2 className="page-title">Position Monitor</h2>
                     <div className="last-sync-text" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         {isFetchingPositions && <div className="loading-spinner" style={{ width: '12px', height: '12px', borderWidth: '2px', borderTopColor: '#3B82F6' }}></div>}
-                        <span>Last Sync: {lastSync || 'Waiting for first sync...'}</span>
+                        <span>Last Sync: {lastSync || 'Waiting...'}</span>
+                        <span style={{ fontSize: '9px', fontWeight: 'bold', letterSpacing: '0.5px', color: pollingStatus.startsWith('Active') ? '#10B981' : '#F59E0B', background: 'rgba(0,0,0,0.2)', padding: '2px 6px', borderRadius: '4px', border: '1px solid #2B313F' }}>
+                            {pollingStatus}
+                        </span>
                     </div>
                 </div>
 
