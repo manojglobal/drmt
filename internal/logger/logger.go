@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"time"
+	"sync"
 )
 
 type LogLevel string
@@ -17,8 +18,29 @@ const (
 )
 
 // ServiceLogger handles hourly rotating file logs and console output
+type LogEntry struct {
+	ID        int64  `json:"id"`
+	Timestamp string `json:"timestamp"`
+	Level     string `json:"level"`
+	Message   string `json:"message"`
+	Module    string `json:"module"`
+}
+
 type ServiceLogger struct {
 	ServiceName string
+	mu          sync.RWMutex
+	history     []LogEntry
+}
+
+
+func (l *ServiceLogger) GetHistory() []LogEntry {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	copy := make([]LogEntry, len(l.history))
+	for i, entry := range l.history {
+		copy[i] = entry
+	}
+	return copy
 }
 
 func NewLogger(serviceName string) *ServiceLogger {
@@ -67,6 +89,20 @@ func (l *ServiceLogger) writeLog(level LogLevel, format string, v ...interface{}
 
 	// Python-style format: 2026-08-25 15:30:00 | INFO     | engine.go:123 | Message
 	logLine := fmt.Sprintf("%s | %-8s | %s:%d | %s\n", timeStr, level, module, line, message)
+
+	// 0. Save to in-memory ring buffer (last 100)
+	l.mu.Lock()
+	l.history = append([]LogEntry{{
+		ID:        now.UnixNano(),
+		Timestamp: timeStr,
+		Level:     string(level),
+		Message:   message,
+		Module:    fmt.Sprintf("%s:%d", module, line),
+	}}, l.history...)
+	if len(l.history) > 100 {
+		l.history = l.history[:100]
+	}
+	l.mu.Unlock()
 
 	// 1. Output to Console (Stdout) just like the Python StreamHandler
 	os.Stdout.WriteString(logLine)

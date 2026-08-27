@@ -169,6 +169,84 @@ const ServerHealthMonitor = () => {
     );
 };
 
+
+const ActionLogWidget = () => {
+    const [activeTab, setActiveTab] = React.useState('orders');
+    const [logs, setLogs] = React.useState([]);
+
+    React.useEffect(() => {
+        const fetchLogs = () => {
+            fetchWithTimeout(`/api/logs?type=${activeTab}`, {
+                timeout: 10000,
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('drmt_token')}` }
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data) setLogs(data);
+            })
+            .catch(err => {});
+        };
+        fetchLogs();
+        const interval = setInterval(fetchLogs, 3000); // 3-second live sync
+        return () => clearInterval(interval);
+    }, [activeTab]);
+
+    const getLogIcon = (level, msg) => {
+        const m = msg.toLowerCase();
+        if (level === 'ERROR' || m.includes('fail') || m.includes('error')) return '🔴';
+        if (m.includes('success') || m.includes('placed') || m.includes('verified')) return '🟢';
+        if (m.includes('in progress') || m.includes('dispatch') || m.includes('starting') || m.includes('booting')) return '🔄';
+        if (level === 'WARN') return '⚠️';
+        return 'ℹ️';
+    };
+
+    return (
+        <div className="action-log-widget">
+            <div className="action-log-header">
+                <div className="action-log-title">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="8" y1="6" x2="21" y2="6"></line>
+                        <line x1="8" y1="12" x2="21" y2="12"></line>
+                        <line x1="8" y1="18" x2="21" y2="18"></line>
+                        <line x1="3" y1="6" x2="3.01" y2="6"></line>
+                        <line x1="3" y1="12" x2="3.01" y2="12"></line>
+                        <line x1="3" y1="18" x2="3.01" y2="18"></line>
+                    </svg>
+                    Action Log
+                </div>
+                <div className="live-indicator">
+                    <span className="live-dot"></span> LIVE
+                </div>
+            </div>
+            <div className="action-log-tabs">
+                <button className={`action-log-tab ${activeTab === 'orders' ? 'active' : ''}`} onClick={() => setActiveTab('orders')}>Orders</button>
+                <button className={`action-log-tab ${activeTab === 'auth' ? 'active' : ''}`} onClick={() => setActiveTab('auth')}>Auth</button>
+                <button className={`action-log-tab ${activeTab === 'system' ? 'active' : ''}`} onClick={() => setActiveTab('system')}>System</button>
+            </div>
+            <div className="action-log-content">
+                {logs.length === 0 ? (
+                    <div style={{ padding: '20px', textAlign: 'center', color: '#64748B', fontSize: '11px' }}>
+                        No logs available for {activeTab}.
+                    </div>
+                ) : (
+                    logs.map(log => (
+                        <div key={log.id} className="log-entry">
+                            <span className="log-icon">{getLogIcon(log.level, log.message)}</span>
+                            <div className="log-details">
+                                <div className="log-message">{log.message}</div>
+                                <div className="log-meta">
+                                    <span>{log.module}</span>
+                                    <span>{log.timestamp.split(' ')[1]}</span>
+                                </div>
+                            </div>
+                        </div>
+                    ))
+                )}
+            </div>
+        </div>
+    );
+};
+
 function Dashboard({ user, onLogout }) {
     const [toasts, setToasts] = useState([]);
     const [positions, setPositions] = useState([]);
@@ -628,6 +706,7 @@ disabled={isActionLocked} className="logout-link-btn" title="Sign Out">
 
             {/* Main Content View */}
             <main className="main-content">
+                <ActionLogWidget />
                 {/* Page Title & Subtitle */}
                 <div className="page-header">
                     <h2 className="page-title">Position Monitor</h2>

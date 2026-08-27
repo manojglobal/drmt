@@ -90,6 +90,7 @@ func main() {
 	mux.HandleFunc("/api/positions", api.AuthMiddleware(db, api.PositionsHandler(posManager)))
 	mux.HandleFunc("/api/positions/exit", api.AuthMiddleware(db, api.PositionsExitHandler(db, posManager, execEngine)))
 	mux.HandleFunc("/api/health/servers", api.AuthMiddleware(db, api.ServersHealthHandler(healthMonitor)))
+	mux.HandleFunc("/api/logs", api.AuthMiddleware(db, api.LogsHandler()))
 	mux.HandleFunc("/api/positions/exited", api.AuthMiddleware(db, api.ExitedPositionsHandler(db)))
 	mux.HandleFunc("/api/positions/exited/dates", api.AuthMiddleware(db, api.ExitedDatesHandler(db)))
 	logger.System.Info("[INIT] HTTP API Routes mapped successfully")
