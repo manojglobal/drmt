@@ -738,17 +738,8 @@ function Dashboard({ user, onLogout }) {
                     <h1 className="brand-title">DRMT<br/>Dashboard</h1>
                     
                     <div className="nav-last-sync">
-                        <span className="sync-label">Last Sync:</span><br/>
-                        <span className="sync-time">
-                            {lastSync ? (
-                                <>
-                                    <span style={{ display: 'block' }}>{lastSync.split(' ')[0]}</span>
-                                    <span style={{ display: 'block' }}>{lastSync.split(' ')[1] || ''}</span>
-                                </>
-                            ) : (
-                                'Waiting...'
-                            )}
-                        </span>
+                        <span className="sync-label">Last Sync:</span>
+                        <span className="sync-time">{lastSync || 'Waiting...'}</span>
                     </div>
 
                     <div className={`nav-connection-pill ${wsConnected ? 'connected' : 'disconnected'}`}>

@@ -110,6 +110,7 @@ body {
     padding: 0 24px;
     display: flex;
     justify-content: space-between;
+    gap: 16px;
     align-items: center;
     background-color: var(--bg-panel);
     border-bottom: 1px solid var(--border-color);
@@ -195,6 +196,7 @@ body {
 .control-bar {
     display: flex;
     justify-content: space-between;
+    gap: 16px;
     align-items: center;
     padding: 10px 16px;
     background-color: var(--bg-panel);
@@ -243,6 +245,7 @@ body {
 .table-meta-bar {
     display: flex;
     justify-content: space-between;
+    gap: 16px;
     align-items: center;
     padding: 0 4px 12px 4px;
     flex-shrink: 0;
@@ -317,7 +320,8 @@ body {
 /* Floating Action Log Widget */
 .action-log-widget { position: relative; }
 .action-log-widget:hover { max-height: 400px; }
-.action-log-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; background: var(--bg-surface); border-bottom: 1px solid var(--border-color); cursor: pointer; font-weight: 600; font-size: 13px; }
+.action-log-header { display: flex; justify-content: space-between;
+    gap: 16px; align-items: center; padding: 14px 16px; background: var(--bg-surface); border-bottom: 1px solid var(--border-color); cursor: pointer; font-weight: 600; font-size: 13px; }
 .action-log-title { display: flex; align-items: center; gap: 8px; }
 .live-indicator { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--success); font-weight: 700; letter-spacing: 0.05em; }
 .live-dot { width: 6px; height: 6px; background: var(--success); border-radius: 50%; animation: pulse 2s infinite; }
@@ -404,8 +408,8 @@ body {
     border-right: 1px solid var(--border-color);
     padding-right: 16px;
     min-width: 100px;
-    
-    min-height: 60px;
+    min-height: 40px;
+    white-space: nowrap;
 }
 .sync-time {
     font-variant-numeric: tabular-nums;
