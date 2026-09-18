@@ -72,20 +72,35 @@ async def exit_positions(request: web.Request):
         fingerprint=r[8], status=r[9], token=r[10], token_updated_at=r[11]
     ) for r in rows]
     
-    success_count = await mass_exit(positions, credentials)
+    success_count, results = await mass_exit(positions, credentials)
     
-    # Write to exit history using SQLite localtime
+    # Write only successfully exited positions to SQLite
     async with get_db() as db:
-        for pos in positions:
-            exit_price = pos.ltp if pos.ltp != 0 else pos.avg_price
-            await db.execute("""
-                INSERT INTO exited_positions 
-                (position_id, broker, client_id, symbol, token, exchange, product_type, order_type, transaction_type, quantity, avg_price, exit_price, pnl, exited_at) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
-            """, (pos.id, pos.broker, pos.client_id, pos.symbol, pos.token, pos.exchange, pos.product_type, pos.order_type, pos.transaction_type, pos.quantity, pos.avg_price, exit_price, pos.pnl))
+        for r in results:
+            if r.get("success"):
+                pos = r["position"]
+                exit_price = pos.ltp if pos.ltp != 0 else pos.avg_price
+                await db.execute("""
+                    INSERT INTO exited_positions 
+                    (position_id, broker, client_id, symbol, token, exchange, product_type, order_type, transaction_type, quantity, avg_price, exit_price, pnl, exited_at) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+                """, (pos.id, pos.broker, pos.client_id, pos.symbol, pos.token, pos.exchange, pos.product_type, pos.order_type, pos.transaction_type, pos.quantity, pos.avg_price, exit_price, pos.pnl))
         await db.commit()
         
-    return web.json_response({"success": True, "message": f"Exited {success_count}/{len(positions)} positions"})
+    client_results = [
+        {
+            "broker": r["broker"],
+            "symbol": r["symbol"],
+            "success": r["success"],
+            "message": r["message"]
+        }
+        for r in results
+    ]
+    return web.json_response({
+        "success": success_count > 0 or len(positions) == 0,
+        "message": f"Exited {success_count}/{len(positions)} positions",
+        "results": client_results
+    })
 
 @routes.get('/api/exited')
 async def get_exited_positions(request: web.Request):

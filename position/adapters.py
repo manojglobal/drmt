@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import json
 from typing import List, Dict, Any
@@ -5,6 +6,7 @@ from models.schemas import Credential, Position
 from credentials.httpclient import proxy_request
 from core.engine import core_engine
 from position.manager import PositionManager
+from execution.mstock_instruments import ensure_mstock_instruments_cached
 
 logger = logging.getLogger("DRMT.SCM")
 
@@ -31,7 +33,46 @@ async def poll_mstock(cred: Credential) -> List[Position]:
             data = resp
         else:
             data = []
-        return PositionManager.normalize_positions(data, cred.broker, cred.client_id)
+        positions = PositionManager.normalize_positions(data, cred.broker, cred.client_id)
+        
+        # Ensure MStock Script Master is cached in Redis (checks Redis first, non-blocking)
+        asyncio.create_task(ensure_mstock_instruments_cached(cred))
+        
+        # Batch fetch live market LTP from mStock quote API
+        exchange_tokens = {}
+        for p in positions:
+            if p.token and p.exchange:
+                exchange_tokens.setdefault(p.exchange, []).append(str(p.token))
+
+        if exchange_tokens:
+            try:
+                quote_resp = await proxy_request(
+                    "GET",
+                    "https://api.mstock.trade/openapi/typeb/instruments/quote",
+                    str(cred.static_ip),
+                    headers={
+                        "Authorization": f"Bearer {cred.token}",
+                        "X-PrivateKey": cred.api_key,
+                        "X-Mirae-Version": "1",
+                        "Content-Type": "application/json"
+                    },
+                    json_data={"mode": "LTP", "exchangeTokens": exchange_tokens}
+                )
+                data_obj = quote_resp.get("data") if isinstance(quote_resp, dict) else None
+                fetched = (data_obj.get("fetched") or []) if isinstance(data_obj, dict) else []
+                ltp_map = {str(item.get("symbolToken")): float(item.get("ltp", 0)) for item in fetched}
+
+                for p in positions:
+                    if p.token in ltp_map and ltp_map[p.token] > 0:
+                        p.ltp = ltp_map[p.token]
+                        if p.transaction_type == "BUY":
+                            p.pnl = round((p.ltp - p.avg_price) * abs(p.quantity), 2)
+                        else:
+                            p.pnl = round((p.avg_price - p.ltp) * abs(p.quantity), 2)
+            except Exception as e:
+                logger.warning(f"Could not fetch live LTP quotes for {cred.client_id}: {e}")
+
+        return positions
     except Exception as e:
         if "401" in str(e) or "403" in str(e):
             raise PermissionError(f"MStock Auth Error: {e}")

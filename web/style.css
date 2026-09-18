@@ -308,8 +308,8 @@ body {
 .side-buy { background: var(--success-bg); color: var(--success); }
 .side-sell { background: var(--danger-bg); color: var(--danger); }
 
-.pnl-positive { color: var(--success); font-weight: 600; }
-.pnl-negative { color: var(--danger); font-weight: 600; }
+.pnl-positive, .compact-table td.pnl-positive { color: var(--success); font-weight: 600; }
+.pnl-negative, .compact-table td.pnl-negative { color: var(--danger); font-weight: 600; }
 
 .btn-action-close { background: var(--danger-bg); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.2); padding: 4px 12px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
 .btn-action-close:hover:not(:disabled) { background: var(--danger); color: white; }

@@ -837,24 +837,45 @@ function Dashboard({ user, onLogout }) {
                     const inLoss = positions.filter(p => (p.pnl || 0) < 0).length;
                     const pnlCls = totalPnl > 0 ? 'positive' : (totalPnl < 0 ? 'negative' : 'neutral');
                     return (
-                        <div className="hero-section" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
-                            <div className="stat-card" style={{ backgroundColor: 'var(--bg-panel)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', padding: '6px 12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '2px' }}>
-                                <span className="stat-label" style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>TOTAL PNL</span>
-                                <span className={`stat-value tabular ${pnlCls}`} style={{ fontSize: '20px', fontWeight: 'bold' }}>
+                        <div className="hero-section" style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-around',
+                            backgroundColor: 'var(--bg-panel)',
+                            border: '1px solid var(--border-color)',
+                            borderRadius: 'var(--radius-md, 8px)',
+                            padding: '8px 20px',
+                            fontSize: '13.5px',
+                            fontWeight: '600',
+                            flexWrap: 'wrap',
+                            gap: '12px'
+                        }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span style={{ color: 'var(--text-secondary)' }}>Total P&L:</span>
+                                <span className={`tabular ${pnlCls}`} style={{
+                                    fontWeight: '700',
+                                    color: totalPnl > 0 ? 'var(--success, #22c55e)' : (totalPnl < 0 ? 'var(--danger, #ef4444)' : 'inherit')
+                                }}>
                                     {totalPnl > 0 ? '+' : ''}{totalPnl.toFixed(2)}
                                 </span>
                             </div>
-                            <div className="stat-card" style={{ backgroundColor: 'var(--bg-panel)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', padding: '6px 12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '2px' }}>
-                                <span className="stat-label" style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>OPEN POSITIONS</span>
-                                <span className="stat-value tabular neutral" style={{ fontSize: '20px', fontWeight: 'bold', color: 'var(--text-primary, #fff)' }}>{positions.length}</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span style={{ color: 'var(--text-secondary)' }}>Open Positions:</span>
+                                <span className="tabular neutral" style={{ fontWeight: '700', color: 'var(--text-primary, #fff)' }}>
+                                    {positions.length}
+                                </span>
                             </div>
-                            <div className="stat-card" style={{ backgroundColor: 'var(--bg-panel)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', padding: '6px 12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '2px' }}>
-                                <span className="stat-label" style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>IN PROFIT</span>
-                                <span className="stat-value tabular positive" style={{ fontSize: '20px', fontWeight: 'bold', color: 'var(--success, var(--green, #22c55e))' }}>{inProfit}</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span style={{ color: 'var(--text-secondary)' }}>In Profit:</span>
+                                <span className="tabular positive" style={{ fontWeight: '700', color: 'var(--success, #22c55e)' }}>
+                                    {inProfit}
+                                </span>
                             </div>
-                            <div className="stat-card" style={{ backgroundColor: 'var(--bg-panel)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', padding: '6px 12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '2px' }}>
-                                <span className="stat-label" style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>IN LOSS</span>
-                                <span className="stat-value tabular negative" style={{ fontSize: '20px', fontWeight: 'bold', color: 'var(--danger, var(--red, #ef4444))' }}>{inLoss}</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span style={{ color: 'var(--text-secondary)' }}>In Loss:</span>
+                                <span className="tabular negative" style={{ fontWeight: '700', color: 'var(--danger, #ef4444)' }}>
+                                    {inLoss}
+                                </span>
                             </div>
                         </div>
                     );
@@ -1005,8 +1026,9 @@ function Dashboard({ user, onLogout }) {
                                                         </td>
                                                         <td className="text-right tabular">{pos.quantity}</td>
                                                         <td className="text-right tabular">{(pos.avg_price || 0).toFixed(2)}</td>
-                                                        <td className={`text-right tabular ${pnlVal >= 0 ? 'pnl-positive' : 'pnl-negative'}`}>
-                                                            {pnlVal >= 0 ? `+${pnlVal.toFixed(2)}` : pnlVal.toFixed(2)}
+                                                        <td className={`text-right tabular ${pnlVal > 0 ? 'pnl-positive' : (pnlVal < 0 ? 'pnl-negative' : '')}`}
+                                                            style={{ color: pnlVal > 0 ? 'var(--success, #22c55e)' : (pnlVal < 0 ? 'var(--danger, #ef4444)' : 'inherit') }}>
+                                                            {pnlVal > 0 ? `+${pnlVal.toFixed(2)}` : pnlVal.toFixed(2)}
                                                         </td>
                                                         <td className="text-right tabular">{ltpVal.toFixed(2)}</td>
                                                         <td className="text-center" onClick={e => e.stopPropagation()}>
@@ -1182,8 +1204,9 @@ function Dashboard({ user, onLogout }) {
                                                         <td className="text-right tabular">{pos.quantity}</td>
                                                         <td className="text-right tabular">{(pos.avg_price || 0).toFixed(2)}</td>
                                                         <td className="text-right tabular">{(pos.exit_price || 0).toFixed(2)}</td>
-                                                        <td className={`text-right tabular ${pnlVal >= 0 ? 'pnl-positive' : 'pnl-negative'}`}>
-                                                            {pnlVal >= 0 ? `+${pnlVal.toFixed(2)}` : pnlVal.toFixed(2)}
+                                                        <td className={`text-right tabular ${pnlVal > 0 ? 'pnl-positive' : (pnlVal < 0 ? 'pnl-negative' : '')}`}
+                                                            style={{ color: pnlVal > 0 ? 'var(--success, #22c55e)' : (pnlVal < 0 ? 'var(--danger, #ef4444)' : 'inherit') }}>
+                                                            {pnlVal > 0 ? `+${pnlVal.toFixed(2)}` : pnlVal.toFixed(2)}
                                                         </td>
                                                         <td className="tabular">{exitDateStr}</td>
                                                     </tr>

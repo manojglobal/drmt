@@ -4,6 +4,8 @@ import uuid
 from models.schemas import Credential, Position
 from credentials.httpclient import proxy_request
 
+from execution.mstock_instruments import get_mstock_trading_symbol
+
 logger = logging.getLogger(__name__)
 
 async def exit_mstock(pos: Position, cred: Credential) -> bool:
@@ -26,9 +28,19 @@ async def exit_mstock(pos: Position, cred: Credential) -> bool:
     order_tag = str(uuid.uuid4()).replace("-", "")[:15]
     resolved_token = pos.token
     
+    # Look up official exchange trading symbol from Redis Script Master mapping
+    trading_symbol = await get_mstock_trading_symbol(pos.symbol, str(pos.token), pos.exchange)
+    if not trading_symbol:
+        # Fallback formatting if Redis mapping is not yet loaded
+        trading_symbol = pos.symbol
+        if pos.exchange.upper() == "NSE" and not trading_symbol.endswith("-EQ") and not any(s in trading_symbol for s in ("CE", "PE", "FUT")):
+            trading_symbol = f"{pos.symbol}-EQ"
+        elif pos.exchange.upper() == "BSE" and not ("-" in trading_symbol) and not any(s in trading_symbol for s in ("CE", "PE", "FUT")):
+            trading_symbol = f"{pos.symbol}-A"
+    
     payload = {
         "variety": "NORMAL",
-        "tradingsymbol": pos.symbol,
+        "tradingsymbol": trading_symbol,
         "symboltoken": str(resolved_token),
         "exchange": pos.exchange,
         "transactiontype": tran_type,

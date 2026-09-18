@@ -28,20 +28,44 @@ async def execute_exit_order(pos: Position, cred: Credential) -> bool:
             return False
 
 
-async def mass_exit(positions: List[Position], credentials: List[Credential]) -> int:
+async def mass_exit(positions: List[Position], credentials: List[Credential]) -> tuple[int, List[dict]]:
     """Executes a mass exit for multiple positions concurrently through the core engine."""
     cred_map = {f"{c.broker}:{c.client_id}": c for c in credentials}
     
-    futures = []
+    tasks = []
+    task_positions = []
+    missing_results = []
+
     for pos in positions:
         cred = cred_map.get(f"{pos.broker}:{pos.client_id}")
         if not cred:
             await logger_exit.error(f"No credential found for {pos.broker}:{pos.client_id}")
+            missing_results.append({
+                "broker": pos.broker,
+                "symbol": pos.symbol,
+                "success": False,
+                "message": f"No active credential found for {pos.broker}:{pos.client_id}",
+                "position": pos
+            })
             continue
             
         future = await core_engine.async_submit(execute_exit_order(pos, cred))
-        futures.append(future)
+        tasks.append(future)
+        task_positions.append(pos)
         
-    results = await asyncio.gather(*futures, return_exceptions=True)
-    success_count = sum(1 for r in results if r is True)
-    return success_count
+    raw_results = await asyncio.gather(*tasks, return_exceptions=True) if tasks else []
+    
+    results = list(missing_results)
+    for pos, res in zip(task_positions, raw_results):
+        is_success = res is True
+        msg = "Order placed successfully" if is_success else (str(res) if isinstance(res, Exception) else "Broker rejected exit order")
+        results.append({
+            "broker": pos.broker,
+            "symbol": pos.symbol,
+            "success": is_success,
+            "message": msg,
+            "position": pos
+        })
+        
+    success_count = sum(1 for r in results if r["success"] is True)
+    return success_count, results

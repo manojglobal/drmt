@@ -35,7 +35,13 @@ class PositionManager:
             
             avg_price = float(raw.get("avg_price") or raw.get("buyavgprice") or raw.get("netavgprc") or raw.get("Price") or 0.0)
             ltp = float(raw.get("ltp") or raw.get("netprice") or raw.get("avgnetprice") or raw.get("LTP") or avg_price or 0.0)
-            pnl = float(raw.get("pnl") or raw.get("urmtom") or raw.get("rpnl") or raw.get("MtoM") or 0.0)
+            pnl = float(raw.get("pnl") or raw.get("urmtom") or raw.get("rpnl") or raw.get("MtoM") or raw.get("m2m") or raw.get("M2M") or 0.0)
+            if pnl == 0.0 and avg_price > 0 and ltp > 0 and qty != 0:
+                if tran_type == "BUY":
+                    pnl = (ltp - avg_price) * abs(qty)
+                else:
+                    pnl = (avg_price - ltp) * abs(qty)
+                pnl = round(pnl, 2)
             
             # Rule: ID Gen as broker:client_id:symbol
             pos_id = f"{broker}:{client_id}:{symbol}"
