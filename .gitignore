@@ -29,3 +29,29 @@ Thumbs.db
 *.log
 test_*
 
+
+# Environment
+.env.example
+
+
+# Documentation
+Core_Engine_Workflow.md
+Performance_Optimization_Guide.md
+
+
+# Python Cache
+__pycache__/
+api/__pycache__/
+core/__pycache__/
+credentials/__pycache__/
+database/__pycache__/
+execution/__pycache__/
+health/__pycache__/
+logger/__pycache__/
+models/__pycache__/
+position/__pycache__/
+utils/__pycache__/
+
+
+# Virtual Environment
+venv/
