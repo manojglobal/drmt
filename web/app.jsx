@@ -1,6 +1,6 @@
-const { useState, useEffect, useMemo } = React;
+const { useState, useEffect, useMemo, useRef } = React;
 
-
+/* ─── Utility: fetch with timeout ─── */
 const fetchWithTimeout = async (resource, options = {}) => {
     const { timeout = 30000 } = options;
     const controller = new AbortController();
@@ -15,17 +15,19 @@ const fetchWithTimeout = async (resource, options = {}) => {
     }
 };
 
+/* ─── Hook: debounce ─── */
 function useDebounce(value, delay) {
     const [debouncedValue, setDebouncedValue] = useState(value);
     useEffect(() => {
-        const handler = setTimeout(() => {
-            setDebouncedValue(value);
-        }, delay);
+        const handler = setTimeout(() => setDebouncedValue(value), delay);
         return () => clearTimeout(handler);
     }, [value, delay]);
     return debouncedValue;
 }
 
+/* ═══════════════════════════════════════════
+   ROOT APP – auth gate
+   ═══════════════════════════════════════════ */
 function App() {
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -53,25 +55,26 @@ function App() {
     return user ? <Dashboard user={user} onLogout={() => setUser(null)} /> : <Login onLogin={setUser} />;
 }
 
+/* ═══════════════════════════════════════════
+   LOGIN PAGE
+   ═══════════════════════════════════════════ */
 function Login({ onLogin }) {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
-    const [error, setError] = useState('');
+    const [error, setError]       = useState('');
     const [submitting, setSubmitting] = useState(false);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
         setError('');
         setSubmitting(true);
-
         try {
-            const res = await fetchWithTimeout('/api/login', { 
+            const res = await fetchWithTimeout('/api/login', {
                 timeout: 30000,
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ username, password })
             });
-
             if (res.ok) {
                 const meRes = await fetchWithTimeout('/api/me', { timeout: 30000 });
                 const userData = await meRes.json();
@@ -88,10 +91,10 @@ function Login({ onLogin }) {
 
     return (
         <div className="login-container">
-            <div className="login-box">
+            <div className="login-box" data-aos="fade-up">
                 <div className="login-header">
-                    <div className="brand-dot" style={{ backgroundColor: "#EF4444", boxShadow: "0 0 8px #EF4444" }} title="Disconnected"></div>
-                    <h2>Disaster Recovery Management Tool</h2>
+                    <div className="brand-dot" style={{ backgroundColor: "var(--danger)", boxShadow: "0 0 8px var(--danger)" }}></div>
+                    <h2>DRMT</h2>
                 </div>
                 <p className="login-subtitle">Sign in to access position monitor & emergency controls</p>
                 {error && <div className="error-alert">{error}</div>}
@@ -102,7 +105,7 @@ function Login({ onLogin }) {
                             type="text"
                             placeholder="Enter username"
                             value={username}
-                            onChange={(e) => setUsername(e.target.value)}
+                            onChange={e => setUsername(e.target.value)}
                             required
                         />
                     </div>
@@ -112,7 +115,7 @@ function Login({ onLogin }) {
                             type="password"
                             placeholder="Enter password"
                             value={password}
-                            onChange={(e) => setPassword(e.target.value)}
+                            onChange={e => setPassword(e.target.value)}
                             required
                         />
                     </div>
@@ -125,20 +128,21 @@ function Login({ onLogin }) {
     );
 }
 
-
+/* ═══════════════════════════════════════════
+   SERVER HEALTH MONITOR  (nav pills)
+   ═══════════════════════════════════════════ */
 const ServerHealthMonitor = () => {
     const [servers, setServers] = React.useState({});
 
     React.useEffect(() => {
         const fetchHealth = () => {
-            fetchWithTimeout('/api/health', { timeout: 30000,
+            fetchWithTimeout('/api/health', {
+                timeout: 30000,
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('drmt_token')}` }
             })
-            .then(res => res.json())
-            .then(data => {
-                if (data) setServers(data);
-            })
-            .catch(err => console.error("Health check error:", err));
+                .then(res => res.json())
+                .then(data => { if (data) setServers(data); })
+                .catch(err => console.error("Health check error:", err));
         };
         fetchHealth();
         const interval = setInterval(fetchHealth, 5000);
@@ -152,12 +156,11 @@ const ServerHealthMonitor = () => {
         <div className="health-monitor-group">
             {serverList.map(([name, data]) => {
                 const isUp = data.status === 'UP';
-                const pingTime = data.query_time ? data.query_time.split(' ')[1] : '--:--:--';
+                const pingTime    = data.query_time         ? data.query_time.split(' ')[1]         : '--:--:--';
                 const successTime = data.last_successful_time ? data.last_successful_time.split(' ')[1] : '--:--:--';
-                
                 return (
                     <div key={name} className={`health-pill ${isUp ? 'status-up' : 'status-down'}`} title={data.message || 'Status OK'}>
-                        <span className="health-dot"></span>
+                        <span className="health-dot" />
                         <div className="health-details">
                             <span className="health-name">{name}</span>
                             <span className="health-times">Ping: {pingTime} | OK: {successTime}</span>
@@ -169,7 +172,9 @@ const ServerHealthMonitor = () => {
     );
 };
 
-
+/* ═══════════════════════════════════════════
+   ACTION LOG WIDGET  (fixed, hover-expand)
+   ═══════════════════════════════════════════ */
 const ActionLogWidget = () => {
     const [activeTab, setActiveTab] = React.useState('orders');
     const [logs, setLogs] = React.useState([]);
@@ -180,14 +185,12 @@ const ActionLogWidget = () => {
                 timeout: 10000,
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('drmt_token')}` }
             })
-            .then(res => res.json())
-            .then(data => {
-                if (data) setLogs(data);
-            })
-            .catch(err => {});
+                .then(res => res.json())
+                .then(data => { if (data) setLogs(data); })
+                .catch(() => {});
         };
         fetchLogs();
-        const interval = setInterval(fetchLogs, 3000); // 3-second live sync
+        const interval = setInterval(fetchLogs, 3000);
         return () => clearInterval(interval);
     }, [activeTab]);
 
@@ -200,58 +203,63 @@ const ActionLogWidget = () => {
         return 'ℹ️';
     };
 
+    const [isOpen, setIsOpen] = React.useState(false);
+
     return (
         <div className="action-log-widget">
-            <div className="action-log-header">
-                <div className="action-log-title">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <line x1="8" y1="6" x2="21" y2="6"></line>
-                        <line x1="8" y1="12" x2="21" y2="12"></line>
-                        <line x1="8" y1="18" x2="21" y2="18"></line>
-                        <line x1="3" y1="6" x2="3.01" y2="6"></line>
-                        <line x1="3" y1="12" x2="3.01" y2="12"></line>
-                        <line x1="3" y1="18" x2="3.01" y2="18"></line>
-                    </svg>
-                    Action Log
-                </div>
-                <div className="live-indicator">
-                    <span className="live-dot"></span> LIVE
-                </div>
-            </div>
-            <div className="action-log-tabs">
-                <button className={`action-log-tab ${activeTab === 'orders' ? 'active' : ''}`} onClick={() => setActiveTab('orders')}>Orders</button>
-                <button className={`action-log-tab ${activeTab === 'auth' ? 'active' : ''}`} onClick={() => setActiveTab('auth')}>Auth</button>
-                <button className={`action-log-tab ${activeTab === 'system' ? 'active' : ''}`} onClick={() => setActiveTab('system')}>System</button>
-            </div>
-            <div className="action-log-content">
-                {logs.length === 0 ? (
-                    <div style={{ padding: '20px', textAlign: 'center', color: '#64748B', fontSize: '11px' }}>
-                        No logs available for {activeTab}.
-                    </div>
-                ) : (
-                    logs.map(log => (
-                        <div key={log.id} className="log-entry">
-                            <span className="log-icon">{getLogIcon(log.level, log.message)}</span>
-                            <div className="log-details">
-                                <div className="log-message">{log.message}</div>
-                                <div className="log-meta">
-                                    <span>{log.module}</span>
-                                    <span>{log.timestamp.split(' ')[1]}</span>
-                                </div>
-                            </div>
+            <button className="action-log-toggle" onClick={() => setIsOpen(!isOpen)} title="Terminal">
+                <span style={{ fontFamily: 'monospace', fontWeight: 'bold' }}>&gt;_</span>
+                <span>Terminal</span>
+                <span className="live-dot" style={{ marginLeft: '4px', background: 'var(--green)', boxShadow: '0 0 5px var(--green)' }} />
+            </button>
+
+            {isOpen && (
+                <div className="action-log-dropdown">
+                    <div className="action-log-header">
+                        <div className="action-log-title">
+                            Action Log
                         </div>
-                    ))
-                )}
-            </div>
+                        <div className="live-indicator">
+                            <span className="live-dot" /> LIVE
+                        </div>
+                    </div>
+                    <div className="action-log-tabs">
+                        <button className={`action-log-tab ${activeTab === 'orders' ? 'active' : ''}`}  onClick={() => setActiveTab('orders')}>Orders</button>
+                        <button className={`action-log-tab ${activeTab === 'auth'   ? 'active' : ''}`}  onClick={() => setActiveTab('auth')}>Auth</button>
+                        <button className={`action-log-tab ${activeTab === 'system' ? 'active' : ''}`}  onClick={() => setActiveTab('system')}>System</button>
+                    </div>
+                    <div className="action-log-content">
+                        {logs.length === 0 ? (
+                            <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '12px' }}>
+                                No recent activity
+                            </div>
+                        ) : (
+                            logs.map((log, i) => (
+                                <div key={i} className="log-entry">
+                                    <div className="log-icon">{getLogIcon(log.level, log.message)}</div>
+                                    <div className="log-details">
+                                        <div className="log-message">{log.message}</div>
+                                        <div className="log-meta">{log.timestamp}</div>
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
 
+
+/* ═══════════════════════════════════════════
+   MAIN DASHBOARD
+   ═══════════════════════════════════════════ */
 function Dashboard({ user, onLogout }) {
     // CODE FLIP FOR TESTING: Change to 'true' to force 5s polling regardless of market hours or tab visibility
     const TEST_MODE_FORCE_POLL = true;
 
-    const [isVisible, setIsVisible] = useState(!document.hidden);
+    const [isVisible, setIsVisible]       = useState(!document.hidden);
     const [pollingStatus, setPollingStatus] = useState('Active');
 
     useEffect(() => {
@@ -260,62 +268,67 @@ function Dashboard({ user, onLogout }) {
         return () => document.removeEventListener('visibilitychange', handleVisibility);
     }, []);
 
-    const [toasts, setToasts] = useState([]);
-    const [positions, setPositions] = useState([]);
-    const [lastSync, setLastSync] = useState(null);
-    const [activeTab, setActiveTab] = useState('running');
+    /* ── Core State ── */
+    const [toasts, setToasts]           = useState([]);
+    const [positions, setPositions]     = useState([]);
+    const [lastSync, setLastSync]       = useState(null);
+    const [activeTab, setActiveTab]     = useState('running');
 
     const [isFetchingPositions, setIsFetchingPositions] = useState(false);
-    const [isExporting, setIsExporting] = useState(false);
-    const [isLoggingOut, setIsLoggingOut] = useState(false);
+    const [isExporting, setIsExporting]                 = useState(false);
+    const [isLoggingOut, setIsLoggingOut]               = useState(false);
 
+    /* ── Theme ── */
+    const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
+    useEffect(() => {
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem('theme', theme);
+    }, [theme]);
 
-
-    // Filters
-    const [searchQuery, setSearchQuery] = useState('');
-    const debouncedSearchQuery = useDebounce(searchQuery, 500);
-    const [selectedBroker, setSelectedBroker] = useState('ALL');
-    const [selectedUser, setSelectedUser] = useState('ALL');
+    /* ── Filters (Running) ── */
+    const [searchQuery, setSearchQuery]           = useState('');
+    const debouncedSearchQuery                    = useDebounce(searchQuery, 500);
+    const [selectedBroker, setSelectedBroker]     = useState('ALL');
+    const [selectedUser, setSelectedUser]         = useState('ALL');
     const [selectedTradeType, setSelectedTradeType] = useState('ALL');
 
-    // Selection & Pagination
+    /* ── Selection & Pagination ── */
     const [selectedIds, setSelectedIds] = useState(new Set());
     const [currentPage, setCurrentPage] = useState(1);
     const pageSize = 50;
 
-    // Modals & Execution
+    /* ── Modal & Exit ── */
     const [modalConfig, setModalConfig] = useState(null);
-    const [isExiting, setIsExiting] = useState(false);
+    const [isExiting, setIsExiting]     = useState(false);
     const isActionLocked = isExiting || isExporting || isLoggingOut;
 
-
-
+    /* ── Toast helper ── */
     const addToast = (message, type = 'info') => {
         const id = Date.now() + Math.random();
         setToasts(prev => [...prev, { id, message, type }]);
-        setTimeout(() => {
-            setToasts(prev => prev.filter(t => t.id !== id));
-        }, 5000);
+        setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 5000);
     };
 
+    /* ── Logout ── */
     const handleLogout = async () => {
         await fetch('/api/logout', { method: 'POST' });
         onLogout();
     };
 
-    // Polling live positions every 5 seconds
+    /* ── WebSocket / Live Positions ── */
     const [wsConnected, setWsConnected] = useState(false);
-    
+    const reconnectAttempts = useRef(0);
+
     useEffect(() => {
         let isClosed = false;
         let isPostMarket = false;
-        
+
         if (!TEST_MODE_FORCE_POLL) {
             try {
-                const istTime = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
-                const day = istTime.getDay();
+                const istTime = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+                const day  = istTime.getDay();
                 const mins = istTime.getHours() * 60 + istTime.getMinutes();
-                isClosed = (day === 0 || day === 6 || mins < 530 || mins > 1435);
+                isClosed     = (day === 0 || day === 6 || mins < 530 || mins > 1435);
                 isPostMarket = (mins >= 960 && mins <= 1435);
             } catch (e) {
                 isClosed = false;
@@ -329,74 +342,74 @@ function Dashboard({ user, onLogout }) {
 
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${wsProtocol}//${window.location.host}/ws/positions`;
-        
-        let socket = null;
+
+        let socket   = null;
         let pingTimer = null;
-        
+
         const connect = () => {
             if (isActionLocked) return;
-            
             setPollingStatus("Connecting...");
             socket = new WebSocket(wsUrl);
             socket.binaryType = "arraybuffer";
-            
+
             socket.onopen = () => {
                 setWsConnected(true);
                 setPollingStatus("Connected (Live)");
+                reconnectAttempts.current = 0;
                 pingTimer = setInterval(() => {
                     if (socket && socket.readyState === WebSocket.OPEN) {
-                        socket.send(new TextEncoder().encode(JSON.stringify({type: "ping"})));
+                        socket.send(new TextEncoder().encode(JSON.stringify({ type: "ping" })));
                     }
                 }, 15000);
             };
-            
+
             socket.onmessage = (event) => {
                 try {
-                    const textDecoder = new TextDecoder("utf-8");
-                    const textData = textDecoder.decode(event.data);
+                    let textData;
+                    if (typeof event.data === 'string') {
+                        textData = event.data;
+                    } else {
+                        textData = new TextDecoder("utf-8").decode(event.data);
+                    }
                     const msg = JSON.parse(textData);
                     if (msg.type === "positions") {
                         setPositions(msg.data || []);
                         setLastSync(new Date().toLocaleTimeString());
                     } else if (msg.type === "status") {
                         setWsConnected(msg.connected);
+                    } else if (msg.type === "error") {
+                        addToast(msg.message || "WebSocket Error", "error");
                     }
-                } catch(e) {
+                } catch (e) {
                     console.error("WS parse error", e);
                 }
             };
-            
+
             socket.onclose = () => {
                 setWsConnected(false);
-                setPollingStatus("Disconnected");
+                setPollingStatus("Disconnected / Connection Lost");
                 clearInterval(pingTimer);
-                
-                // Exponential backoff logic
-                const attempt = reconnectAttempts.current;
+                const attempt  = reconnectAttempts.current;
                 const maxDelay = 30000;
-                let delay = Math.min(1000 * Math.pow(2, attempt), maxDelay);
-                
+                const delay    = Math.min(1000 * Math.pow(2, attempt), maxDelay);
                 if (!isActionLocked) {
                     setTimeout(connect, delay);
                     reconnectAttempts.current += 1;
                 }
             };
-            
-            socket.onerror = (err) => {
-                console.error("WS error", err);
-            };
+
+            socket.onerror = (err) => console.error("WS error", err);
         };
-        
+
         connect();
-        
+
         return () => {
-            if (socket) socket.close();
+            if (socket)    socket.close();
             if (pingTimer) clearInterval(pingTimer);
         };
     }, [isActionLocked, TEST_MODE_FORCE_POLL]);
 
-
-    // Extract dynamic dropdown options
+    /* ── Dynamic dropdown options (Running) ── */
     const brokersList = useMemo(() => {
         const set = new Set();
         positions.forEach(p => { if (p.broker) set.add(p.broker); });
@@ -409,58 +422,42 @@ function Dashboard({ user, onLogout }) {
         return Array.from(set).sort();
     }, [positions]);
 
-    // Combined filtering logic
+    /* ── Filtered positions ── */
     const filteredPositions = useMemo(() => {
         return positions.filter(pos => {
-            // Broker filter
-            if (selectedBroker !== 'ALL' && pos.broker !== selectedBroker) {
-                return false;
-            }
-            // User / Client ID filter
-            if (selectedUser !== 'ALL' && pos.client_id !== selectedUser) {
-                return false;
-            }
-            // Trade Type filter
+            if (selectedBroker !== 'ALL' && pos.broker !== selectedBroker) return false;
+            if (selectedUser   !== 'ALL' && pos.client_id !== selectedUser)  return false;
             if (selectedTradeType !== 'ALL') {
-                const side = (pos.transaction || (pos.quantity > 0 ? 'BUY' : 'SELL')).toUpperCase();
+                const side = (pos.transaction_type || pos.transaction || (pos.quantity > 0 ? 'BUY' : 'SELL')).toUpperCase();
                 if (side !== selectedTradeType) return false;
             }
-            // Text Search filter (symbol, token, client_id, broker, exchange, product)
             if (debouncedSearchQuery.trim() !== '') {
                 const q = debouncedSearchQuery.toLowerCase().trim();
-                const matchSymbol = (pos.symbol || '').toLowerCase().includes(q);
-                const matchClient = (pos.client_id || '').toLowerCase().includes(q);
-                const matchBroker = (pos.broker || '').toLowerCase().includes(q);
-                const matchExchange = (pos.exchange || '').toLowerCase().includes(q);
-                const matchToken = (pos.token || '').toLowerCase().includes(q);
-                if (!matchSymbol && !matchClient && !matchBroker && !matchExchange && !matchToken) {
-                    return false;
-                }
+                const matchSymbol   = (pos.symbol    || '').toLowerCase().includes(q);
+                const matchClient   = (pos.client_id || '').toLowerCase().includes(q);
+                const matchBroker   = (pos.broker    || '').toLowerCase().includes(q);
+                const matchExchange = (pos.exchange  || '').toLowerCase().includes(q);
+                const matchToken    = (pos.token     || '').toLowerCase().includes(q);
+                if (!matchSymbol && !matchClient && !matchBroker && !matchExchange && !matchToken) return false;
             }
             return true;
         });
     }, [positions, selectedBroker, selectedUser, selectedTradeType, debouncedSearchQuery]);
 
-    // Reset pagination to page 1 on filter change
-    useEffect(() => {
-        setCurrentPage(1);
-    }, [searchQuery, selectedBroker, selectedUser, selectedTradeType]);
+    /* Reset to page 1 on filter change */
+    useEffect(() => { setCurrentPage(1); }, [searchQuery, selectedBroker, selectedUser, selectedTradeType]);
 
-    // Pagination calculations
-    const totalPages = Math.max(1, Math.ceil(filteredPositions.length / pageSize));
-    const paginatedPositions = useMemo(() => {
+    /* Pagination */
+    const totalPages          = Math.max(1, Math.ceil(filteredPositions.length / pageSize));
+    const paginatedPositions  = useMemo(() => {
         const start = (currentPage - 1) * pageSize;
         return filteredPositions.slice(start, start + pageSize);
     }, [filteredPositions, currentPage, pageSize]);
 
-    // Selection handlers
+    /* ── Selection handlers ── */
     const handleSelectRow = (id) => {
         const newSet = new Set(selectedIds);
-        if (newSet.has(id)) {
-            newSet.delete(id);
-        } else {
-            newSet.add(id);
-        }
+        newSet.has(id) ? newSet.delete(id) : newSet.add(id);
         setSelectedIds(newSet);
     };
 
@@ -476,34 +473,29 @@ function Dashboard({ user, onLogout }) {
         setSelectedIds(newSet);
     };
 
-    const handleCancelSelection = () => {
-        setSelectedIds(new Set());
-    };
+    const handleCancelSelection = () => setSelectedIds(new Set());
 
-    // Close / Close All Action Logic
+    /* ── Close / Close-All ── */
     const handleCloseAction = () => {
         if (selectedIds.size > 0) {
-            // Close Selected
             const count = selectedIds.size;
             setModalConfig({
-                title: "Confirm Market Exit",
-                message: `Are you sure you want to Market Exit ${count} selected position${count > 1 ? 's' : ''}?\n\nThis will instantly submit Market orders to the respective broker(s) to close these positions.`,
+                title:     "Confirm Market Exit",
+                message:   `Are you sure you want to Market Exit ${count} selected position${count > 1 ? 's' : ''}?\n\nThis will instantly submit Market orders to the respective broker(s) to close these positions.`,
                 onConfirm: () => executeExit(positions.filter(p => selectedIds.has(p.id))),
-                onCancel: () => setModalConfig(null)
+                onCancel:  () => setModalConfig(null)
             });
         } else {
-            // Close All Filtered Running Positions
             if (filteredPositions.length === 0) {
                 addToast("No running positions available to close.", "info");
                 return;
             }
             const count = filteredPositions.length;
-            const allIds = filteredPositions.map(p => p.id);
             setModalConfig({
-                title: "Confirm Close All Positions",
-                message: `⚠️ WARNING: Are you sure you want to Market Exit ALL ${count} currently displayed position${count > 1 ? 's' : ''}?\n\nThis will immediately place Market orders across all brokers to flatten these positions.`,
+                title:     "Confirm Close All Positions",
+                message:   `⚠️ WARNING: Are you sure you want to Market Exit ALL ${count} currently displayed position${count > 1 ? 's' : ''}?\n\nThis will immediately place Market orders across all brokers to flatten these positions.`,
                 onConfirm: () => executeExit(filteredPositions),
-                onCancel: () => setModalConfig(null)
+                onCancel:  () => setModalConfig(null)
             });
         }
     };
@@ -511,20 +503,17 @@ function Dashboard({ user, onLogout }) {
     const executeExit = async (positionsToExit) => {
         setModalConfig(null);
         setIsExiting(true);
-
         try {
             const res = await fetchWithTimeout('/api/exit', {
-timeout: 30000,
+                timeout: 30000,
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ positions: positionsToExit })
             });
-
             if (res.ok) {
                 const data = await res.json();
                 setSelectedIds(new Set());
                 addToast(data.message || `Processed exit for ${positionsToExit.length} position(s)`, "success");
-
                 if (data.results && data.results.length > 0) {
                     data.results.forEach(r => {
                         if (r.success) {
@@ -538,74 +527,71 @@ timeout: 30000,
                 addToast("Failed to dispatch exit commands (Server Error).", "error");
             }
         } catch (err) {
-            if(err.name === "AbortError") { addToast("Execution timed out (30s)!", "error"); } else { addToast("Error communicating with server.", "error"); }
+            if (err.name === "AbortError") {
+                addToast("Execution timed out (30s)!", "error");
+            } else {
+                addToast("Error communicating with server.", "error");
+            }
         } finally {
             setIsExiting(false);
         }
     };
 
-    // Executed Tab State
+    /* ══════════════════════════════════════
+       EXECUTED TAB STATE
+       ══════════════════════════════════════ */
     const [executedPositions, setExecutedPositions] = useState([]);
-    const [executedLoading, setExecutedLoading] = useState(false);
-    const [availableDates, setAvailableDates] = useState([]);
-    
-    // Default fromDate = 7 days ago, toDate = today
-    const todayISO = useMemo(() => new Date().toISOString().split('T')[0], []);
+    const [executedLoading, setExecutedLoading]     = useState(false);
+    const [availableDates, setAvailableDates]       = useState([]);
+
+    const todayISO       = useMemo(() => new Date().toISOString().split('T')[0], []);
     const defaultFromISO = useMemo(() => {
         const d = new Date();
         d.setDate(d.getDate() - 7);
         return d.toISOString().split('T')[0];
     }, []);
 
-    const [fromDate, setFromDate] = useState(defaultFromISO);
-    const [toDate, setToDate] = useState(todayISO);
+    const [fromDate, setFromDate]                   = useState(defaultFromISO);
+    const [toDate, setToDate]                       = useState(todayISO);
     const [executedSearchQuery, setExecutedSearchQuery] = useState('');
-    const debouncedExecutedSearchQuery = useDebounce(executedSearchQuery, 500);
-    const [executedBroker, setExecutedBroker] = useState('ALL');
-    const [executedUser, setExecutedUser] = useState('ALL');
+    const debouncedExecutedSearchQuery              = useDebounce(executedSearchQuery, 500);
+    const [executedBroker, setExecutedBroker]       = useState('ALL');
+    const [executedUser, setExecutedUser]           = useState('ALL');
     const [executedTradeType, setExecutedTradeType] = useState('ALL');
-    const [executedPage, setExecutedPage] = useState(1);
+    const [executedPage, setExecutedPage]           = useState(1);
 
-    // Date options list (generated past 30 days + any DB dates)
+    /* Date dropdown options */
     const dateOptions = useMemo(() => {
         const map = new Map();
         const today = new Date();
         for (let i = 0; i < 30; i++) {
             const d = new Date(today);
             d.setDate(today.getDate() - i);
-            const iso = d.toISOString().split('T')[0];
+            const iso   = d.toISOString().split('T')[0];
             const label = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
             map.set(iso, i === 0 ? `Today (${label})` : i === 1 ? `Yesterday (${label})` : label);
         }
-        availableDates.forEach(dt => {
-            if (!map.has(dt)) {
-                map.set(dt, dt);
-            }
-        });
+        availableDates.forEach(dt => { if (!map.has(dt)) map.set(dt, dt); });
         return Array.from(map.entries()).map(([value, label]) => ({ value, label }));
     }, [availableDates]);
 
-    // Fetch available dates from API
+    /* Fetch available dates */
     useEffect(() => {
         fetch('/api/exited/dates')
             .then(res => res.ok ? res.json() : [])
-            .then(data => {
-                if (Array.isArray(data) && data.length > 0) {
-                    setAvailableDates(data);
-                }
-            })
+            .then(data => { if (Array.isArray(data) && data.length > 0) setAvailableDates(data); })
             .catch(() => {});
     }, []);
 
-    // Fetch executed positions when tab is executed or date filters change
+    /* Fetch executed positions */
     const fetchExecutedPositions = async () => {
         setExecutedLoading(true);
         try {
             const params = new URLSearchParams();
             if (fromDate) params.append('from_date', fromDate);
-            if (toDate) params.append('to_date', toDate);
+            if (toDate)   params.append('to_date', toDate);
             if (executedBroker !== 'ALL') params.append('broker', executedBroker);
-            if (executedUser !== 'ALL') params.append('client_id', executedUser);
+            if (executedUser   !== 'ALL') params.append('client_id', executedUser);
 
             const res = await fetchWithTimeout(`/api/exited?${params.toString()}`, { timeout: 30000 });
             if (res.ok) {
@@ -614,55 +600,54 @@ timeout: 30000,
             }
         } catch (err) {
             console.error("Failed to fetch executed positions:", err);
-            if(err.name === "AbortError") { addToast("Fetch executed positions timed out", "error"); } else { addToast("Failed to fetch executed positions", "error"); }
+            if (err.name === "AbortError") {
+                addToast("Fetch executed positions timed out", "error");
+            } else {
+                addToast("Failed to fetch executed positions", "error");
+            }
         } finally {
             setExecutedLoading(false);
         }
     };
 
+    /* Export to CSV */
     const exportToCSV = async () => {
         if (!filteredExecutedPositions || filteredExecutedPositions.length === 0) {
             addToast("No data to export", "warning");
             return;
         }
         setIsExporting(true);
-        // Small delay to allow UI to render spinner
         await new Promise(resolve => setTimeout(resolve, 100));
-
         try {
             const headers = ["USERID", "BROKER", "INSTRUMENT", "EXCHANGE", "PRODUCT", "BUY/SELL", "QUANTITY", "ENTRY PRICE", "EXIT PRICE", "PNL", "EXITED AT"];
             const csvRows = [headers.join(",")];
-            
             filteredExecutedPositions.forEach(pos => {
-                const side = (pos.transaction || (pos.quantity > 0 ? 'BUY' : 'SELL')).toUpperCase();
+                const side       = (pos.transaction_type || pos.transaction || (pos.quantity > 0 ? 'BUY' : 'SELL')).toUpperCase();
                 const exitDateStr = pos.exited_at ? new Date(pos.exited_at).toLocaleString('en-GB') : 'N/A';
-                
                 const row = [
                     pos.client_id || pos.user_id || "",
-                    pos.broker || "",
-                    pos.symbol || "",
-                    pos.exchange || "",
+                    pos.broker    || "",
+                    pos.symbol    || "",
+                    pos.exchange  || "",
                     pos.product_type || "",
                     side,
-                    pos.quantity || 0,
-                    (pos.avg_price || 0).toFixed(2),
+                    pos.quantity  || 0,
+                    (pos.avg_price  || 0).toFixed(2),
                     (pos.exit_price || 0).toFixed(2),
-                    (pos.pnl || 0).toFixed(2),
+                    (pos.pnl        || 0).toFixed(2),
                     `"${exitDateStr}"`
                 ];
                 csvRows.push(row.join(","));
             });
-
-            const csvString = csvRows.join("");
+            const csvString = csvRows.join("\n");
             const blob = new Blob([csvString], { type: "text/csv;charset=utf-8;" });
-            const url = URL.createObjectURL(blob);
+            const url  = URL.createObjectURL(blob);
             const link = document.createElement("a");
             link.setAttribute("href", url);
             link.setAttribute("download", `drmt_executed_orders_${new Date().toISOString().split('T')[0]}.csv`);
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-            
             addToast(`Exported ${filteredExecutedPositions.length} positions to CSV`, "success");
         } finally {
             setIsExporting(false);
@@ -670,48 +655,41 @@ timeout: 30000,
     };
 
     useEffect(() => {
-        if (activeTab === 'executed') {
-            fetchExecutedPositions();
-        }
+        if (activeTab === 'executed') fetchExecutedPositions();
     }, [activeTab, fromDate, toDate, executedBroker, executedUser]);
 
-    // Filter executed positions by search query and trade type
+    /* Filter executed positions */
     const filteredExecutedPositions = useMemo(() => {
         return executedPositions.filter(pos => {
             if (executedTradeType !== 'ALL') {
-                const side = (pos.transaction || (pos.quantity > 0 ? 'BUY' : 'SELL')).toUpperCase();
+                const side = (pos.transaction_type || pos.transaction || (pos.quantity > 0 ? 'BUY' : 'SELL')).toUpperCase();
                 if (side !== executedTradeType) return false;
             }
             if (debouncedExecutedSearchQuery.trim() !== '') {
                 const q = debouncedExecutedSearchQuery.toLowerCase().trim();
-                const matchSymbol = (pos.symbol || '').toLowerCase().includes(q);
-                const matchClient = (pos.client_id || '').toLowerCase().includes(q);
-                const matchBroker = (pos.broker || '').toLowerCase().includes(q);
-                const matchExchange = (pos.exchange || '').toLowerCase().includes(q);
-                const matchToken = (pos.token || '').toLowerCase().includes(q);
-                if (!matchSymbol && !matchClient && !matchBroker && !matchExchange && !matchToken) {
-                    return false;
-                }
+                const matchSymbol   = (pos.symbol    || '').toLowerCase().includes(q);
+                const matchClient   = (pos.client_id || '').toLowerCase().includes(q);
+                const matchBroker   = (pos.broker    || '').toLowerCase().includes(q);
+                const matchExchange = (pos.exchange  || '').toLowerCase().includes(q);
+                const matchToken    = (pos.token     || '').toLowerCase().includes(q);
+                if (!matchSymbol && !matchClient && !matchBroker && !matchExchange && !matchToken) return false;
             }
             return true;
         });
     }, [executedPositions, executedTradeType, debouncedExecutedSearchQuery]);
 
-    // Reset pagination on filter change
-    useEffect(() => {
-        setExecutedPage(1);
-    }, [executedSearchQuery, executedTradeType, fromDate, toDate, executedBroker, executedUser]);
+    useEffect(() => { setExecutedPage(1); }, [executedSearchQuery, executedTradeType, fromDate, toDate, executedBroker, executedUser]);
 
-    const totalExecutedPages = Math.max(1, Math.ceil(filteredExecutedPositions.length / pageSize));
+    const totalExecutedPages         = Math.max(1, Math.ceil(filteredExecutedPositions.length / pageSize));
     const paginatedExecutedPositions = useMemo(() => {
         const start = (executedPage - 1) * pageSize;
         return filteredExecutedPositions.slice(start, start + pageSize);
     }, [filteredExecutedPositions, executedPage, pageSize]);
 
-    // Extract dropdown lists for executed positions
+    /* Executed dropdown lists */
     const executedBrokersList = useMemo(() => {
         const set = new Set();
-        executedPositions.forEach(p => { if (p.broker) set.add(p.broker); });
+        executedPositions.forEach(p => { if (p.broker)    set.add(p.broker); });
         brokersList.forEach(b => set.add(b));
         return Array.from(set).sort();
     }, [executedPositions, brokersList]);
@@ -725,520 +703,453 @@ timeout: 30000,
 
     const adminInitial = (user?.username || 'A').charAt(0).toUpperCase();
 
+    /* ══════════════════════════════════════
+       RENDER
+       ══════════════════════════════════════ */
     return (
         <div className="app-layout">
-            {/* Toast Alerts */}
+
+            {/* ── Toast Notifications ── */}
             <div className="toast-container">
                 {toasts.map(t => (
-                    <div key={t.id} className={`toast toast-${t.type}`}>
-                        {t.message}
-                    </div>
+                    <div key={t.id} className={`toast toast-${t.type}`}>{t.message}</div>
                 ))}
             </div>
 
-            {/* Confirmation Modal */}
+            {/* ── Confirmation Modal ── */}
             {modalConfig && (
                 <div className="modal-overlay">
-                    <div className="modal-content">
+                    <div className="modal-content" data-aos="zoom-in" data-aos-duration="200">
                         <h3>{modalConfig.title}</h3>
                         <p className="modal-message">{modalConfig.message}</p>
                         <div className="modal-actions">
-                            <button onClick={modalConfig.onCancel} className="btn-cancel">Cancel</button>
+                            <button onClick={modalConfig.onCancel}  className="btn-cancel">Cancel</button>
                             <button onClick={modalConfig.onConfirm} className="btn-confirm-exit">Confirm Exit</button>
                         </div>
                     </div>
                 </div>
             )}
 
-            {/* Top Navigation Header */}
+            {/* ══════════════════════════════════
+                TOP NAVIGATION BAR
+                ══════════════════════════════════ */}
             <header className="top-nav">
-                <div className="nav-left">
-                    <span className="brand-dot" style={{ backgroundColor: wsConnected ? "#10B981" : "#EF4444", boxShadow: `0 0 8px ${wsConnected ? "#10B981" : "#EF4444"}` }} title={wsConnected ? "Connected to Backend" : "Disconnected from Backend"}></span>
-                    <h1 className="brand-title">Disaster Recovery Management Tool</h1>
+                                <div className="nav-left">
+                    <h1 className="brand-title">DRMT<br/>Dashboard</h1>
+                    
+                    <div className="nav-last-sync">
+                        <span className="sync-label">Last Sync:</span><br/>
+                        <span className="sync-time">{lastSync || 'Waiting...'}</span>
+                    </div>
+
+                    <div className={`nav-connection-pill ${wsConnected ? 'connected' : 'disconnected'}`}>
+                        <span className="live-dot" />
+                        <span className="pill-text">{wsConnected ? 'Connected\n(Live)' : 'Disconnected\n(Lost)'}</span>
+                    </div>
                 </div>
-                
+
                 <div className="nav-right">
                     <ServerHealthMonitor />
 
-                    {/* Placeholder Bell Notification */}
-                    <button className="icon-btn bell-btn" title="Notifications">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
-                            <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
-                        </svg>
-                        <span className="bell-badge"></span>
+                    <button
+                        className="btn-outline"
+                        onClick={async () => {
+                            try {
+                                const res  = await fetchWithTimeout("/api/credentials/refresh", { method: "POST" });
+                                const data = await res.json();
+                                addToast(data.message || "Credentials Refreshed", "success");
+                            } catch (e) {
+                                addToast("Refresh failed", "error");
+                            }
+                        }}
+                    >Refresh</button>
+
+                    <button
+                        className="icon-btn"
+                        onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
+                        title="Toggle Light/Dark Mode"
+                    >
+                        {theme === 'dark' ? (
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <circle cx="12" cy="12" r="5" />
+                                <line x1="12" y1="1"  x2="12" y2="3" />
+                                <line x1="12" y1="21" x2="12" y2="23" />
+                                <line x1="4.22"  y1="4.22"  x2="5.64"  y2="5.64" />
+                                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+                                <line x1="1"  y1="12" x2="3"  y2="12" />
+                                <line x1="21" y1="12" x2="23" y2="12" />
+                                <line x1="4.22"  y1="19.78" x2="5.64"  y2="18.36" />
+                                <line x1="18.36" y1="5.64"  x2="19.78" y2="4.22" />
+                            </svg>
+                        ) : (
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                            </svg>
+                        )}
                     </button>
 
-                    {/* Admin Avatar */}
+                    <div style={{ position: 'relative', zIndex: 200, height: '36px' }}>
+                        <ActionLogWidget />
+                    </div>
+
                     <div className="user-profile" title={`Logged in as ${user.username}`}>
-                        <div className="avatar-circle">
-                            {adminInitial}
-                        </div>
-                        <button onClick={async () => {
-                            try {
-                                const res = await fetchWithTimeout("/api/credentials/refresh", { method: "POST" });
-                                const data = await res.json();
-                                alert(data.message || "Credentials Refreshed");
-                            } catch(e) {
-                                alert("Refresh failed");
-                            }
-                        }} className="logout-link-btn" style={{marginRight: "10px"}}>Refresh Credentials</button>
-                        <button onClick={async () => { setIsLoggingOut(true); await handleLogout(); setIsLoggingOut(false); }}
-disabled={isActionLocked} className="logout-link-btn" title="Sign Out">
+                        <div className="avatar-circle">{adminInitial}</div>
+                        <button
+                            className="logout-link-btn"
+                            disabled={isActionLocked}
+                            onClick={async () => { setIsLoggingOut(true); await handleLogout(); setIsLoggingOut(false); }}
+                            title="Sign Out"
+                        >
                             Sign Out
                         </button>
                     </div>
                 </div>
             </header>
 
-            {/* Main Content View */}
+            {/* ══════════════════════════════════
+                MAIN CONTENT
+                ══════════════════════════════════ */}
             <main className="main-content">
-                <ActionLogWidget />
-                {/* Page Title & Subtitle */}
-                <div className="page-header">
-                    <h2 className="page-title">Position Monitor</h2>
-                    <div className="last-sync-text" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        {isFetchingPositions && <div className="loading-spinner" style={{ width: '12px', height: '12px', borderWidth: '2px', borderTopColor: '#3B82F6' }}></div>}
-                        <span>Last Sync: {lastSync || 'Waiting...'}</span>
-                        <span style={{ fontSize: '9px', fontWeight: 'bold', letterSpacing: '0.5px', color: wsConnected ? '#10B981' : '#EF4444', background: 'rgba(0,0,0,0.2)', padding: '2px 6px', borderRadius: '4px', border: '1px solid #2B313F' }}>
-                            {pollingStatus}
-                        </span>
-                    </div>
-                </div>
 
-                {/* Tabs */}
-                <div className="tabs-bar">
-                    <button
-                        className={`tab-btn ${activeTab === 'running' ? 'active' : ''}`}
-                        onClick={() => !isActionLocked && setActiveTab('running')}
-disabled={isActionLocked}
-                    >
-                        Running
-                    </button>
-                    {/* <button
-                        className={`tab-btn ${activeTab === 'pending' ? 'active' : ''}`}
-                        onClick={() => setActiveTab('pending')}
-                    >
-                        Pending Exit
-                    </button> */}
-                    <button
-                        className={`tab-btn ${activeTab === 'executed' ? 'active' : ''}`}
-                        onClick={() => !isActionLocked && setActiveTab('executed')}
-disabled={isActionLocked}
-                    >
-                        Executed
-                    </button>
-                </div>
+                
 
+                {/* ══ RUNNING TAB ══ */}
                 {activeTab === 'running' ? (
-                    <div className="monitor-container">
-                        {/* Filters Bar */}
-                        <div className="filters-bar">
-                            <div className="search-input-wrapper">
-                                <svg className="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                    <circle cx="11" cy="11" r="8"></circle>
-                                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                                </svg>
-                                <input
-                                    type="text"
-                                    className="filter-input search-input"
-disabled={isActionLocked}
-                                    placeholder="Search instrument..."
-                                    value={searchQuery}
-                                    onChange={(e) => setSearchQuery(e.target.value)}
-                                />
-                            </div>
+                    <>
 
-                            <select
-                                className="filter-select"
-disabled={isActionLocked}
-                                value={selectedBroker}
-                                onChange={(e) => setSelectedBroker(e.target.value)}
-                            >
-                                <option value="ALL">All Brokers</option>
-                                {brokersList.map(b => (
-                                    <option key={b} value={b}>{b}</option>
-                                ))}
-                            </select>
 
-                            <select
-                                className="filter-select"
-disabled={isActionLocked}
-                                value={selectedUser}
-                                onChange={(e) => setSelectedUser(e.target.value)}
-                            >
-                                <option value="ALL">All Users</option>
-                                {usersList.map(u => (
-                                    <option key={u} value={u}>{u}</option>
-                                ))}
-                            </select>
-
-                            <select
-                                className="filter-select"
-disabled={isActionLocked}
-                                value={selectedTradeType}
-                                onChange={(e) => setSelectedTradeType(e.target.value)}
-                            >
-                                <option value="ALL">All Trade Types</option>
-                                <option value="BUY">BUY</option>
-                                <option value="SELL">SELL</option>
-                            </select>
-                        </div>
-
-                        {/* Action Buttons: Close / Close All + Cancel */}
-                        <div className="actions-bar">
-                            <button
-                                onClick={handleCloseAction}
-                                disabled={isActionLocked || (filteredPositions.length === 0 && selectedIds.size === 0)}
-                                className="btn-close-action"
-                            >
-                                {isExiting
-                                    ? 'Dispatching...'
-                                    : (selectedIds.size > 0 ? `Close (${selectedIds.size})` : 'Close All')
-                                }
-                            </button>
-
-                            <button
-                                onClick={handleCancelSelection}
-                                disabled={isActionLocked || selectedIds.size === 0}
-                                className={`btn-cancel-action ${selectedIds.size === 0 ? 'disabled' : ''}`}
-                            >
-                                Cancel
-                            </button>
-                        </div>
-
-                        {/* Meta Count & Pagination */}
-                        <div className="table-meta-bar">
-                            <div className="positions-count-text">
-                                Showing <strong>{paginatedPositions.length}</strong> of {filteredPositions.length} positions
-                            </div>
-
-                            <div className="pagination-controls">
+                        {/* Unified Control Bar */}
+                        <div className="control-bar" data-aos="fade-up" data-aos-delay="200">
+                            <div className="tabs-group">
                                 <button
-                                    className="page-nav-btn"
-                                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                                    disabled={currentPage <= 1}
-                                    title="Previous Page"
+                                    className={`tab-btn ${activeTab === 'running' ? 'active' : ''}`}
+                                    onClick={() => !isActionLocked && setActiveTab('running')}
+                                    disabled={isActionLocked}
                                 >
-                                    &lt;
+                                    Running
                                 </button>
-                                <span className="page-indicator">
-                                    Page {currentPage} / {totalPages}
-                                </span>
                                 <button
-                                    className="page-nav-btn"
-                                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                                    disabled={currentPage >= totalPages}
-                                    title="Next Page"
+                                    className={`tab-btn ${activeTab === 'executed' ? 'active' : ''}`}
+                                    onClick={() => !isActionLocked && setActiveTab('executed')}
+                                    disabled={isActionLocked}
                                 >
-                                    &gt;
+                                    Executed
+                                </button>
+                            </div>
+
+                            <div className="filters-group">
+                                <div className="search-wrapper">
+                                    <svg className="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <circle cx="11" cy="11" r="8" />
+                                        <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                                    </svg>
+                                    <input
+                                        type="text"
+                                        className="filter-input"
+                                        placeholder="Search instrument..."
+                                        value={searchQuery}
+                                        onChange={e => setSearchQuery(e.target.value)}
+                                        disabled={isActionLocked}
+                                    />
+                                </div>
+
+                                <select className="filter-select" value={selectedBroker} onChange={e => setSelectedBroker(e.target.value)} disabled={isActionLocked}>
+                                    <option value="ALL">All Brokers</option>
+                                    {brokersList.map(b => <option key={b} value={b}>{b}</option>)}
+                                </select>
+
+                                <select className="filter-select" value={selectedUser} onChange={e => setSelectedUser(e.target.value)} disabled={isActionLocked}>
+                                    <option value="ALL">All Users</option>
+                                    {usersList.map(u => <option key={u} value={u}>{u}</option>)}
+                                </select>
+
+                                <select className="filter-select" value={selectedTradeType} onChange={e => setSelectedTradeType(e.target.value)} disabled={isActionLocked}>
+                                    <option value="ALL">All Trade Types</option>
+                                    <option value="BUY">BUY</option>
+                                    <option value="SELL">SELL</option>
+                                </select>
+                            </div>
+
+                            <div className="actions-group">
+                                <button
+                                    className="btn-close-action"
+                                    onClick={handleCloseAction}
+                                    disabled={isActionLocked || (filteredPositions.length === 0 && selectedIds.size === 0)}
+                                >
+                                    {isExiting
+                                        ? 'Dispatching...'
+                                        : (selectedIds.size > 0 ? `Close Selected (${selectedIds.size})` : 'Close All')
+                                    }
+                                </button>
+                                <button
+                                    className="btn-cancel-action"
+                                    onClick={handleCancelSelection}
+                                    disabled={isActionLocked || selectedIds.size === 0}
+                                >
+                                    Clear Selection
                                 </button>
                             </div>
                         </div>
 
-                        {/* Compact Table */}
-                        
-                        <div className="table-responsive" style={{position: 'relative'}}>
+                        {/* Monitor Container */}
+                        <div className="monitor-container" data-aos="fade-up" data-aos-delay="250">
+                            <div className="table-meta-bar">
+                                <div className="positions-count-text">
+                                    Showing <strong>{paginatedPositions.length}</strong> of {filteredPositions.length} positions
+                                </div>
+                                <div className="pagination-controls">
+                                    <button className="page-nav-btn" onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage <= 1}>&lt;</button>
+                                    <span className="page-indicator">Page {currentPage} / {totalPages}</span>
+                                    <button className="page-nav-btn" onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage >= totalPages}>&gt;</button>
+                                </div>
+                            </div>
 
-
-                            <table className="compact-table">
-                                <thead>
-                                    <tr>
-                                        <th className="th-checkbox">
-                                            <input
-                                                type="checkbox"
-                                                checked={isAllPageSelected}
-                                                onChange={handleSelectAllPage}
-                                                aria-label="Select all on current page"
-                                            />
-                                        </th>
-                                        <th>USERID</th>
-                                        <th>BROKER</th>
-                                        <th>INSTRUMENT</th>
-                                        <th>EXCHANGE</th>
-                                        <th>PRODUCT</th>
-                                        <th>BUY/SELL</th>
-                                        <th className="text-right">QUANTITY</th>
-                                        <th className="text-right">ENTRY PRICE</th>
-                                        <th className="text-right">PNL</th>
-                                        <th className="text-right">LTP</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {paginatedPositions.length === 0 ? (
+                            <div className="table-responsive">
+                                <table className="compact-table">
+                                    <thead>
                                         <tr>
-                                            <td colSpan="11" className="empty-table-cell">
-                                                {positions.length === 0
-                                                    ? 'No running positions found across active broker accounts.'
-                                                    : 'No positions match the selected search and filter criteria.'
-                                                }
-                                            </td>
+                                            <th className="th-checkbox">
+                                                <input type="checkbox" checked={isAllPageSelected} onChange={handleSelectAllPage} />
+                                            </th>
+                                            <th>User &uarr;</th>
+                                            <th>Broker</th>
+                                            <th>Instrument</th>
+                                            <th>Exchange</th>
+                                            <th>Product</th>
+                                            <th>Side</th>
+                                            <th className="text-right">Qty</th>
+                                            <th className="text-right">Entry</th>
+                                            <th className="text-right">PnL &darr;</th>
+                                            <th className="text-right">LTP</th>
+                                            <th className="text-center">Action</th>
                                         </tr>
-                                    ) : (
-                                        paginatedPositions.map((pos) => {
-                                            const isSelected = selectedIds.has(pos.id);
-                                            const side = (pos.transaction || (pos.quantity > 0 ? 'BUY' : 'SELL')).toUpperCase();
-                                            const pnlVal = pos.pnl || 0;
-                                            const ltpVal = pos.ltp || pos.avg_price || 0;
+                                    </thead>
+                                    <tbody>
+                                        {paginatedPositions.length === 0 ? (
+                                            <tr>
+                                                <td colSpan="12" className="empty-table-cell">
+                                                    {positions.length === 0 ? 'No running positions found.' : 'No positions match filters.'}
+                                                </td>
+                                            </tr>
+                                        ) : (
+                                            paginatedPositions.map(pos => {
+                                                const isSelected = selectedIds.has(pos.id);
+                                                const side = (pos.transaction_type || pos.transaction || (pos.quantity > 0 ? 'BUY' : 'SELL')).toUpperCase();
+                                                const pnlVal = pos.pnl || 0;
+                                                const ltpVal = pos.ltp || pos.avg_price || 0;
 
-                                            return (
-                                                <tr
-                                                    key={pos.id}
-                                                    className={isSelected ? 'row-selected' : ''}
-                                                    onClick={(e) => {
-                                                        if (e.target.tagName !== 'INPUT') {
-                                                            handleSelectRow(pos.id);
-                                                        }
-                                                    }}
-                                                >
-                                                    <td className="td-checkbox" onClick={(e) => e.stopPropagation()}>
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={isSelected}
-                                                            onChange={() => handleSelectRow(pos.id)}
-                                                        />
-                                                    </td>
-                                                    <td className="cell-userid">{pos.client_id || pos.user_id}</td>
-                                                    <td className="cell-broker">{pos.broker}</td>
-                                                    <td className="cell-symbol">{pos.symbol}</td>
-                                                    <td className="cell-exchange">{pos.exchange}</td>
-                                                    <td className="cell-product">{pos.product_type}</td>
-                                                    <td className="cell-side">
-                                                        <span className={`side-badge ${side === 'BUY' ? 'side-buy' : 'side-sell'}`}>
-                                                            {side}
-                                                        </span>
-                                                    </td>
-                                                    <td className="text-right cell-quantity">{pos.quantity}</td>
-                                                    <td className="text-right cell-price">{(pos.avg_price || 0).toFixed(2)}</td>
-                                                    <td className={`text-right cell-pnl ${pnlVal >= 0 ? 'pnl-positive' : 'pnl-negative'}`}>
-                                                        {pnlVal >= 0 ? `+${pnlVal.toFixed(2)}` : pnlVal.toFixed(2)}
-                                                    </td>
-                                                    <td className="text-right cell-ltp">{ltpVal.toFixed(2)}</td>
-                                                </tr>
-                                            );
-                                        })
-                                    )}
-                                </tbody>
-                            </table>
+                                                return (
+                                                    <tr key={pos.id} className={isSelected ? 'row-selected' : ''} onClick={e => {
+                                                        if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') handleSelectRow(pos.id);
+                                                    }}>
+                                                        <td className="td-checkbox" onClick={e => e.stopPropagation()}>
+                                                            <input type="checkbox" checked={isSelected} onChange={() => handleSelectRow(pos.id)} />
+                                                        </td>
+                                                        <td>{pos.client_id || pos.user_id}</td>
+                                                        <td>{pos.broker}</td>
+                                                        <td className="font-semibold">{pos.symbol}</td>
+                                                        <td>{pos.exchange}</td>
+                                                        <td>{pos.product_type}</td>
+                                                        <td>
+                                                            <span className={`side-badge ${side === 'BUY' ? 'side-buy' : 'side-sell'}`}>{side}</span>
+                                                        </td>
+                                                        <td className="text-right tabular">{pos.quantity}</td>
+                                                        <td className="text-right tabular">{(pos.avg_price || 0).toFixed(2)}</td>
+                                                        <td className={`text-right tabular ${pnlVal >= 0 ? 'pnl-positive' : 'pnl-negative'}`}>
+                                                            {pnlVal >= 0 ? `+${pnlVal.toFixed(2)}` : pnlVal.toFixed(2)}
+                                                        </td>
+                                                        <td className="text-right tabular">{ltpVal.toFixed(2)}</td>
+                                                        <td className="text-center" onClick={e => e.stopPropagation()}>
+                                                            <button
+                                                                className="btn-action-close"
+                                                                disabled={isActionLocked}
+                                                                onClick={e => {
+                                                                    e.stopPropagation();
+                                                                    setModalConfig({
+                                                                        title: "Confirm Market Exit",
+                                                                        message: `Are you sure you want to Market Exit this position (${pos.symbol})?\n\nThis will instantly submit a Market order to close this position.`,
+                                                                        onConfirm: () => executeExit([pos]),
+                                                                        onCancel: () => setModalConfig(null)
+                                                                    });
+                                                                }}
+                                                            >
+                                                                Close
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
-                    </div>
+                    </>
                 ) : (
-                    /* activeTab === 'executed' */
-                    <div className="monitor-container">
-                        {/* Executed Positions Filters Bar with Two Date Range Dropdowns */}
-                        <div className="filters-bar">
-                            <div className="search-input-wrapper">
-                                <svg className="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                    <circle cx="11" cy="11" r="8"></circle>
-                                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                                </svg>
-                                <input
-                                    type="text"
-                                    className="filter-input search-input"
-disabled={isActionLocked}
-                                    placeholder="Search executed instrument..."
-                                    value={executedSearchQuery}
-                                    onChange={(e) => setExecutedSearchQuery(e.target.value)}
-                                />
-                            </div>
-
-                            {/* Dropdown 1: From Date */}
-                            <div className="date-filter-group">
-                                <label className="filter-label">From Date:</label>
-                                <select
-                                    className="filter-select date-select"
-                                    value={fromDate}
-                                    onChange={(e) => setFromDate(e.target.value)}
-                                >
-                                    {dateOptions.map(opt => (
-                                        <option key={'from_' + opt.value} value={opt.value}>
-                                            {opt.label}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-
-                            {/* Dropdown 2: To Date */}
-                            <div className="date-filter-group">
-                                <label className="filter-label">To Date:</label>
-                                <select
-                                    className="filter-select date-select"
-                                    value={toDate}
-                                    onChange={(e) => setToDate(e.target.value)}
-                                >
-                                    {dateOptions.map(opt => (
-                                        <option key={'to_' + opt.value} value={opt.value}>
-                                            {opt.label}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-
-                            <select
-                                className="filter-select"
-disabled={isActionLocked}
-                                value={executedBroker}
-                                onChange={(e) => setExecutedBroker(e.target.value)}
-                            >
-                                <option value="ALL">All Brokers</option>
-                                {executedBrokersList.map(b => (
-                                    <option key={b} value={b}>{b}</option>
-                                ))}
-                            </select>
-
-                            <select
-                                className="filter-select"
-disabled={isActionLocked}
-                                value={executedUser}
-                                onChange={(e) => setExecutedUser(e.target.value)}
-                            >
-                                <option value="ALL">All Users</option>
-                                {executedUsersList.map(u => (
-                                    <option key={u} value={u}>{u}</option>
-                                ))}
-                            </select>
-
-                            <select
-                                className="filter-select"
-disabled={isActionLocked}
-                                value={executedTradeType}
-                                onChange={(e) => setExecutedTradeType(e.target.value)}
-                            >
-                                <option value="ALL">All Trade Types</option>
-                                <option value="BUY">BUY</option>
-                                <option value="SELL">SELL</option>
-                            </select>
-
-                            <button
-                                onClick={fetchExecutedPositions}
-                                className="btn-refresh-executed"
-                                title="Refresh Executed Positions"
-                            >
-                                🔄 Refresh
-                            </button>
-                            <button
-                                onClick={exportToCSV}
-                                className="btn-refresh-executed"
-                                title="Export current filtered view to CSV"
-                                style={{ borderColor: '#10b981', color: '#10b981' }}
-                            >
-                                
-                            </button>
-                        </div>
-
-                        {/* Executed Positions Meta Count & Pagination */}
-                        <div className="table-meta-bar">
-                            <div className="positions-count-text">
-                                {executedLoading ? (
-                                    <span>Loading executed positions...</span>
-                                ) : (
-                                    <span>Showing <strong>{paginatedExecutedPositions.length}</strong> of {filteredExecutedPositions.length} executed positions</span>
-                                )}
-                            </div>
-
-                            <div className="pagination-controls">
+                    /* ══ EXECUTED TAB ══ */
+                    <>
+                        {/* Unified Control Bar for Executed */}
+                        <div className="control-bar" data-aos="fade-up" data-aos-delay="0">
+                            <div className="tabs-group">
                                 <button
-                                    className="page-nav-btn"
-                                    onClick={() => setExecutedPage(p => Math.max(1, p - 1))}
-                                    disabled={executedPage <= 1}
-                                    title="Previous Page"
+                                    className={`tab-btn ${activeTab === 'running' ? 'active' : ''}`}
+                                    onClick={() => !isActionLocked && setActiveTab('running')}
+                                    disabled={isActionLocked}
                                 >
-                                    &lt;
+                                    Running
                                 </button>
-                                <span className="page-indicator">
-                                    Page {executedPage} / {totalExecutedPages}
-                                </span>
                                 <button
-                                    className="page-nav-btn"
-                                    onClick={() => setExecutedPage(p => Math.min(totalExecutedPages, p + 1))}
-                                    disabled={executedPage >= totalExecutedPages}
-                                    title="Next Page"
+                                    className={`tab-btn ${activeTab === 'executed' ? 'active' : ''}`}
+                                    onClick={() => !isActionLocked && setActiveTab('executed')}
+                                    disabled={isActionLocked}
                                 >
-                                    &gt;
+                                    Executed
+                                </button>
+                            </div>
+
+                            <div className="filters-group">
+                                <div className="search-wrapper">
+                                    <svg className="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <circle cx="11" cy="11" r="8" />
+                                        <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                                    </svg>
+                                    <input
+                                        type="text"
+                                        className="filter-input"
+                                        placeholder="Search executed instrument..."
+                                        value={executedSearchQuery}
+                                        onChange={e => setExecutedSearchQuery(e.target.value)}
+                                        disabled={isActionLocked}
+                                    />
+                                </div>
+
+                                <div className="date-filter-group">
+                                    <label className="filter-label">From:</label>
+                                    <select className="filter-select" value={fromDate} onChange={e => setFromDate(e.target.value)}>
+                                        {dateOptions.map(opt => <option key={'from_' + opt.value} value={opt.value}>{opt.label}</option>)}
+                                    </select>
+                                </div>
+
+                                <div className="date-filter-group">
+                                    <label className="filter-label">To:</label>
+                                    <select className="filter-select" value={toDate} onChange={e => setToDate(e.target.value)}>
+                                        {dateOptions.map(opt => <option key={'to_' + opt.value} value={opt.value}>{opt.label}</option>)}
+                                    </select>
+                                </div>
+
+                                <select className="filter-select" value={executedBroker} onChange={e => setExecutedBroker(e.target.value)} disabled={isActionLocked}>
+                                    <option value="ALL">All Brokers</option>
+                                    {executedBrokersList.map(b => <option key={b} value={b}>{b}</option>)}
+                                </select>
+
+                                <select className="filter-select" value={executedUser} onChange={e => setExecutedUser(e.target.value)} disabled={isActionLocked}>
+                                    <option value="ALL">All Users</option>
+                                    {executedUsersList.map(u => <option key={u} value={u}>{u}</option>)}
+                                </select>
+
+                                <select className="filter-select" value={executedTradeType} onChange={e => setExecutedTradeType(e.target.value)} disabled={isActionLocked}>
+                                    <option value="ALL">All Trade Types</option>
+                                    <option value="BUY">BUY</option>
+                                    <option value="SELL">SELL</option>
+                                </select>
+                            </div>
+
+                            <div className="actions-group">
+                                <button className="btn-outline" onClick={fetchExecutedPositions} title="Refresh Executed Positions">
+                                    🔄 Refresh
+                                </button>
+                                <button className="btn-outline" onClick={exportToCSV} title="Export CSV" style={{ borderColor: 'var(--success)', color: 'var(--success)' }}>
+                                    ⬇ Export CSV
                                 </button>
                             </div>
                         </div>
 
-                        {/* Executed Positions Table */}
-                        
-                        <div className="table-responsive" style={{position: 'relative'}}>
-
-
-                            <table className="compact-table">
-                                <thead>
-                                    <tr>
-                                        <th>USERID</th>
-                                        <th>BROKER</th>
-                                        <th>INSTRUMENT</th>
-                                        <th>EXCHANGE</th>
-                                        <th>PRODUCT</th>
-                                        <th>BUY/SELL</th>
-                                        <th className="text-right">QUANTITY</th>
-                                        <th className="text-right">ENTRY PRICE</th>
-                                        <th className="text-right">EXIT PRICE</th>
-                                        <th className="text-right">PNL</th>
-                                        <th>EXITED AT</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
+                        {/* Monitor Container Executed */}
+                        <div className="monitor-container" data-aos="fade-up" data-aos-delay="100">
+                            <div className="table-meta-bar">
+                                <div className="positions-count-text">
                                     {executedLoading ? (
-                                        <tr>
-                                            <td colSpan="11" className="empty-table-cell">
-                                                Loading executed positions from database...
-                                            </td>
-                                        </tr>
-                                    ) : paginatedExecutedPositions.length === 0 ? (
-                                        <tr>
-                                            <td colSpan="11" className="empty-table-cell">
-                                                No successful exits found for the selected date range ({fromDate} to {toDate}).
-                                            </td>
-                                        </tr>
+                                        <span>Loading executed positions...</span>
                                     ) : (
-                                        paginatedExecutedPositions.map((pos) => {
-                                            const side = (pos.transaction || (pos.quantity > 0 ? 'BUY' : 'SELL')).toUpperCase();
-                                            const pnlVal = pos.pnl || 0;
-                                            const exitDateStr = pos.exited_at ? new Date(pos.exited_at).toLocaleString('en-GB', {
-                                                day: '2-digit',
-                                                month: 'short',
-                                                year: 'numeric',
-                                                hour: '2-digit',
-                                                minute: '2-digit',
-                                                second: '2-digit',
-                                                hour12: true
-                                            }) : 'N/A';
-
-                                            return (
-                                                <tr key={'exec_' + pos.id}>
-                                                    <td className="cell-userid">{pos.client_id || pos.user_id}</td>
-                                                    <td className="cell-broker">{pos.broker}</td>
-                                                    <td className="cell-symbol">{pos.symbol}</td>
-                                                    <td className="cell-exchange">{pos.exchange}</td>
-                                                    <td className="cell-product">{pos.product_type}</td>
-                                                    <td className="cell-side">
-                                                        <span className={`side-badge ${side === 'BUY' ? 'side-buy' : 'side-sell'}`}>
-                                                            {side}
-                                                        </span>
-                                                    </td>
-                                                    <td className="text-right cell-quantity">{pos.quantity}</td>
-                                                    <td className="text-right cell-price">{(pos.avg_price || 0).toFixed(2)}</td>
-                                                    <td className="text-right cell-price">{(pos.exit_price || 0).toFixed(2)}</td>
-                                                    <td className={`text-right cell-pnl ${pnlVal >= 0 ? 'pnl-positive' : 'pnl-negative'}`}>
-                                                        {pnlVal >= 0 ? `+${pnlVal.toFixed(2)}` : pnlVal.toFixed(2)}
-                                                    </td>
-                                                    <td className="cell-timestamp">{exitDateStr}</td>
-                                                </tr>
-                                            );
-                                        })
+                                        <span>Showing <strong>{paginatedExecutedPositions.length}</strong> of {filteredExecutedPositions.length} executed positions</span>
                                     )}
-                                </tbody>
-                            </table>
+                                </div>
+                                <div className="pagination-controls">
+                                    <button className="page-nav-btn" onClick={() => setExecutedPage(p => Math.max(1, p - 1))} disabled={executedPage <= 1}>&lt;</button>
+                                    <span className="page-indicator">Page {executedPage} / {totalExecutedPages}</span>
+                                    <button className="page-nav-btn" onClick={() => setExecutedPage(p => Math.min(totalExecutedPages, p + 1))} disabled={executedPage >= totalExecutedPages}>&gt;</button>
+                                </div>
+                            </div>
+
+                            <div className="table-responsive">
+                                <table className="compact-table">
+                                    <thead>
+                                        <tr>
+                                            <th>User &uarr;</th>
+                                            <th>Broker</th>
+                                            <th>Instrument</th>
+                                            <th>Exchange</th>
+                                            <th>Product</th>
+                                            <th>Side</th>
+                                            <th className="text-right">Qty</th>
+                                            <th className="text-right">Entry</th>
+                                            <th className="text-right">Exit Price</th>
+                                            <th className="text-right">PnL &darr;</th>
+                                            <th>Exited At</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {executedLoading ? (
+                                            <tr>
+                                                <td colSpan="11" className="empty-table-cell">Loading executed positions from database...</td>
+                                            </tr>
+                                        ) : paginatedExecutedPositions.length === 0 ? (
+                                            <tr>
+                                                <td colSpan="11" className="empty-table-cell">No successful exits found for the selected date range.</td>
+                                            </tr>
+                                        ) : (
+                                            paginatedExecutedPositions.map(pos => {
+                                                const side = (pos.transaction_type || pos.transaction || (pos.quantity > 0 ? 'BUY' : 'SELL')).toUpperCase();
+                                                const pnlVal = pos.pnl || 0;
+                                                const exitDateStr = pos.exited_at ? new Date(pos.exited_at).toLocaleString('en-GB', {
+                                                    day: '2-digit', month: 'short', year: 'numeric',
+                                                    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+                                                }) : 'N/A';
+
+                                                return (
+                                                    <tr key={'exec_' + pos.id}>
+                                                        <td>{pos.client_id || pos.user_id}</td>
+                                                        <td>{pos.broker}</td>
+                                                        <td className="font-semibold">{pos.symbol}</td>
+                                                        <td>{pos.exchange}</td>
+                                                        <td>{pos.product_type}</td>
+                                                        <td>
+                                                            <span className={`side-badge ${side === 'BUY' ? 'side-buy' : 'side-sell'}`}>{side}</span>
+                                                        </td>
+                                                        <td className="text-right tabular">{pos.quantity}</td>
+                                                        <td className="text-right tabular">{(pos.avg_price || 0).toFixed(2)}</td>
+                                                        <td className="text-right tabular">{(pos.exit_price || 0).toFixed(2)}</td>
+                                                        <td className={`text-right tabular ${pnlVal >= 0 ? 'pnl-positive' : 'pnl-negative'}`}>
+                                                            {pnlVal >= 0 ? `+${pnlVal.toFixed(2)}` : pnlVal.toFixed(2)}
+                                                        </td>
+                                                        <td className="tabular">{exitDateStr}</td>
+                                                    </tr>
+                                                );
+                                            })
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
-                    </div>
+                    </>
                 )}
             </main>
         </div>
     );
 }
 
+/* ═══════════════════════════════════════════
+   BOOTSTRAP
+   ═══════════════════════════════════════════ */
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<App />);

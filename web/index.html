@@ -1,10 +1,20 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Disaster Recovery Management Tool</title>
-    <link rel="stylesheet" href="/style.css?v=6">
+    
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- AOS CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/aos@next/dist/aos.css" />
+
+    <link rel="stylesheet" href="/style.css?v=300">
+
     <!-- React & ReactDOM via CDN -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -13,6 +23,15 @@
 </head>
 <body>
     <div id="root"></div>
-    <script type="text/babel" src="/app.jsx?v=13"></script>
+
+    <!-- AOS JS -->
+    <script src="https://unpkg.com/aos@next/dist/aos.js"></script>
+    <script>
+      AOS.init({
+        duration: 800,
+        once: true,
+      });
+    </script>
+    <script type="text/babel" src="/app.jsx?v=300"></script>
 </body>
 </html>

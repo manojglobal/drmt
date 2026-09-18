@@ -4,6 +4,7 @@ import json
 from database.db import get_db
 from credentials.crypto import verify_password, generate_session_token
 from models.schemas import User
+from logger.logger import logger_auth
 
 routes = web.RouteTableDef()
 
@@ -40,6 +41,7 @@ async def login(request: web.Request):
             )
             await db.commit()
 
+        await logger_auth.info(f"[Auth] Admin login success for user '{username}'. Session created.")
         response = web.json_response({"success": True, "message": "ok"})
         response.set_cookie('drmt_session', token, httponly=True, samesite='Strict', path='/')
         return response
@@ -57,6 +59,7 @@ async def logout(request: web.Request):
             await db.execute("DELETE FROM sessions WHERE token = ?", (token,))
             await db.commit()
 
+    await logger_auth.info("[Auth] Logout: Session ended and cookies cleared.")
     response = web.json_response({"success": True})
     # MaxAge=-1 explicitly expires the cookie immediately
     response.set_cookie('drmt_session', '', max_age=-1, path='/')

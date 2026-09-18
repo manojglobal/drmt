@@ -49,13 +49,23 @@ class HealthMonitor:
             self.last_check = datetime.now()
 
     def get_server_status(self) -> Dict[str, Any]:
-        """ServerStatus requires exactly 5 fields."""
+        """Returns the specific server statuses for the frontend UI."""
+        status = "UP" if self.is_healthy else "DOWN"
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if self.is_healthy else ""
+        
         return {
-            "status": "UP" if self.is_healthy else "DOWN",
-            "db_connected": self.is_healthy,
-            "workers_active": len(core_engine._workers),
-            "redis_connected": core_engine.redis_pool is not None,
-            "last_check_ist": self.last_check.isoformat() if self.last_check else None
+            "demo_server": {
+                "status": status,
+                "query_time": now_str,
+                "last_successful_time": now_str,
+                "message": ""
+            },
+            "test_server": {
+                "status": status,
+                "query_time": now_str,
+                "last_successful_time": now_str,
+                "message": ""
+            }
         }
 
 health_monitor = HealthMonitor()

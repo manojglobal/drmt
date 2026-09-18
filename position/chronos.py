@@ -90,7 +90,9 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                     ws.send_bytes(json.dumps({"type": "positions", "data": new_data}).encode("utf-8")),
                     timeout=3.0
                 )
+                await logger_system.info(f"[WebSocket Update] Frontend event triggered for {len(new_data)} active positions")
                 await engine.redis_pool.set(redis_key, json.dumps(new_data))
+                await logger_system.info(f"[Redis Update] Updated {len(new_data)} positions in cache for user {user_id}")
                 last_snapshot = new_data
                 
         except asyncio.TimeoutError:

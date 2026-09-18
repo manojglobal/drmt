@@ -24,7 +24,13 @@ class PositionManager:
             exchange = raw.get("exchange") or raw.get("exc") or raw.get("Exchange") or ""
             product = raw.get("product_type") or raw.get("prd") or raw.get("Pcode") or ""
             order_type = raw.get("order_type") or ""
-            tran_type = "BUY" if qty > 0 else "SELL" # Fallback rule
+            
+            # Use provided transaction_type if available, otherwise infer from quantity
+            broker_side = raw.get("transaction_type") or raw.get("transaction") or raw.get("side") or ""
+            if broker_side:
+                tran_type = str(broker_side).upper()
+            else:
+                tran_type = "BUY" if qty > 0 else "SELL" # Fallback rule
             
             avg_price = float(raw.get("avg_price") or raw.get("netavgprc") or raw.get("Price") or 0.0)
             ltp = float(raw.get("ltp") or raw.get("LTP") or 0.0)

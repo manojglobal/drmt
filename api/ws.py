@@ -28,13 +28,16 @@ async def websocket_handler(request: web.Request):
     # We need to fetch the user's active credentials to pass to the polling loop.
     async with get_db() as db:
         db.row_factory = None
-        async with db.execute("SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE status = 'working' AND user_id = ?", (user.id,)) as cursor:
-            rows = await cursor.fetchall()
+        if user.username == 'admin':
+            async with db.execute("SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE status = 'working'") as cursor:
+                rows = await cursor.fetchall()
+        else:
+            async with db.execute("SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE status = 'working' AND user_id = ?", (user.id,)) as cursor:
+                rows = await cursor.fetchall()
             
     if not rows:
-        await ws.send_bytes(json.dumps({"type": "error", "message": "No active credentials found."}).encode("utf-8"))
-        await ws.close()
-        return ws
+        # Don't close the connection, just let them sit connected with an empty list
+        pass
         
     credentials = []
     for row in rows:

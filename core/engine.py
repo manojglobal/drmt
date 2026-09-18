@@ -71,6 +71,12 @@ class CoreEngine:
             future.set_exception(RuntimeError("Core Engine worker queue full"))
         return future
 
+
+    async def async_submit(self, coro):
+        # Adds a new task to the queue asynchronously, natively respecting backpressure (maxsize=500).
+        future = asyncio.Future()
+        await self._worker_queue.put((coro, future))
+        return future
     async def spawn_user(self, user_id: str, ws, credentials):
         # Unique User Management: Cancel existing task if any
         # Creates a new background polling session for a user.
