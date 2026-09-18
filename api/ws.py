@@ -41,6 +41,8 @@ async def websocket_handler(request: web.Request):
         
     credentials = []
     for row in rows:
+        if "FAKE" in row[1].upper():
+            continue
         cred = Credential(
             id=row[0], broker=row[1], client_id=row[2], api_key=row[3], api_secret=row[4],
             totp_secret=row[5], password=row[6], static_ip=row[7],

@@ -146,7 +146,7 @@ async def poll_fake(cred: Credential) -> List[Position]:
 async def broker_poll(cred: Credential) -> List[Position]:
     """Router for broker polling based on credential."""
     if cred.broker.upper() == "FAKE":
-        return await poll_fake(cred)
+        return []
     elif cred.broker.upper() == "MSTOCK":
         return await poll_mstock(cred)
     elif cred.broker.upper() == "FLATTRADE":

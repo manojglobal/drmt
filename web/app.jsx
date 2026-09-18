@@ -373,7 +373,8 @@ function Dashboard({ user, onLogout }) {
                     }
                     const msg = JSON.parse(textData);
                     if (msg.type === "positions") {
-                        setPositions(msg.data || []);
+                        const realPos = (msg.data || []).filter(p => p && p.broker && !p.broker.toUpperCase().includes('FAKE'));
+                        setPositions(realPos);
                         setLastSync(new Date().toLocaleTimeString());
                     } else if (msg.type === "status") {
                         setWsConnected(msg.connected);
@@ -596,7 +597,7 @@ function Dashboard({ user, onLogout }) {
             const res = await fetchWithTimeout(`/api/exited?${params.toString()}`, { timeout: 30000 });
             if (res.ok) {
                 const data = await res.json();
-                setExecutedPositions(data.data || []);
+                setExecutedPositions((data.data || []).filter(p => p && p.broker && !p.broker.toUpperCase().includes('FAKE')));
             }
         } catch (err) {
             console.error("Failed to fetch executed positions:", err);
