@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     DB_PATH: str = "data/drmt.db"
-    DRMT_PROXY_URL: str = "http://localhost:8080"
+    DRMT_PROXY_URL: str = "https://demoapi.quantivo.in/proxy"
     WORKER_POOL_SIZE: int = 50
     API_CONCURRENCY: int = 10
     DB_POOL_SIZE: int = 5

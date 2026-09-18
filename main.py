@@ -104,4 +104,5 @@ def create_app() -> web.Application:
 
 if __name__ == "__main__":
     app = create_app()
-    web.run_app(app, host="0.0.0.0", port=8000)
+    # Disable aiohttp access logs to prevent terminal spam from constant UI polling
+    web.run_app(app, host="0.0.0.0", port=8000, access_log=None)
