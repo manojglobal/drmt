@@ -6,20 +6,31 @@ from credentials.httpclient import proxy_request
 from core.engine import core_engine
 from position.manager import PositionManager
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("DRMT.SCM")
 
 async def poll_mstock(cred: Credential) -> List[Position]:
     """MStock Position Polling via DRMT Proxy."""
-    # Assuming the API endpoint for MStock positions is a GET request to their Open API
-    url = "https://api.mstock.com/positions"
-    headers = {"Authorization": f"Bearer {cred.token}"}
-    
-    # We acquire the global API semaphore via Core Engine internally if needed,
-    # but the Core Engine worker pool already limits concurrency.
+    url = "https://api.mstock.trade/openapi/typeb/portfolio/positions"
+    headers = {
+        "Authorization": f"Bearer {cred.token}",
+        "X-PrivateKey": cred.api_key,
+        "X-Mirae-Version": "1",
+        "User-Agent": "Mozilla/5.0"
+    }
     
     try:
         resp = await proxy_request("GET", url, str(cred.static_ip), headers=headers)
-        data = resp.get("data", [])
+        if isinstance(resp, dict):
+            if "data" in resp:
+                data = resp.get("data") or []
+            elif "json" in resp and isinstance(resp["json"], dict):
+                data = resp["json"].get("data") or []
+            else:
+                data = []
+        elif isinstance(resp, list):
+            data = resp
+        else:
+            data = []
         return PositionManager.normalize_positions(data, cred.broker, cred.client_id)
     except Exception as e:
         if "401" in str(e) or "403" in str(e):

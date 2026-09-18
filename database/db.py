@@ -6,7 +6,7 @@ import os
 
 from settings import settings
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("DRMT.DB")
 
 class DatabasePool:
     def __init__(self, db_path: str, max_connections: int = 5):
@@ -74,7 +74,7 @@ class DatabasePool:
             await conn.commit()
         
         self._initialized = True
-        logger.info("Database initialized successfully.")
+        logger.info("🗄️  Database initialized successfully.")
 
     @asynccontextmanager
     async def get_connection(self):

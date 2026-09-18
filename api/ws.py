@@ -55,16 +55,20 @@ async def websocket_handler(request: web.Request):
     
     try:
         async for msg in ws:
-            if msg.type == web.WSMsgType.BINARY:
+            if msg.type in (web.WSMsgType.BINARY, web.WSMsgType.TEXT):
                 try:
-                    data = json.loads(msg.data.decode("utf-8"))
+                    data_str = msg.data.decode("utf-8") if msg.type == web.WSMsgType.BINARY else msg.data
+                    data = json.loads(data_str)
                     if data.get("type") == "ping":
                         core_engine.last_ping[str(user.id)] = time.monotonic()
                 except Exception:
                     pass
             elif msg.type == web.WSMsgType.ERROR:
                 logger.error(f"WebSocket connection closed with exception {ws.exception()}")
-    except Exception:
+    except Exception as e:
+        logger.error(f"WebSocket Exception in async for loop: {e}")
         pass  # swallow disconnect errors - chronos loop handles cleanup
+        
+    logger.info(f"WebSocket loop ended for user {user.id}. closed={ws.closed}, close_code={ws.close_code}")
         
     return ws

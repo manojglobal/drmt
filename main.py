@@ -3,7 +3,11 @@ import logging
 import os
 from aiohttp import web
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.basicConfig(
+    level=logging.INFO, 
+    format="%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S"
+)
 
 from settings import settings
 from core.engine import core_engine
@@ -12,10 +16,9 @@ from api import auth_routes, api_routes, websocket_handler, rate_limit_middlewar
 from health.monitor import health_monitor
 from logger.logger import logger_system
 from credentials.crypto import hash_password
-from execution.mstock_cache import mstock_cache
 from utils.email import init_email_session, close_email_session
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("DRMT.System")
 
 async def seed_admin_user():
     """Seeds the default admin user if none exists."""
@@ -47,9 +50,6 @@ async def on_startup(app: web.Application):
     
     # 4. Seed Admin User
     await seed_admin_user()
-    
-    # 5. Load MStock Instrument Cache
-    await mstock_cache.load_instruments()
     
     # 6. Start Health Monitor
     await health_monitor.start()
@@ -105,4 +105,4 @@ def create_app() -> web.Application:
 if __name__ == "__main__":
     app = create_app()
     # Disable aiohttp access logs to prevent terminal spam from constant UI polling
-    web.run_app(app, host="0.0.0.0", port=8000, access_log=None)
+    web.run_app(app, host="0.0.0.0", port=8000, access_log=None, print=logger.info)

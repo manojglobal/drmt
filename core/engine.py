@@ -7,18 +7,18 @@ import redis.asyncio as redis
 from settings import settings
 from core.rate_limiter import TokenBucketRateLimiter
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("DRMT.Engine")
 
 class CoreEngine:
     def __init__(self):
         # Initializes the class with default values and state.
-        self._worker_queue = asyncio.Queue(maxsize=500)
+        self._worker_queue = None
         self._user_tasks: Dict[str, asyncio.Task] = {}
         
-        self._api_sem = asyncio.Semaphore(settings.API_CONCURRENCY)
-        self._exit_sem = asyncio.Semaphore(20)
+        self._api_sem = None
+        self._exit_sem = None
         
-        self._global_rate_limiter = TokenBucketRateLimiter(settings.GLOBAL_RATE_LIMIT, settings.GLOBAL_RATE_LIMIT)
+        self._global_rate_limiter = None
         self._user_rate_limiters: Dict[str, TokenBucketRateLimiter] = {}
         self.last_ping: Dict[str, float] = {}
         
@@ -27,6 +27,12 @@ class CoreEngine:
         self.redis_pool = None
 
     async def start(self):
+        # Initialize asyncio primitives inside the running event loop
+        self._worker_queue = asyncio.Queue(maxsize=500)
+        self._api_sem = asyncio.Semaphore(settings.API_CONCURRENCY)
+        self._exit_sem = asyncio.Semaphore(20)
+        self._global_rate_limiter = TokenBucketRateLimiter(settings.GLOBAL_RATE_LIMIT, settings.GLOBAL_RATE_LIMIT)
+        
         # Start worker pool
         # Starts the main processes or background workers.
         for i in range(settings.WORKER_POOL_SIZE):
@@ -40,7 +46,7 @@ class CoreEngine:
         # Redis Pool
         self.redis_pool = redis.from_url(settings.REDIS_URL, decode_responses=True)
         
-        logger.info("Core Engine started.")
+        logger.info("⚙️  Core Engine started.")
 
     async def _worker_loop(self, worker_id: int):
         # Continuously processes tasks from the background queue.
@@ -81,7 +87,7 @@ class CoreEngine:
         # Unique User Management: Cancel existing task if any
         # Creates a new background polling session for a user.
         if user_id in self._user_tasks and not self._user_tasks[user_id].done():
-            logger.info(f"Cancelling existing task for user {user_id}")
+            logger.info(f"🔄 Cancelling existing task for user {user_id}")
             self._user_tasks[user_id].cancel()
             try:
                 await self._user_tasks[user_id]
@@ -93,7 +99,7 @@ class CoreEngine:
         
         task = asyncio.create_task(polling_loop(user_id, ws, credentials, self))
         self._user_tasks[user_id] = task
-        logger.info(f"Spawned new polling task for user {user_id} with {len(credentials)} brokers")
+        logger.info(f"🚀 Spawned polling task for user_id {user_id} ({len(credentials)} credentials loaded)")
 
     def remove_user(self, user_id: str):
         # Stops and removes an active polling session for a user.

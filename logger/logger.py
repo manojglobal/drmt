@@ -60,6 +60,8 @@ class ServiceLogger:
         self.name = name
         self._history: List[LogEntry] = []
         self._lock = asyncio.Lock()
+        tag = "DRMT.SCM" if name in ("system", "monitor", "chronos") else f"DRMT.{name.capitalize()}"
+        self._stdlib_logger = logging.getLogger(tag)
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -95,7 +97,7 @@ class ServiceLogger:
         # Internal helper that formats and writes log entries.
         module = module_override or self._caller_module()
         now_ist = datetime.now(tz=_IST)
-        timestamp = now_ist.strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = now_ist.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         entry = LogEntry(
             id=time.time_ns(),
             timestamp=timestamp,
@@ -115,11 +117,11 @@ class ServiceLogger:
             name=f"log_write_{self.name}",
         )
 
-        # Mirror to stdlib logging for systemd/docker log capture
+        # Mirror to stdlib logging for clean terminal output matching reference format
         lvl_map = {"INFO": logging.INFO, "WARN": logging.WARNING, "ERROR": logging.ERROR}
-        _stdlib.log(
+        self._stdlib_logger.log(
             lvl_map.get(level, logging.INFO),
-            "[%s] %s | %s | %s", self.name, level, module, msg,
+            msg,
         )
 
     async def _write_to_file(self, entry: LogEntry, now_ist: datetime) -> None:

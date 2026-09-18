@@ -20,9 +20,6 @@ async def execute_exit_order(pos: Position, cred: Credential) -> bool:
                 return await exit_aliceblue(pos, cred)
             elif cred.broker.upper() == "FLATTRADE":
                 return await exit_flattrade(pos, cred)
-            elif cred.broker.upper() == "FAKE":
-                from execution.fake_broker import exit_fake
-                return await exit_fake(pos, cred)
             else:
                 await logger_exit.warn(f"Unknown broker for exit: {cred.broker}")
                 return False
