@@ -255,6 +255,17 @@ const ActionLogWidget = () => {
 /* ═══════════════════════════════════════════
    MAIN DASHBOARD
    ═══════════════════════════════════════════ */
+const CLIENT_NAME_MAP = {
+    'P645M1': 'Manoj mStock Demo',
+    'P645M2': 'Jagdeesh Sawant',
+    'P645M6': 'Rinku Singh'
+};
+
+const getDisplayUsername = (pos) => {
+    if (!pos) return '';
+    return pos.username || CLIENT_NAME_MAP[pos.client_id] || pos.client_id || pos.user_id || '';
+};
+
 function Dashboard({ user, onLogout }) {
     // CODE FLIP FOR TESTING: Change to 'true' to force 5s polling regardless of market hours or tab visibility
     const TEST_MODE_FORCE_POLL = true;
@@ -419,7 +430,10 @@ function Dashboard({ user, onLogout }) {
 
     const usersList = useMemo(() => {
         const set = new Set();
-        positions.forEach(p => { if (p.client_id) set.add(p.client_id); });
+        positions.forEach(p => {
+            const u = getDisplayUsername(p);
+            if (u) set.add(u);
+        });
         return Array.from(set).sort();
     }, [positions]);
 
@@ -427,7 +441,8 @@ function Dashboard({ user, onLogout }) {
     const filteredPositions = useMemo(() => {
         return positions.filter(pos => {
             if (selectedBroker !== 'ALL' && pos.broker !== selectedBroker) return false;
-            if (selectedUser   !== 'ALL' && pos.client_id !== selectedUser)  return false;
+            const displayName = getDisplayUsername(pos);
+            if (selectedUser   !== 'ALL' && displayName !== selectedUser && pos.client_id !== selectedUser)  return false;
             if (selectedTradeType !== 'ALL') {
                 const side = (pos.transaction_type || pos.transaction || (pos.quantity > 0 ? 'BUY' : 'SELL')).toUpperCase();
                 if (side !== selectedTradeType) return false;
@@ -435,7 +450,7 @@ function Dashboard({ user, onLogout }) {
             if (debouncedSearchQuery.trim() !== '') {
                 const q = debouncedSearchQuery.toLowerCase().trim();
                 const matchSymbol   = (pos.symbol    || '').toLowerCase().includes(q);
-                const matchClient   = (pos.client_id || '').toLowerCase().includes(q);
+                const matchClient   = (displayName + ' ' + (pos.client_id || '')).toLowerCase().includes(q);
                 const matchBroker   = (pos.broker    || '').toLowerCase().includes(q);
                 const matchExchange = (pos.exchange  || '').toLowerCase().includes(q);
                 const matchToken    = (pos.token     || '').toLowerCase().includes(q);
@@ -626,7 +641,7 @@ function Dashboard({ user, onLogout }) {
                 const side       = (pos.transaction_type || pos.transaction || (pos.quantity > 0 ? 'BUY' : 'SELL')).toUpperCase();
                 const exitDateStr = pos.exited_at ? new Date(pos.exited_at).toLocaleString('en-GB') : 'N/A';
                 const row = [
-                    pos.client_id || pos.user_id || "",
+                    getDisplayUsername(pos),
                     pos.broker    || "",
                     pos.symbol    || "",
                     pos.exchange  || "",
@@ -669,7 +684,7 @@ function Dashboard({ user, onLogout }) {
             if (debouncedExecutedSearchQuery.trim() !== '') {
                 const q = debouncedExecutedSearchQuery.toLowerCase().trim();
                 const matchSymbol   = (pos.symbol    || '').toLowerCase().includes(q);
-                const matchClient   = (pos.client_id || '').toLowerCase().includes(q);
+                const matchClient   = (getDisplayUsername(pos) + ' ' + (pos.client_id || '')).toLowerCase().includes(q);
                 const matchBroker   = (pos.broker    || '').toLowerCase().includes(q);
                 const matchExchange = (pos.exchange  || '').toLowerCase().includes(q);
                 const matchToken    = (pos.token     || '').toLowerCase().includes(q);
@@ -697,7 +712,10 @@ function Dashboard({ user, onLogout }) {
 
     const executedUsersList = useMemo(() => {
         const set = new Set();
-        executedPositions.forEach(p => { if (p.client_id) set.add(p.client_id); });
+        executedPositions.forEach(p => {
+            const u = getDisplayUsername(p);
+            if (u) set.add(u);
+        });
         usersList.forEach(u => set.add(u));
         return Array.from(set).sort();
     }, [executedPositions, usersList]);
@@ -977,7 +995,7 @@ function Dashboard({ user, onLogout }) {
                                                         <td className="td-checkbox" onClick={e => e.stopPropagation()}>
                                                             <input type="checkbox" checked={isSelected} onChange={() => handleSelectRow(pos.id)} />
                                                         </td>
-                                                        <td>{pos.client_id || pos.user_id}</td>
+                                                        <td>{getDisplayUsername(pos)}</td>
                                                         <td>{pos.broker}</td>
                                                         <td className="font-semibold">{pos.symbol}</td>
                                                         <td>{pos.exchange}</td>
@@ -1153,7 +1171,7 @@ function Dashboard({ user, onLogout }) {
 
                                                 return (
                                                     <tr key={'exec_' + pos.id}>
-                                                        <td>{pos.client_id || pos.user_id}</td>
+                                                        <td>{getDisplayUsername(pos)}</td>
                                                         <td>{pos.broker}</td>
                                                         <td className="font-semibold">{pos.symbol}</td>
                                                         <td>{pos.exchange}</td>

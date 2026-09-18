@@ -39,6 +39,7 @@ class Position(BaseModel):
     id: str
     broker: str
     client_id: str
+    username: str = ""
     symbol: str
     token: str
     exchange: str

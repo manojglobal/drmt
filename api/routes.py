@@ -5,6 +5,7 @@ from database.db import get_db
 from models.schemas import Credential, Position
 from position.chronos import refresh_token_with_backoff
 from execution.engine import mass_exit
+from utils.user_mapping import get_client_username, get_client_ids_for_user
 
 logger = logging.getLogger(__name__)
 
@@ -104,8 +105,14 @@ async def get_exited_positions(request: web.Request):
         params.append(broker)
         
     if client_id != "ALL":
-        query += " AND client_id = ?"
-        params.append(client_id)
+        cids = get_client_ids_for_user(client_id)
+        if len(cids) == 1:
+            query += " AND client_id = ?"
+            params.append(cids[0])
+        else:
+            placeholders = ",".join("?" for _ in cids)
+            query += f" AND client_id IN ({placeholders})"
+            params.extend(cids)
         
     query += " ORDER BY exited_at DESC"
     
@@ -115,6 +122,8 @@ async def get_exited_positions(request: web.Request):
             columns = [desc[0] for desc in cursor.description]
             rows = await cursor.fetchall()
             result = [dict(zip(columns, row)) for row in rows]
+            for r in result:
+                r["username"] = get_client_username(r.get("client_id", ""))
             
     return web.json_response({"success": True, "data": result})
 

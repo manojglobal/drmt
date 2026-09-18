@@ -1,6 +1,7 @@
 import logging
 from typing import List, Dict, Any
 from models.schemas import Position
+from utils.user_mapping import get_client_username
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ class PositionManager:
                 id=pos_id,
                 broker=broker,
                 client_id=client_id,
+                username=get_client_username(client_id),
                 symbol=symbol,
                 token=token_val,
                 exchange=exchange,
