@@ -90,7 +90,7 @@ function Login({ onLogin }) {
         <div className="login-container">
             <div className="login-box">
                 <div className="login-header">
-                    <div className="brand-dot"></div>
+                    <div className="brand-dot" style={{ backgroundColor: "#EF4444", boxShadow: "0 0 8px #EF4444" }} title="Disconnected"></div>
                     <h2>Disaster Recovery Management Tool</h2>
                 </div>
                 <p className="login-subtitle">Sign in to access position monitor & emergency controls</p>
@@ -131,7 +131,7 @@ const ServerHealthMonitor = () => {
 
     React.useEffect(() => {
         const fetchHealth = () => {
-            fetchWithTimeout('/api/health/servers', { timeout: 30000,
+            fetchWithTimeout('/api/health', { timeout: 30000,
                 headers: { 'Authorization': `Bearer ${localStorage.getItem('drmt_token')}` }
             })
             .then(res => res.json())
@@ -249,7 +249,7 @@ const ActionLogWidget = () => {
 
 function Dashboard({ user, onLogout }) {
     // CODE FLIP FOR TESTING: Change to 'true' to force 5s polling regardless of market hours or tab visibility
-    const TEST_MODE_FORCE_POLL = false;
+    const TEST_MODE_FORCE_POLL = true;
 
     const [isVisible, setIsVisible] = useState(!document.hidden);
     const [pollingStatus, setPollingStatus] = useState('Active');
@@ -304,85 +304,96 @@ function Dashboard({ user, onLogout }) {
     };
 
     // Polling live positions every 5 seconds
-    const fetchPositions = async () => {
-        if (isActionLocked) return;
-        
-        setIsFetchingPositions(true);
-        try {
-            const res = await fetchWithTimeout('/api/positions', { timeout: 30000 });
-            if (res.ok) {
-                const data = await res.json();
-                setPositions(data || []);
-                setLastSync(new Date().toLocaleTimeString());
-            }
-        } catch (err) {
-            console.error("Error fetching positions", err);
-            if (err.name === 'AbortError') {
-                addToast("Position sync timed out. Retrying...", "warning");
-            }
-        } finally {
-            setIsFetchingPositions(false);
-        }
-    };
-
+    const [wsConnected, setWsConnected] = useState(false);
+    
     useEffect(() => {
-        // TEST MODE BYPASS
-        if (TEST_MODE_FORCE_POLL) {
-            setPollingStatus("Test Mode (5s)");
-            fetchPositions();
-            const timer = setInterval(fetchPositions, 5000);
-            return () => clearInterval(timer);
-        }
-
-        // Evaluate Market State (IST)
         let isClosed = false;
         let isPostMarket = false;
-        try {
-            const istTime = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
-            const day = istTime.getDay();
-            const mins = istTime.getHours() * 60 + istTime.getMinutes();
-            
-            // Closed on weekends or outside 08:50 AM to 11:55 PM
-            isClosed = (day === 0 || day === 6 || mins < 530 || mins > 1435);
-            
-            // Post-Market: After 4:00 PM (960 mins) to 11:55 PM (1435 mins)
-            isPostMarket = (mins >= 960 && mins <= 1435);
-        } catch (e) {
-            isClosed = false; // Fallback to open if timezone fails
+        
+        if (!TEST_MODE_FORCE_POLL) {
+            try {
+                const istTime = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Kolkata"}));
+                const day = istTime.getDay();
+                const mins = istTime.getHours() * 60 + istTime.getMinutes();
+                isClosed = (day === 0 || day === 6 || mins < 530 || mins > 1435);
+                isPostMarket = (mins >= 960 && mins <= 1435);
+            } catch (e) {
+                isClosed = false;
+            }
         }
 
-        if (isClosed) {
+        if (isClosed && !TEST_MODE_FORCE_POLL) {
             setPollingStatus("Paused (Market Closed)");
             return;
         }
 
-        if (!isVisible) {
-            setPollingStatus("Paused (Tab Hidden)");
-            return;
-        }
-
-        // Determine correct polling speed and UI status
-        let intervalTime = 5000;
-        if (activeTab === 'executed') {
-            intervalTime = 30000;
-            setPollingStatus("Throttled (Executed Tab)");
-        } else if (isPostMarket) {
-            intervalTime = 15000;
-            setPollingStatus("Throttled (Post-Market 15s)");
-        } else {
-            intervalTime = 5000;
-            setPollingStatus("Active (5s)");
-        }
-
-        // Fetch instantly when tab becomes active/visible
-        fetchPositions();
-
-        const timer = setInterval(() => {
-            fetchPositions();
-        }, intervalTime);
-
-        return () => clearInterval(timer);
-    }, [isVisible, activeTab, isActionLocked]); // Re-evaluate when these change
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProtocol}//${window.location.host}/ws/positions`;
+        
+        let socket = null;
+        let pingTimer = null;
+        
+        const connect = () => {
+            if (isActionLocked) return;
+            
+            setPollingStatus("Connecting...");
+            socket = new WebSocket(wsUrl);
+            socket.binaryType = "arraybuffer";
+            
+            socket.onopen = () => {
+                setWsConnected(true);
+                setPollingStatus("Connected (Live)");
+                pingTimer = setInterval(() => {
+                    if (socket && socket.readyState === WebSocket.OPEN) {
+                        socket.send(new TextEncoder().encode(JSON.stringify({type: "ping"})));
+                    }
+                }, 15000);
+            };
+            
+            socket.onmessage = (event) => {
+                try {
+                    const textDecoder = new TextDecoder("utf-8");
+                    const textData = textDecoder.decode(event.data);
+                    const msg = JSON.parse(textData);
+                    if (msg.type === "positions") {
+                        setPositions(msg.data || []);
+                        setLastSync(new Date().toLocaleTimeString());
+                    } else if (msg.type === "status") {
+                        setWsConnected(msg.connected);
+                    }
+                } catch(e) {
+                    console.error("WS parse error", e);
+                }
+            };
+            
+            socket.onclose = () => {
+                setWsConnected(false);
+                setPollingStatus("Disconnected");
+                clearInterval(pingTimer);
+                
+                // Exponential backoff logic
+                const attempt = reconnectAttempts.current;
+                const maxDelay = 30000;
+                let delay = Math.min(1000 * Math.pow(2, attempt), maxDelay);
+                
+                if (!isActionLocked) {
+                    setTimeout(connect, delay);
+                    reconnectAttempts.current += 1;
+                }
+            };
+            
+            socket.onerror = (err) => {
+                console.error("WS error", err);
+            };
+        };
+        
+        connect();
+        
+        return () => {
+            if (socket) socket.close();
+            if (pingTimer) clearInterval(pingTimer);
+        };
+    }, [isActionLocked, TEST_MODE_FORCE_POLL]);
 
 
     // Extract dynamic dropdown options
@@ -477,7 +488,7 @@ function Dashboard({ user, onLogout }) {
             setModalConfig({
                 title: "Confirm Market Exit",
                 message: `Are you sure you want to Market Exit ${count} selected position${count > 1 ? 's' : ''}?\n\nThis will instantly submit Market orders to the respective broker(s) to close these positions.`,
-                onConfirm: () => executeExit(Array.from(selectedIds)),
+                onConfirm: () => executeExit(positions.filter(p => selectedIds.has(p.id))),
                 onCancel: () => setModalConfig(null)
             });
         } else {
@@ -491,28 +502,28 @@ function Dashboard({ user, onLogout }) {
             setModalConfig({
                 title: "Confirm Close All Positions",
                 message: `⚠️ WARNING: Are you sure you want to Market Exit ALL ${count} currently displayed position${count > 1 ? 's' : ''}?\n\nThis will immediately place Market orders across all brokers to flatten these positions.`,
-                onConfirm: () => executeExit(allIds),
+                onConfirm: () => executeExit(filteredPositions),
                 onCancel: () => setModalConfig(null)
             });
         }
     };
 
-    const executeExit = async (idsToExit) => {
+    const executeExit = async (positionsToExit) => {
         setModalConfig(null);
         setIsExiting(true);
 
         try {
-            const res = await fetchWithTimeout('/api/positions/exit', {
+            const res = await fetchWithTimeout('/api/exit', {
 timeout: 30000,
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ position_ids: idsToExit })
+                body: JSON.stringify({ positions: positionsToExit })
             });
 
             if (res.ok) {
                 const data = await res.json();
                 setSelectedIds(new Set());
-                addToast(data.message || `Processed exit for ${idsToExit.length} position(s)`, "success");
+                addToast(data.message || `Processed exit for ${positionsToExit.length} position(s)`, "success");
 
                 if (data.results && data.results.length > 0) {
                     data.results.forEach(r => {
@@ -576,7 +587,7 @@ timeout: 30000,
 
     // Fetch available dates from API
     useEffect(() => {
-        fetch('/api/positions/exited/dates')
+        fetch('/api/exited/dates')
             .then(res => res.ok ? res.json() : [])
             .then(data => {
                 if (Array.isArray(data) && data.length > 0) {
@@ -596,10 +607,10 @@ timeout: 30000,
             if (executedBroker !== 'ALL') params.append('broker', executedBroker);
             if (executedUser !== 'ALL') params.append('client_id', executedUser);
 
-            const res = await fetchWithTimeout(`/api/positions/exited?${params.toString()}`, { timeout: 30000 });
+            const res = await fetchWithTimeout(`/api/exited?${params.toString()}`, { timeout: 30000 });
             if (res.ok) {
                 const data = await res.json();
-                setExecutedPositions(data || []);
+                setExecutedPositions(data.data || []);
             }
         } catch (err) {
             console.error("Failed to fetch executed positions:", err);
@@ -742,7 +753,7 @@ timeout: 30000,
             {/* Top Navigation Header */}
             <header className="top-nav">
                 <div className="nav-left">
-                    <span className="brand-dot"></span>
+                    <span className="brand-dot" style={{ backgroundColor: wsConnected ? "#10B981" : "#EF4444", boxShadow: `0 0 8px ${wsConnected ? "#10B981" : "#EF4444"}` }} title={wsConnected ? "Connected to Backend" : "Disconnected from Backend"}></span>
                     <h1 className="brand-title">Disaster Recovery Management Tool</h1>
                 </div>
                 
@@ -763,6 +774,15 @@ timeout: 30000,
                         <div className="avatar-circle">
                             {adminInitial}
                         </div>
+                        <button onClick={async () => {
+                            try {
+                                const res = await fetchWithTimeout("/api/credentials/refresh", { method: "POST" });
+                                const data = await res.json();
+                                alert(data.message || "Credentials Refreshed");
+                            } catch(e) {
+                                alert("Refresh failed");
+                            }
+                        }} className="logout-link-btn" style={{marginRight: "10px"}}>Refresh Credentials</button>
                         <button onClick={async () => { setIsLoggingOut(true); await handleLogout(); setIsLoggingOut(false); }}
 disabled={isActionLocked} className="logout-link-btn" title="Sign Out">
                             Sign Out
@@ -780,7 +800,7 @@ disabled={isActionLocked} className="logout-link-btn" title="Sign Out">
                     <div className="last-sync-text" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         {isFetchingPositions && <div className="loading-spinner" style={{ width: '12px', height: '12px', borderWidth: '2px', borderTopColor: '#3B82F6' }}></div>}
                         <span>Last Sync: {lastSync || 'Waiting...'}</span>
-                        <span style={{ fontSize: '9px', fontWeight: 'bold', letterSpacing: '0.5px', color: pollingStatus.startsWith('Active') ? '#10B981' : '#F59E0B', background: 'rgba(0,0,0,0.2)', padding: '2px 6px', borderRadius: '4px', border: '1px solid #2B313F' }}>
+                        <span style={{ fontSize: '9px', fontWeight: 'bold', letterSpacing: '0.5px', color: wsConnected ? '#10B981' : '#EF4444', background: 'rgba(0,0,0,0.2)', padding: '2px 6px', borderRadius: '4px', border: '1px solid #2B313F' }}>
                             {pollingStatus}
                         </span>
                     </div>

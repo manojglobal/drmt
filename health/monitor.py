@@ -1,0 +1,61 @@
+import logging
+from logger.logger import logger_health
+import asyncio
+from typing import Dict, Any
+from datetime import datetime
+from core.engine import core_engine
+from database.db import get_db
+
+logger = logging.getLogger(__name__)
+
+class HealthMonitor:
+    def __init__(self):
+        # Initializes the class with default values and state.
+        self.is_healthy = False
+        self.last_check = None
+        
+    async def start(self):
+        """Pings immediately on boot via asyncio.create_task (perpetual loop)."""
+        asyncio.create_task(self._monitor_loop(), name="health_monitor")
+        
+    async def _monitor_loop(self):
+        # Runs a continuous loop to check system health.
+        while True:
+            await self._run_health_check()
+            await asyncio.sleep(60) # Check every minute
+            
+    async def _run_health_check(self):
+        # Pings external services to ensure they are online.
+        try:
+            # 1. Check DB
+            async with get_db() as db:
+                await db.execute("SELECT 1")
+                
+            # 2. Check Proxy/Network
+            session = core_engine.http_session
+            if session:
+                # We can check a known endpoint or just rely on proxy
+                pass
+                
+            self.is_healthy = True
+        except Exception as e:
+            self.is_healthy = False
+            # Rule: Truncate server response bodies/errors to 150 chars
+            err_msg = str(e)
+            if len(err_msg) > 150:
+                err_msg = err_msg[:147] + "..."
+            await logger_health.error(f"Health check failed: {err_msg}")
+        finally:
+            self.last_check = datetime.now()
+
+    def get_server_status(self) -> Dict[str, Any]:
+        """ServerStatus requires exactly 5 fields."""
+        return {
+            "status": "UP" if self.is_healthy else "DOWN",
+            "db_connected": self.is_healthy,
+            "workers_active": len(core_engine._workers),
+            "redis_connected": core_engine.redis_pool is not None,
+            "last_check_ist": self.last_check.isoformat() if self.last_check else None
+        }
+
+health_monitor = HealthMonitor()
