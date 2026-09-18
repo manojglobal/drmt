@@ -207,7 +207,7 @@ const ActionLogWidget = () => {
 
     return (
         <div className="action-log-widget">
-            <button className="action-log-toggle" onClick={() => setIsOpen(!isOpen)} title="Terminal">
+            <button className="action-log-toggle" onClick={() => setIsOpen(!isOpen)} title="Terminal log ">
                 <span style={{ fontFamily: 'monospace', fontWeight: 'bold' }}>&gt;_</span>
                 <span>Terminal</span>
                 <span className="live-dot" style={{ marginLeft: '4px', background: 'var(--green)', boxShadow: '0 0 5px var(--green)' }} />
@@ -230,7 +230,7 @@ const ActionLogWidget = () => {
                     </div>
                     <div className="action-log-content">
                         {logs.length === 0 ? (
-                            <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '12px' }}>
+                            <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '11px' }}>
                                 No recent activity
                             </div>
                         ) : (
@@ -739,7 +739,16 @@ function Dashboard({ user, onLogout }) {
                     
                     <div className="nav-last-sync">
                         <span className="sync-label">Last Sync:</span><br/>
-                        <span className="sync-time">{lastSync || 'Waiting...'}</span>
+                        <span className="sync-time">
+                            {lastSync ? (
+                                <>
+                                    <span style={{ display: 'block' }}>{lastSync.split(' ')[0]}</span>
+                                    <span style={{ display: 'block' }}>{lastSync.split(' ')[1] || ''}</span>
+                                </>
+                            ) : (
+                                'Waiting...'
+                            )}
+                        </span>
                     </div>
 
                     <div className={`nav-connection-pill ${wsConnected ? 'connected' : 'disconnected'}`}>
@@ -753,6 +762,7 @@ function Dashboard({ user, onLogout }) {
 
                     <button
                         className="btn-outline"
+                        title="Refresh Credentials"
                         onClick={async () => {
                             try {
                                 const res  = await fetchWithTimeout("/api/credentials/refresh", { method: "POST" });
@@ -810,6 +820,36 @@ function Dashboard({ user, onLogout }) {
                 MAIN CONTENT
                 ══════════════════════════════════ */}
             <main className="main-content">
+                {/* PNL SUMMARY SECTION (Visible in both tabs) */}
+                {(() => {
+                    const totalPnl = positions.reduce((s, p) => s + (p.pnl || 0), 0);
+                    const inProfit = positions.filter(p => (p.pnl || 0) > 0).length;
+                    const inLoss   = positions.filter(p => (p.pnl || 0) < 0).length;
+                    const pnlCls   = totalPnl > 0 ? 'positive' : (totalPnl < 0 ? 'negative' : 'neutral');
+                    return (
+                        <div className="hero-section" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
+                            <div className="stat-card" style={{ backgroundColor: 'var(--bg-panel)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', padding: '6px 12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '2px' }}>
+                                <span className="stat-label" style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>TOTAL PNL</span>
+                                <span className={`stat-value tabular ${pnlCls}`} style={{ fontSize: '20px', fontWeight: 'bold' }}>
+                                    {totalPnl > 0 ? '+' : ''}{totalPnl.toFixed(2)}
+                                </span>
+                            </div>
+                            <div className="stat-card" style={{ backgroundColor: 'var(--bg-panel)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', padding: '6px 12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '2px' }}>
+                                <span className="stat-label" style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>OPEN POSITIONS</span>
+                                <span className="stat-value tabular neutral" style={{ fontSize: '20px', fontWeight: 'bold', color: 'var(--text-primary, #fff)' }}>{positions.length}</span>
+                            </div>
+                            <div className="stat-card" style={{ backgroundColor: 'var(--bg-panel)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', padding: '6px 12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '2px' }}>
+                                <span className="stat-label" style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>IN PROFIT</span>
+                                <span className="stat-value tabular positive" style={{ fontSize: '20px', fontWeight: 'bold', color: 'var(--success, var(--green, #22c55e))' }}>{inProfit}</span>
+                            </div>
+                            <div className="stat-card" style={{ backgroundColor: 'var(--bg-panel)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', padding: '6px 12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '2px' }}>
+                                <span className="stat-label" style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--text-secondary)' }}>IN LOSS</span>
+                                <span className="stat-value tabular negative" style={{ fontSize: '20px', fontWeight: 'bold', color: 'var(--danger, var(--red, #ef4444))' }}>{inLoss}</span>
+                            </div>
+                        </div>
+                    );
+                })()}
+
 
                 
 
@@ -1054,14 +1094,7 @@ function Dashboard({ user, onLogout }) {
                                 </select>
                             </div>
 
-                            <div className="actions-group">
-                                <button className="btn-outline" onClick={fetchExecutedPositions} title="Refresh Executed Positions">
-                                    🔄 Refresh
-                                </button>
-                                <button className="btn-outline" onClick={exportToCSV} title="Export CSV" style={{ borderColor: 'var(--success)', color: 'var(--success)' }}>
-                                    ⬇ Export CSV
-                                </button>
-                            </div>
+
                         </div>
 
                         {/* Monitor Container Executed */}
@@ -1074,10 +1107,20 @@ function Dashboard({ user, onLogout }) {
                                         <span>Showing <strong>{paginatedExecutedPositions.length}</strong> of {filteredExecutedPositions.length} executed positions</span>
                                     )}
                                 </div>
-                                <div className="pagination-controls">
-                                    <button className="page-nav-btn" onClick={() => setExecutedPage(p => Math.max(1, p - 1))} disabled={executedPage <= 1}>&lt;</button>
-                                    <span className="page-indicator">Page {executedPage} / {totalExecutedPages}</span>
-                                    <button className="page-nav-btn" onClick={() => setExecutedPage(p => Math.min(totalExecutedPages, p + 1))} disabled={executedPage >= totalExecutedPages}>&gt;</button>
+                                <div className="table-meta-right" style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+                                    <div className="actions-group" style={{ display: 'flex', gap: '8px' }}>
+                                        <button className="btn-outline" onClick={fetchExecutedPositions} title="Refresh Executed Positions">
+                                            🔄 Refresh
+                                        </button>
+                                        <button className="btn-outline" onClick={exportToCSV} title="Export CSV" style={{ borderColor: 'var(--success)', color: 'var(--success)' }}>
+                                            ⬇ Export CSV
+                                        </button>
+                                    </div>
+                                    <div className="pagination-controls">
+                                        <button className="page-nav-btn" onClick={() => setExecutedPage(p => Math.max(1, p - 1))} disabled={executedPage <= 1}>&lt;</button>
+                                        <span className="page-indicator">Page {executedPage} / {totalExecutedPages}</span>
+                                        <button className="page-nav-btn" onClick={() => setExecutedPage(p => Math.min(totalExecutedPages, p + 1))} disabled={executedPage >= totalExecutedPages}>&gt;</button>
+                                    </div>
                                 </div>
                             </div>
 
