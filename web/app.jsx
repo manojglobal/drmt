@@ -61,7 +61,7 @@ function App() {
 function Login({ onLogin }) {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
-    const [error, setError]       = useState('');
+    const [error, setError] = useState('');
     const [submitting, setSubmitting] = useState(false);
 
     const handleSubmit = async (e) => {
@@ -156,7 +156,7 @@ const ServerHealthMonitor = () => {
         <div className="health-monitor-group">
             {serverList.map(([name, data]) => {
                 const isUp = data.status === 'UP';
-                const pingTime    = data.query_time         ? data.query_time.split(' ')[1]         : '--:--:--';
+                const pingTime = data.query_time ? data.query_time.split(' ')[1] : '--:--:--';
                 const successTime = data.last_successful_time ? data.last_successful_time.split(' ')[1] : '--:--:--';
                 return (
                     <div key={name} className={`health-pill ${isUp ? 'status-up' : 'status-down'}`} title={data.message || 'Status OK'}>
@@ -187,7 +187,7 @@ const ActionLogWidget = () => {
             })
                 .then(res => res.json())
                 .then(data => { if (data) setLogs(data); })
-                .catch(() => {});
+                .catch(() => { });
         };
         fetchLogs();
         const interval = setInterval(fetchLogs, 3000);
@@ -224,9 +224,9 @@ const ActionLogWidget = () => {
                         </div>
                     </div>
                     <div className="action-log-tabs">
-                        <button className={`action-log-tab ${activeTab === 'orders' ? 'active' : ''}`}  onClick={() => setActiveTab('orders')}>Orders</button>
-                        <button className={`action-log-tab ${activeTab === 'auth'   ? 'active' : ''}`}  onClick={() => setActiveTab('auth')}>Auth</button>
-                        <button className={`action-log-tab ${activeTab === 'system' ? 'active' : ''}`}  onClick={() => setActiveTab('system')}>System</button>
+                        <button className={`action-log-tab ${activeTab === 'orders' ? 'active' : ''}`} onClick={() => setActiveTab('orders')}>Orders</button>
+                        <button className={`action-log-tab ${activeTab === 'auth' ? 'active' : ''}`} onClick={() => setActiveTab('auth')}>Auth</button>
+                        <button className={`action-log-tab ${activeTab === 'system' ? 'active' : ''}`} onClick={() => setActiveTab('system')}>System</button>
                     </div>
                     <div className="action-log-content">
                         {logs.length === 0 ? (
@@ -270,7 +270,7 @@ function Dashboard({ user, onLogout }) {
     // CODE FLIP FOR TESTING: Change to 'true' to force 5s polling regardless of market hours or tab visibility
     const TEST_MODE_FORCE_POLL = true;
 
-    const [isVisible, setIsVisible]       = useState(!document.hidden);
+    // const [isVisible, setIsVisible]       = useState(!document.hidden);
     const [pollingStatus, setPollingStatus] = useState('Active');
 
     useEffect(() => {
@@ -280,14 +280,14 @@ function Dashboard({ user, onLogout }) {
     }, []);
 
     /* ── Core State ── */
-    const [toasts, setToasts]           = useState([]);
-    const [positions, setPositions]     = useState([]);
-    const [lastSync, setLastSync]       = useState(null);
-    const [activeTab, setActiveTab]     = useState('running');
+    const [toasts, setToasts] = useState([]);
+    const [positions, setPositions] = useState([]);
+    const [lastSync, setLastSync] = useState(null);
+    const [activeTab, setActiveTab] = useState('running');
 
     const [isFetchingPositions, setIsFetchingPositions] = useState(false);
-    const [isExporting, setIsExporting]                 = useState(false);
-    const [isLoggingOut, setIsLoggingOut]               = useState(false);
+    const [isExporting, setIsExporting] = useState(false);
+    const [isLoggingOut, setIsLoggingOut] = useState(false);
 
     /* ── Theme ── */
     const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
@@ -297,10 +297,10 @@ function Dashboard({ user, onLogout }) {
     }, [theme]);
 
     /* ── Filters (Running) ── */
-    const [searchQuery, setSearchQuery]           = useState('');
-    const debouncedSearchQuery                    = useDebounce(searchQuery, 500);
-    const [selectedBroker, setSelectedBroker]     = useState('ALL');
-    const [selectedUser, setSelectedUser]         = useState('ALL');
+    const [searchQuery, setSearchQuery] = useState('');
+    const debouncedSearchQuery = useDebounce(searchQuery, 500);
+    const [selectedBroker, setSelectedBroker] = useState('ALL');
+    const [selectedUser, setSelectedUser] = useState('ALL');
     const [selectedTradeType, setSelectedTradeType] = useState('ALL');
 
     /* ── Selection & Pagination ── */
@@ -310,7 +310,7 @@ function Dashboard({ user, onLogout }) {
 
     /* ── Modal & Exit ── */
     const [modalConfig, setModalConfig] = useState(null);
-    const [isExiting, setIsExiting]     = useState(false);
+    const [isExiting, setIsExiting] = useState(false);
     const isActionLocked = isExiting || isExporting || isLoggingOut;
 
     /* ── Toast helper ── */
@@ -337,9 +337,9 @@ function Dashboard({ user, onLogout }) {
         if (!TEST_MODE_FORCE_POLL) {
             try {
                 const istTime = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-                const day  = istTime.getDay();
+                const day = istTime.getDay();
                 const mins = istTime.getHours() * 60 + istTime.getMinutes();
-                isClosed     = (day === 0 || day === 6 || mins < 530 || mins > 1435);
+                isClosed = (day === 0 || day === 6 || mins < 530 || mins > 1435);
                 isPostMarket = (mins >= 960 && mins <= 1435);
             } catch (e) {
                 isClosed = false;
@@ -354,7 +354,7 @@ function Dashboard({ user, onLogout }) {
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${wsProtocol}//${window.location.host}/ws/positions`;
 
-        let socket   = null;
+        let socket = null;
         let pingTimer = null;
 
         const connect = () => {
@@ -401,9 +401,9 @@ function Dashboard({ user, onLogout }) {
                 setWsConnected(false);
                 setPollingStatus("Disconnected / Connection Lost");
                 clearInterval(pingTimer);
-                const attempt  = reconnectAttempts.current;
+                const attempt = reconnectAttempts.current;
                 const maxDelay = 30000;
-                const delay    = Math.min(1000 * Math.pow(2, attempt), maxDelay);
+                const delay = Math.min(1000 * Math.pow(2, attempt), maxDelay);
                 if (!isActionLocked) {
                     setTimeout(connect, delay);
                     reconnectAttempts.current += 1;
@@ -416,7 +416,7 @@ function Dashboard({ user, onLogout }) {
         connect();
 
         return () => {
-            if (socket)    socket.close();
+            if (socket) socket.close();
             if (pingTimer) clearInterval(pingTimer);
         };
     }, [isActionLocked, TEST_MODE_FORCE_POLL]);
@@ -442,18 +442,18 @@ function Dashboard({ user, onLogout }) {
         return positions.filter(pos => {
             if (selectedBroker !== 'ALL' && pos.broker !== selectedBroker) return false;
             const displayName = getDisplayUsername(pos);
-            if (selectedUser   !== 'ALL' && displayName !== selectedUser && pos.client_id !== selectedUser)  return false;
+            if (selectedUser !== 'ALL' && displayName !== selectedUser && pos.client_id !== selectedUser) return false;
             if (selectedTradeType !== 'ALL') {
                 const side = (pos.transaction_type || pos.transaction || (pos.quantity > 0 ? 'BUY' : 'SELL')).toUpperCase();
                 if (side !== selectedTradeType) return false;
             }
             if (debouncedSearchQuery.trim() !== '') {
                 const q = debouncedSearchQuery.toLowerCase().trim();
-                const matchSymbol   = (pos.symbol    || '').toLowerCase().includes(q);
-                const matchClient   = (displayName + ' ' + (pos.client_id || '')).toLowerCase().includes(q);
-                const matchBroker   = (pos.broker    || '').toLowerCase().includes(q);
-                const matchExchange = (pos.exchange  || '').toLowerCase().includes(q);
-                const matchToken    = (pos.token     || '').toLowerCase().includes(q);
+                const matchSymbol = (pos.symbol || '').toLowerCase().includes(q);
+                const matchClient = (displayName + ' ' + (pos.client_id || '')).toLowerCase().includes(q);
+                const matchBroker = (pos.broker || '').toLowerCase().includes(q);
+                const matchExchange = (pos.exchange || '').toLowerCase().includes(q);
+                const matchToken = (pos.token || '').toLowerCase().includes(q);
                 if (!matchSymbol && !matchClient && !matchBroker && !matchExchange && !matchToken) return false;
             }
             return true;
@@ -464,8 +464,8 @@ function Dashboard({ user, onLogout }) {
     useEffect(() => { setCurrentPage(1); }, [searchQuery, selectedBroker, selectedUser, selectedTradeType]);
 
     /* Pagination */
-    const totalPages          = Math.max(1, Math.ceil(filteredPositions.length / pageSize));
-    const paginatedPositions  = useMemo(() => {
+    const totalPages = Math.max(1, Math.ceil(filteredPositions.length / pageSize));
+    const paginatedPositions = useMemo(() => {
         const start = (currentPage - 1) * pageSize;
         return filteredPositions.slice(start, start + pageSize);
     }, [filteredPositions, currentPage, pageSize]);
@@ -496,10 +496,10 @@ function Dashboard({ user, onLogout }) {
         if (selectedIds.size > 0) {
             const count = selectedIds.size;
             setModalConfig({
-                title:     "Confirm Market Exit",
-                message:   `Are you sure you want to Market Exit ${count} selected position${count > 1 ? 's' : ''}?\n\nThis will instantly submit Market orders to the respective broker(s) to close these positions.`,
+                title: "Confirm Market Exit",
+                message: `Are you sure you want to Market Exit ${count} selected position${count > 1 ? 's' : ''}?\n\nThis will instantly submit Market orders to the respective broker(s) to close these positions.`,
                 onConfirm: () => executeExit(positions.filter(p => selectedIds.has(p.id))),
-                onCancel:  () => setModalConfig(null)
+                onCancel: () => setModalConfig(null)
             });
         } else {
             if (filteredPositions.length === 0) {
@@ -508,10 +508,10 @@ function Dashboard({ user, onLogout }) {
             }
             const count = filteredPositions.length;
             setModalConfig({
-                title:     "Confirm Close All Positions",
-                message:   `⚠️ WARNING: Are you sure you want to Market Exit ALL ${count} currently displayed position${count > 1 ? 's' : ''}?\n\nThis will immediately place Market orders across all brokers to flatten these positions.`,
+                title: "Confirm Close All Positions",
+                message: `⚠️ WARNING: Are you sure you want to Market Exit ALL ${count} currently displayed position${count > 1 ? 's' : ''}?\n\nThis will immediately place Market orders across all brokers to flatten these positions.`,
                 onConfirm: () => executeExit(filteredPositions),
-                onCancel:  () => setModalConfig(null)
+                onCancel: () => setModalConfig(null)
             });
         }
     };
@@ -557,24 +557,24 @@ function Dashboard({ user, onLogout }) {
        EXECUTED TAB STATE
        ══════════════════════════════════════ */
     const [executedPositions, setExecutedPositions] = useState([]);
-    const [executedLoading, setExecutedLoading]     = useState(false);
-    const [availableDates, setAvailableDates]       = useState([]);
+    const [executedLoading, setExecutedLoading] = useState(false);
+    const [availableDates, setAvailableDates] = useState([]);
 
-    const todayISO       = useMemo(() => new Date().toISOString().split('T')[0], []);
+    const todayISO = useMemo(() => new Date().toISOString().split('T')[0], []);
     const defaultFromISO = useMemo(() => {
         const d = new Date();
         d.setDate(d.getDate() - 7);
         return d.toISOString().split('T')[0];
     }, []);
 
-    const [fromDate, setFromDate]                   = useState(defaultFromISO);
-    const [toDate, setToDate]                       = useState(todayISO);
+    const [fromDate, setFromDate] = useState(defaultFromISO);
+    const [toDate, setToDate] = useState(todayISO);
     const [executedSearchQuery, setExecutedSearchQuery] = useState('');
-    const debouncedExecutedSearchQuery              = useDebounce(executedSearchQuery, 500);
-    const [executedBroker, setExecutedBroker]       = useState('ALL');
-    const [executedUser, setExecutedUser]           = useState('ALL');
+    const debouncedExecutedSearchQuery = useDebounce(executedSearchQuery, 500);
+    const [executedBroker, setExecutedBroker] = useState('ALL');
+    const [executedUser, setExecutedUser] = useState('ALL');
     const [executedTradeType, setExecutedTradeType] = useState('ALL');
-    const [executedPage, setExecutedPage]           = useState(1);
+    const [executedPage, setExecutedPage] = useState(1);
 
     /* Date dropdown options */
     const dateOptions = useMemo(() => {
@@ -583,7 +583,7 @@ function Dashboard({ user, onLogout }) {
         for (let i = 0; i < 30; i++) {
             const d = new Date(today);
             d.setDate(today.getDate() - i);
-            const iso   = d.toISOString().split('T')[0];
+            const iso = d.toISOString().split('T')[0];
             const label = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
             map.set(iso, i === 0 ? `Today (${label})` : i === 1 ? `Yesterday (${label})` : label);
         }
@@ -596,7 +596,7 @@ function Dashboard({ user, onLogout }) {
         fetch('/api/exited/dates')
             .then(res => res.ok ? res.json() : [])
             .then(data => { if (Array.isArray(data) && data.length > 0) setAvailableDates(data); })
-            .catch(() => {});
+            .catch(() => { });
     }, []);
 
     /* Fetch executed positions */
@@ -605,9 +605,9 @@ function Dashboard({ user, onLogout }) {
         try {
             const params = new URLSearchParams();
             if (fromDate) params.append('from_date', fromDate);
-            if (toDate)   params.append('to_date', toDate);
+            if (toDate) params.append('to_date', toDate);
             if (executedBroker !== 'ALL') params.append('broker', executedBroker);
-            if (executedUser   !== 'ALL') params.append('client_id', executedUser);
+            if (executedUser !== 'ALL') params.append('client_id', executedUser);
 
             const res = await fetchWithTimeout(`/api/exited?${params.toString()}`, { timeout: 30000 });
             if (res.ok) {
@@ -638,26 +638,26 @@ function Dashboard({ user, onLogout }) {
             const headers = ["USERID", "BROKER", "INSTRUMENT", "EXCHANGE", "PRODUCT", "BUY/SELL", "QUANTITY", "ENTRY PRICE", "EXIT PRICE", "PNL", "EXITED AT"];
             const csvRows = [headers.join(",")];
             filteredExecutedPositions.forEach(pos => {
-                const side       = (pos.transaction_type || pos.transaction || (pos.quantity > 0 ? 'BUY' : 'SELL')).toUpperCase();
+                const side = (pos.transaction_type || pos.transaction || (pos.quantity > 0 ? 'BUY' : 'SELL')).toUpperCase();
                 const exitDateStr = pos.exited_at ? new Date(pos.exited_at).toLocaleString('en-GB') : 'N/A';
                 const row = [
                     getDisplayUsername(pos),
-                    pos.broker    || "",
-                    pos.symbol    || "",
-                    pos.exchange  || "",
+                    pos.broker || "",
+                    pos.symbol || "",
+                    pos.exchange || "",
                     pos.product_type || "",
                     side,
-                    pos.quantity  || 0,
-                    (pos.avg_price  || 0).toFixed(2),
+                    pos.quantity || 0,
+                    (pos.avg_price || 0).toFixed(2),
                     (pos.exit_price || 0).toFixed(2),
-                    (pos.pnl        || 0).toFixed(2),
+                    (pos.pnl || 0).toFixed(2),
                     `"${exitDateStr}"`
                 ];
                 csvRows.push(row.join(","));
             });
             const csvString = csvRows.join("\n");
             const blob = new Blob([csvString], { type: "text/csv;charset=utf-8;" });
-            const url  = URL.createObjectURL(blob);
+            const url = URL.createObjectURL(blob);
             const link = document.createElement("a");
             link.setAttribute("href", url);
             link.setAttribute("download", `drmt_executed_orders_${new Date().toISOString().split('T')[0]}.csv`);
@@ -683,11 +683,11 @@ function Dashboard({ user, onLogout }) {
             }
             if (debouncedExecutedSearchQuery.trim() !== '') {
                 const q = debouncedExecutedSearchQuery.toLowerCase().trim();
-                const matchSymbol   = (pos.symbol    || '').toLowerCase().includes(q);
-                const matchClient   = (getDisplayUsername(pos) + ' ' + (pos.client_id || '')).toLowerCase().includes(q);
-                const matchBroker   = (pos.broker    || '').toLowerCase().includes(q);
-                const matchExchange = (pos.exchange  || '').toLowerCase().includes(q);
-                const matchToken    = (pos.token     || '').toLowerCase().includes(q);
+                const matchSymbol = (pos.symbol || '').toLowerCase().includes(q);
+                const matchClient = (getDisplayUsername(pos) + ' ' + (pos.client_id || '')).toLowerCase().includes(q);
+                const matchBroker = (pos.broker || '').toLowerCase().includes(q);
+                const matchExchange = (pos.exchange || '').toLowerCase().includes(q);
+                const matchToken = (pos.token || '').toLowerCase().includes(q);
                 if (!matchSymbol && !matchClient && !matchBroker && !matchExchange && !matchToken) return false;
             }
             return true;
@@ -696,7 +696,7 @@ function Dashboard({ user, onLogout }) {
 
     useEffect(() => { setExecutedPage(1); }, [executedSearchQuery, executedTradeType, fromDate, toDate, executedBroker, executedUser]);
 
-    const totalExecutedPages         = Math.max(1, Math.ceil(filteredExecutedPositions.length / pageSize));
+    const totalExecutedPages = Math.max(1, Math.ceil(filteredExecutedPositions.length / pageSize));
     const paginatedExecutedPositions = useMemo(() => {
         const start = (executedPage - 1) * pageSize;
         return filteredExecutedPositions.slice(start, start + pageSize);
@@ -705,7 +705,7 @@ function Dashboard({ user, onLogout }) {
     /* Executed dropdown lists */
     const executedBrokersList = useMemo(() => {
         const set = new Set();
-        executedPositions.forEach(p => { if (p.broker)    set.add(p.broker); });
+        executedPositions.forEach(p => { if (p.broker) set.add(p.broker); });
         brokersList.forEach(b => set.add(b));
         return Array.from(set).sort();
     }, [executedPositions, brokersList]);
@@ -742,7 +742,7 @@ function Dashboard({ user, onLogout }) {
                         <h3>{modalConfig.title}</h3>
                         <p className="modal-message">{modalConfig.message}</p>
                         <div className="modal-actions">
-                            <button onClick={modalConfig.onCancel}  className="btn-cancel">Cancel</button>
+                            <button onClick={modalConfig.onCancel} className="btn-cancel">Cancel</button>
                             <button onClick={modalConfig.onConfirm} className="btn-confirm-exit">Confirm Exit</button>
                         </div>
                     </div>
@@ -753,9 +753,9 @@ function Dashboard({ user, onLogout }) {
                 TOP NAVIGATION BAR
                 ══════════════════════════════════ */}
             <header className="top-nav">
-                                <div className="nav-left">
-                    <h1 className="brand-title">DRMT<br/>Dashboard</h1>
-                    
+                <div className="nav-left">
+                    <h1 className="brand-title">DRMT<br />Dashboard</h1>
+
                     <div className="nav-last-sync">
                         <span className="sync-label">Last Sync:</span>
                         <span className="sync-time">{lastSync || 'Waiting...'}</span>
@@ -775,7 +775,7 @@ function Dashboard({ user, onLogout }) {
                         title="Refresh Credentials"
                         onClick={async () => {
                             try {
-                                const res  = await fetchWithTimeout("/api/credentials/refresh", { method: "POST" });
+                                const res = await fetchWithTimeout("/api/credentials/refresh", { method: "POST" });
                                 const data = await res.json();
                                 addToast(data.message || "Credentials Refreshed", "success");
                             } catch (e) {
@@ -792,14 +792,14 @@ function Dashboard({ user, onLogout }) {
                         {theme === 'dark' ? (
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                 <circle cx="12" cy="12" r="5" />
-                                <line x1="12" y1="1"  x2="12" y2="3" />
+                                <line x1="12" y1="1" x2="12" y2="3" />
                                 <line x1="12" y1="21" x2="12" y2="23" />
-                                <line x1="4.22"  y1="4.22"  x2="5.64"  y2="5.64" />
+                                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
                                 <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-                                <line x1="1"  y1="12" x2="3"  y2="12" />
+                                <line x1="1" y1="12" x2="3" y2="12" />
                                 <line x1="21" y1="12" x2="23" y2="12" />
-                                <line x1="4.22"  y1="19.78" x2="5.64"  y2="18.36" />
-                                <line x1="18.36" y1="5.64"  x2="19.78" y2="4.22" />
+                                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+                                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
                             </svg>
                         ) : (
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -834,8 +834,8 @@ function Dashboard({ user, onLogout }) {
                 {(() => {
                     const totalPnl = positions.reduce((s, p) => s + (p.pnl || 0), 0);
                     const inProfit = positions.filter(p => (p.pnl || 0) > 0).length;
-                    const inLoss   = positions.filter(p => (p.pnl || 0) < 0).length;
-                    const pnlCls   = totalPnl > 0 ? 'positive' : (totalPnl < 0 ? 'negative' : 'neutral');
+                    const inLoss = positions.filter(p => (p.pnl || 0) < 0).length;
+                    const pnlCls = totalPnl > 0 ? 'positive' : (totalPnl < 0 ? 'negative' : 'neutral');
                     return (
                         <div className="hero-section" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
                             <div className="stat-card" style={{ backgroundColor: 'var(--bg-panel)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', padding: '6px 12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '2px' }}>
@@ -861,7 +861,7 @@ function Dashboard({ user, onLogout }) {
                 })()}
 
 
-                
+
 
                 {/* ══ RUNNING TAB ══ */}
                 {activeTab === 'running' ? (

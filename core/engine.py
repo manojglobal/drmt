@@ -68,16 +68,6 @@ class CoreEngine:
             except Exception as e:
                 logger.error(f"Worker {worker_id} critical error: {e}")
 
-    def submit(self, coro):
-        # Adds a new task to the execution queue.
-        future = asyncio.Future()
-        try:
-            self._worker_queue.put_nowait((coro, future))
-        except asyncio.QueueFull:
-            future.set_exception(RuntimeError("Core Engine worker queue full"))
-        return future
-
-
     async def async_submit(self, coro):
         # Adds a new task to the queue asynchronously, natively respecting backpressure (maxsize=500).
         future = asyncio.Future()
@@ -117,11 +107,7 @@ class CoreEngine:
         return self._exit_sem
 
     async def acquire_rate_limit(self, user_id: str):
-        # 1. Global limit
-        # Checks if the user has exceeded their request limit.
-        await self._global_rate_limiter.acquire()
-        
-        # 2. Per-user limit
+        # Per-user limit
         if user_id not in self._user_rate_limiters:
             self._user_rate_limiters[user_id] = TokenBucketRateLimiter(
                 settings.USER_RATE_LIMIT, settings.USER_RATE_LIMIT

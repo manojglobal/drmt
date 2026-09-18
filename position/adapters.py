@@ -95,64 +95,64 @@ import random
 
 
 # Global state dictionary for distinct users
-_fake_state = {}
+# _fake_state = {}
 
-async def poll_fake(cred: Credential) -> List[Position]:
-    import asyncio, random
-    from logger.logger import logger_system
+# async def poll_fake(cred: Credential) -> List[Position]:
+#     import asyncio, random
+#     from logger.logger import logger_system
     
-    client_id = cred.client_id
+#     client_id = cred.client_id
     
-    if client_id not in _fake_state:
-        await logger_system.info(f"[User Initialization] Portfolio building for {client_id}")
-        _fake_state[client_id] = {
-            "RELIANCE": {"entry": 2813.74, "ltp": 2813.74, "qty": random.randint(10, 50), "type": "BUY"},
-            "TCS": {"entry": 3201.14, "ltp": 3201.14, "qty": random.randint(5, 20), "type": "SELL"}
-        }
+#     if client_id not in _fake_state:
+#         await logger_system.info(f"[User Initialization] Portfolio building for {client_id}")
+#         _fake_state[client_id] = {
+#             "RELIANCE": {"entry": 2813.74, "ltp": 2813.74, "qty": random.randint(10, 50), "type": "BUY"},
+#             "TCS": {"entry": 3201.14, "ltp": 3201.14, "qty": random.randint(5, 20), "type": "SELL"}
+#         }
         
-    await logger_system.info(f"[Broker Request] Fetching data for {client_id}")
-    await asyncio.sleep(0.01) # Simulate fast network
-    await logger_system.info(f"[Broker Response] 200 OK for {client_id}")
+#     await logger_system.info(f"[Broker Request] Fetching data for {client_id}")
+#     await asyncio.sleep(0.01) # Simulate fast network
+#     await logger_system.info(f"[Broker Response] 200 OK for {client_id}")
     
-    state = _fake_state[client_id]
-    positions = []
+#     state = _fake_state[client_id]
+#     positions = []
     
-    for sym, data in state.items():
-        # Fluctuate LTP
-        data["ltp"] += random.uniform(-2.0, 2.0)
-        data["ltp"] = round(data["ltp"], 2)
+#     for sym, data in state.items():
+#         # Fluctuate LTP
+#         data["ltp"] += random.uniform(-2.0, 2.0)
+#         data["ltp"] = round(data["ltp"], 2)
         
-        # Recalc PNL based on BUY/SELL side
-        if data["type"] == "BUY":
-            pnl = (data["ltp"] - data["entry"]) * data["qty"]
-        else: # SELL
-            pnl = (data["entry"] - data["ltp"]) * data["qty"]
+#         # Recalc PNL based on BUY/SELL side
+#         if data["type"] == "BUY":
+#             pnl = (data["ltp"] - data["entry"]) * data["qty"]
+#         else: # SELL
+#             pnl = (data["entry"] - data["ltp"]) * data["qty"]
             
-        pos = Position(
-            id=f"FAKE:{client_id}:{sym}",
-            broker="FAKE",
-            client_id=client_id,
-            symbol=sym,
-            token=f"TOK_{sym}",
-            exchange="NSE",
-            product_type="MIS",
-            order_type="MARKET",
-            transaction_type=data["type"],
-            quantity=data["qty"],
-            avg_price=data["entry"],
-            ltp=data["ltp"],
-            pnl=round(pnl, 2)
-        )
-        positions.append(pos)
+#         pos = Position(
+#             id=f"FAKE:{client_id}:{sym}",
+#             broker="FAKE",
+#             client_id=client_id,
+#             symbol=sym,
+#             token=f"TOK_{sym}",
+#             exchange="NSE",
+#             product_type="MIS",
+#             order_type="MARKET",
+#             transaction_type=data["type"],
+#             quantity=data["qty"],
+#             avg_price=data["entry"],
+#             ltp=data["ltp"],
+#             pnl=round(pnl, 2)
+#         )
+#         positions.append(pos)
         
-        # EXACT required log format
-        pnl_str = f"+{pnl:.2f}" if pnl >= 0 else f"{pnl:.2f}"
-        # We only log for user01 and user20 to prevent 40 lines per second from flooding the user's terminal completely,
-        # but wait, the prompt specifically says "Add clear and structured logs so I can trace the complete flow for all 20 users."
-        # I will log for ALL of them.
-        await logger_system.info(f"[Live Position] User: {client_id} | {sym} | {data['type']} | LTP: {data['ltp']:.2f} | PNL: {pnl_str}")
+#         # EXACT required log format
+#         pnl_str = f"+{pnl:.2f}" if pnl >= 0 else f"{pnl:.2f}"
+#         # We only log for user01 and user20 to prevent 40 lines per second from flooding the user's terminal completely,
+#         # but wait, the prompt specifically says "Add clear and structured logs so I can trace the complete flow for all 20 users."
+#         # I will log for ALL of them.
+#         await logger_system.info(f"[Live Position] User: {client_id} | {sym} | {data['type']} | LTP: {data['ltp']:.2f} | PNL: {pnl_str}")
         
-    return positions
+#     return positions
 
 async def broker_poll(cred: Credential) -> List[Position]:
     """Router for broker polling based on credential."""
