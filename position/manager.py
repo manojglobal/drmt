@@ -14,28 +14,97 @@ class PositionManager:
         """
         normalized = []
         for raw in raw_list:
+            if not isinstance(raw, dict):
+                continue
+                
             # Safely extract basic fields depending on broker schema mapping
-            symbol = raw.get("symbol") or raw.get("symbolname") or raw.get("tradingsymbol") or raw.get("tsym") or raw.get("TrdSym") or "UNKNOWN"
-            qty = int(raw.get("quantity") or raw.get("netqty") or raw.get("Netqty") or 0)
+            symbol = (
+                raw.get("tradingSymbol")
+                or raw.get("symbol")
+                or raw.get("symbolname")
+                or raw.get("tradingsymbol")
+                or raw.get("formattedInstrumentName")
+                or raw.get("tsym")
+                or raw.get("TrdSym")
+                or "UNKNOWN"
+            )
+            qty = int(
+                raw.get("netQuantity")
+                or raw.get("quantity")
+                or raw.get("netqty")
+                or raw.get("Netqty")
+                or 0
+            )
             
             # Rule: Zero-Qty -> actively skip/delete from tracking
             if qty == 0:
                 continue
                 
-            exchange = raw.get("exchange") or raw.get("exc") or raw.get("Exchange") or ""
-            product = raw.get("product_type") or raw.get("producttype") or raw.get("prd") or raw.get("Pcode") or ""
+            exchange = (
+                raw.get("exchange")
+                or raw.get("exch")
+                or raw.get("exc")
+                or raw.get("Exchange")
+                or ""
+            )
+            product = (
+                raw.get("product")
+                or raw.get("product_type")
+                or raw.get("producttype")
+                or raw.get("prd")
+                or raw.get("Pcode")
+                or ""
+            )
             order_type = raw.get("order_type") or ""
             
             # Use provided transaction_type if available, otherwise infer from quantity
-            broker_side = raw.get("transaction_type") or raw.get("transaction") or raw.get("side") or ""
+            broker_side = (
+                raw.get("transactionType")
+                or raw.get("transaction_type")
+                or raw.get("transaction")
+                or raw.get("side")
+                or raw.get("trantype")
+                or ""
+            )
             if broker_side:
-                tran_type = str(broker_side).upper()
+                side_str = str(broker_side).upper()
+                if side_str in ("B", "BUY"):
+                    tran_type = "BUY"
+                elif side_str in ("S", "SELL"):
+                    tran_type = "SELL"
+                else:
+                    tran_type = side_str
             else:
                 tran_type = "BUY" if qty > 0 else "SELL" # Fallback rule
             
-            avg_price = float(raw.get("avg_price") or raw.get("buyavgprice") or raw.get("netavgprc") or raw.get("Price") or 0.0)
-            ltp = float(raw.get("ltp") or raw.get("netprice") or raw.get("avgnetprice") or raw.get("LTP") or avg_price or 0.0)
-            pnl = float(raw.get("pnl") or raw.get("urmtom") or raw.get("rpnl") or raw.get("MtoM") or raw.get("m2m") or raw.get("M2M") or 0.0)
+            avg_price = float(
+                raw.get("netAveragePrice")
+                or raw.get("avg_price")
+                or raw.get("buyavgprice")
+                or raw.get("netavgprc")
+                or raw.get("Price")
+                or 0.0
+            )
+            ltp = float(
+                raw.get("ltp")
+                or raw.get("lp")
+                or raw.get("netprice")
+                or raw.get("avgnetprice")
+                or raw.get("LTP")
+                or avg_price
+                or 0.0
+            )
+            pnl = float(
+                raw.get("pnl")
+                or raw.get("unrealizedPnl")
+                or raw.get("realizedPnl")
+                or raw.get("urmtom")
+                or raw.get("rpnl")
+                or raw.get("MtoM")
+                or raw.get("m2m")
+                or raw.get("M2M")
+                or 0.0
+            )
             if pnl == 0.0 and avg_price > 0 and ltp > 0 and qty != 0:
                 if tran_type == "BUY":
                     pnl = (ltp - avg_price) * abs(qty)
@@ -46,7 +115,14 @@ class PositionManager:
             # Rule: ID Gen as broker:client_id:symbol
             pos_id = f"{broker}:{client_id}:{symbol}"
             
-            token_val = str(raw.get("token") or raw.get("symboltoken") or raw.get("sym") or raw.get("Token") or "")
+            token_val = str(
+                raw.get("instrumentId")
+                or raw.get("token")
+                or raw.get("symboltoken")
+                or raw.get("sym")
+                or raw.get("Token")
+                or ""
+            )
             
             pos = Position(
                 id=pos_id,

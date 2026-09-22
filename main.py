@@ -14,7 +14,7 @@ from core.engine import core_engine
 from database.db import init_db, get_db
 from api import auth_routes, api_routes, websocket_handler, rate_limit_middleware
 from health.monitor import health_monitor
-from logger.logger import logger_system
+from logger.logger import logger_system, start_log_cleanup_loop
 from credentials.crypto import hash_password
 from utils.email import init_email_session, close_email_session
 
@@ -53,6 +53,9 @@ async def on_startup(app: web.Application):
     
     # 6. Start Health Monitor
     await health_monitor.start()
+    
+    # 7. Start Daily Log Retention Cleanup (30 days)
+    asyncio.create_task(start_log_cleanup_loop(retention_days=30), name="log_retention_cleanup")
     
     await logger_system.info("Application startup complete.")
 

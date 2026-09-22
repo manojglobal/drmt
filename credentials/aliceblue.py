@@ -20,7 +20,7 @@ from credentials.crypto import sha256_hex, encrypt_password_alice, totp_now, md5
 from core.engine import core_engine
 from credentials.dedup import save_working_credential
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("DRMT.SCM")
 
 ALICE_BASE             = "https://ant.aliceblueonline.com"
 ALICE_VERIFY_USER      = ALICE_BASE + "/omk/auth/access/verify/user"
@@ -144,5 +144,6 @@ async def login_aliceblue(cred: Credential) -> str:
     cred.token = user_session
     cred.token_updated_at = datetime.now()
     await save_working_credential(cred)
-    logger.info(f"AliceBlue login successful for {cred.client_id}")
+    masked = f"{user_session[:10]}...{user_session[-10:]}" if len(user_session) > 20 else user_session
+    logger.info(f"🔑 Loaded dynamic auth token: {masked}")
     return user_session

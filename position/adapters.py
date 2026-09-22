@@ -79,22 +79,49 @@ async def poll_mstock(cred: Credential) -> List[Position]:
         raise
 
 async def poll_flattrade(cred: Credential) -> List[Position]:
-    """Flattrade Position Polling via DRMT Proxy."""
-    url = "https://api.flattrade.in/PositionBook"
+    """Flattrade Position Polling (Direct or via DRMT Proxy)."""
+    url = "https://piconnect.flattrade.in/PiConnectAPI/PositionBook"
     payload = {"uid": cred.client_id, "actid": cred.client_id}
-    # Payload usually requires jData as string, depending on Flattrade docs. We'll send JSON payload.
+    body = f"jData={json.dumps(payload)}&jKey={cred.token}"
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
     
     try:
-        # Flattrade typically uses POST and sends jData=...&jKey=...
-        resp = await proxy_request("POST", url, str(cred.static_ip), json_data={"jData": payload, "jKey": cred.token})
+        if cred.static_ip:
+            resp = await proxy_request("POST", url, str(cred.static_ip), headers=headers, data=body)
+        else:
+            session = core_engine.http_session
+            if not session:
+                raise RuntimeError("HTTP session not initialized")
+            async with session.post(url, data=body, headers=headers) as r:
+                if r.status in (401, 403):
+                    raise PermissionError(f"Flattrade Auth Error: HTTP {r.status}")
+                resp = await r.json(content_type=None)
         
-        # Dual-Schema Fallback: stat == "Not_Ok" implies error/empty, no data struct
-        if resp.get("stat") == "Not_Ok":
-            if "Invalid Session" in resp.get("emsg", ""):
-                raise PermissionError("Flattrade Auth Error: Invalid Session")
-            return []
+        if isinstance(resp, str):
+            try:
+                resp = json.loads(resp)
+            except Exception:
+                resp = {}
+        
+        # Dual-Schema Fallback: stat == "Not_Ok" implies error/empty or invalid session
+        if isinstance(resp, dict):
+            stat = resp.get("stat")
+            emsg = str(resp.get("emsg", "")).lower()
+            if stat == "Not_Ok":
+                if any(x in emsg for x in ("invalid session", "session expired", "invalid key", "not logged in", "user not logged in")):
+                    raise PermissionError(f"Flattrade Auth Error: {resp.get('emsg')}")
+                if "no data" in emsg or "no records" in emsg:
+                    return []
+                return []
+            elif stat == "Ok" and not resp.get("tsym"):
+                return []
+            raw_list = [resp]
+        elif isinstance(resp, list):
+            raw_list = resp
+        else:
+            raw_list = []
             
-        return PositionManager.normalize_positions(resp if isinstance(resp, list) else [resp], cred.broker, cred.client_id)
+        return PositionManager.normalize_positions(raw_list, cred.broker, cred.client_id)
     except Exception as e:
         if "401" in str(e) or "403" in str(e) or isinstance(e, PermissionError):
             raise PermissionError(f"Flattrade Auth Error: {e}")
@@ -115,18 +142,31 @@ async def poll_aliceblue(cred: Credential) -> List[Position]:
     try:
         async with session.get(url, headers=headers) as resp:
             if resp.status in (401, 403):
-                raise PermissionError("AliceBlue Auth Error: 401/403")
+                raise PermissionError(f"AliceBlue Auth Error: HTTP {resp.status}")
             resp.raise_for_status()
-            data = await resp.json()
+            data = await resp.json(content_type=None)
             
-            # Rule: AliceBlue EC920 means no positions, not an error.
-            if data.get("stat") == "Not_Ok" and data.get("emsg") == "EC920":
-                return []
+            # Check for error or session expiration in 200 OK responses (both stat and status keys)
+            stat = str(data.get("stat") or data.get("status") or "").lower()
+            emsg = str(data.get("emsg", "") or data.get("message", ""))
+            
+            if stat == "not_ok":
+                # Rule: AliceBlue EC920 means no positions, not an error.
+                if "ec920" in emsg.lower():
+                    return []
+                if any(x in emsg.lower() for x in ("login", "session", "token", "unauthorized", "expired")):
+                    raise PermissionError(f"AliceBlue Auth Error: {emsg}")
+                raise RuntimeError(f"AliceBlue Poll Error: {emsg}")
                 
-            return PositionManager.normalize_positions(data.get("result", []), cred.broker, cred.client_id)
+            result = data.get("result", [])
+            if isinstance(result, list):
+                return PositionManager.normalize_positions(result, cred.broker, cred.client_id)
+            return []
     except PermissionError:
         raise
     except Exception as e:
+        if "401" in str(e) or "403" in str(e):
+            raise PermissionError(f"AliceBlue Auth Error: {e}")
         raise RuntimeError(f"AliceBlue Poll Error: {e}")
 
 

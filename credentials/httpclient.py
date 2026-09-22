@@ -8,7 +8,14 @@ import logging
 
 logger = logging.getLogger("DRMT.SCM")
 
-async def proxy_request(method: str, url: str, source_ip: str, headers: Optional[Dict] = None, json_data: Optional[Dict] = None) -> Any:
+async def proxy_request(
+    method: str,
+    url: str,
+    source_ip: str,
+    headers: Optional[Dict] = None,
+    json_data: Optional[Dict] = None,
+    data: Optional[Any] = None
+) -> Any:
     """Wraps aiohttp to send requests via the DRMT proxy."""
     if not headers:
         headers = {}
@@ -22,8 +29,10 @@ async def proxy_request(method: str, url: str, source_ip: str, headers: Optional
         "source_ip": source_ip,
         "headers": headers
     }
-    if json_data:
+    if json_data is not None:
         payload["json"] = json_data
+    if data is not None:
+        payload["data"] = data
         
     session = core_engine.http_session
     if not session:
@@ -38,6 +47,13 @@ async def proxy_request(method: str, url: str, source_ip: str, headers: Optional
             if isinstance(resp_data, dict) and "status_code" in resp_data:
                 target_sc = resp_data.get("status_code", 200)
                 broker_body = resp_data.get("json") if resp_data.get("json") is not None else resp_data.get("text", "")
+                
+                # Parse JSON string if broker returned stringified JSON
+                if isinstance(broker_body, str) and (broker_body.startswith("{") or broker_body.startswith("[")):
+                    try:
+                        broker_body = json.loads(broker_body)
+                    except Exception:
+                        pass
                 
                 resp_str = json.dumps(broker_body, default=str) if isinstance(broker_body, (dict, list)) else str(broker_body)
                 if len(resp_str) > 2000:

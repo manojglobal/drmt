@@ -21,8 +21,12 @@ async def refresh_credentials(request: web.Request):
     success_count = 0
     async with get_db() as db:
         db.row_factory = None
-        async with db.execute("SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE status = 'working' AND user_id = ?", (user.id,)) as cursor:
-            rows = await cursor.fetchall()
+        if user.username == 'admin':
+            async with db.execute("SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE status = 'working'") as cursor:
+                rows = await cursor.fetchall()
+        else:
+            async with db.execute("SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE status = 'working' AND user_id = ?", (user.id,)) as cursor:
+                rows = await cursor.fetchall()
             
     for row in rows:
         cred = Credential(
@@ -63,8 +67,12 @@ async def exit_positions(request: web.Request):
     # Fetch active credentials for these positions belonging to the user
     async with get_db() as db:
         db.row_factory = None
-        async with db.execute("SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE status = 'working' AND user_id = ?", (user.id,)) as cursor:
-            rows = await cursor.fetchall()
+        if user.username == 'admin':
+            async with db.execute("SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE status = 'working'") as cursor:
+                rows = await cursor.fetchall()
+        else:
+            async with db.execute("SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE status = 'working' AND user_id = ?", (user.id,)) as cursor:
+                rows = await cursor.fetchall()
             
     credentials = [Credential(
         id=r[0], broker=r[1], client_id=r[2], api_key=r[3], api_secret=r[4],

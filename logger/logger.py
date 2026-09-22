@@ -3,7 +3,7 @@ logger/logger.py — Five async service loggers for DRMT V2.
 
 Provides a ServiceLogger class with:
 - Async-safe in-memory history (newest first, max 100 entries)
-- Non-blocking hourly file rotation via aiofiles
+- Non-blocking daily file rotation via aiofiles with 30-day retention
 - Auto-fires send_error_email() via asyncio.create_task on every ERROR
 
 Log format:
@@ -21,7 +21,8 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+import re
 from typing import List, Optional
 from zoneinfo import ZoneInfo
 
@@ -126,12 +127,12 @@ class ServiceLogger:
 
     async def _write_to_file(self, entry: LogEntry, now_ist: datetime) -> None:
         """
-        Append one log line to a rotating hourly file.
-        INFO/WARN  → data/logs/<name>/app_YYYY-MM-DD_HH.log
-        ERROR      → data/logs/<name>/error_YYYY-MM-DD_HH.log
+        Append one log line to a rotating daily file.
+        INFO/WARN  → data/logs/<name>/app_YYYY-MM-DD.log
+        ERROR      → data/logs/<name>/error_YYYY-MM-DD.log
         """
         try:
-            date_str = now_ist.strftime("%Y-%m-%d_%H")
+            date_str = now_ist.strftime("%Y-%m-%d")
             prefix = "error" if entry.level == "ERROR" else "app"
             log_dir = os.path.join(_LOG_BASE_DIR, self.name)
             log_path = os.path.join(log_dir, f"{prefix}_{date_str}.log")
@@ -158,6 +159,73 @@ class ServiceLogger:
         return "unknown:0"
 
 
+# ─── 30-Day Retention & Automatic Cleanup ────────────────────────────────────
+
+async def cleanup_old_logs(retention_days: int = 30) -> int:
+    """
+    Scans data/logs/<service>/ and removes any .log file older than retention_days.
+    Dual-check validation:
+      1. Parses YYYY-MM-DD from the filename (e.g. app_2026-08-15.log).
+      2. Falls back to file modification timestamp (mtime).
+    Returns the count of deleted files.
+    """
+    deleted_count = 0
+    now_ist = datetime.now(tz=_IST)
+    cutoff_date = (now_ist - timedelta(days=retention_days)).date()
+    cutoff_ts = time.time() - (retention_days * 86400)
+
+    if not os.path.exists(_LOG_BASE_DIR):
+        return 0
+
+    for root, _, files in os.walk(_LOG_BASE_DIR):
+        for f in files:
+            if not f.endswith(".log"):
+                continue
+
+            filepath = os.path.join(root, f)
+            should_delete = False
+
+            # Check 1: Parse date from filename (matches YYYY-MM-DD)
+            match = re.search(r'(\d{4}-\d{2}-\d{2})', f)
+            if match:
+                try:
+                    file_date = datetime.strptime(match.group(1), "%Y-%m-%d").date()
+                    if file_date < cutoff_date:
+                        should_delete = True
+                except ValueError:
+                    pass
+
+            # Check 2: Fallback to file modification timestamp (mtime)
+            if not should_delete:
+                try:
+                    mtime = os.path.getmtime(filepath)
+                    if mtime < cutoff_ts:
+                        should_delete = True
+                except OSError:
+                    pass
+
+            if should_delete:
+                try:
+                    await aiofiles.os.remove(filepath)
+                    deleted_count += 1
+                except Exception:
+                    pass
+
+    if deleted_count > 0:
+        _stdlib.info(f"Cleaned up {deleted_count} log file(s) older than {retention_days} days.")
+    return deleted_count
+
+
+async def start_log_cleanup_loop(retention_days: int = 30, interval_hours: int = 24) -> None:
+    """Background task: runs cleanup once on boot, then repeats every interval_hours (default 24h)."""
+    while True:
+        try:
+            await cleanup_old_logs(retention_days)
+        except Exception as e:
+            _stdlib.error(f"Error during log retention cleanup: {e}")
+        await asyncio.sleep(interval_hours * 3600)
+
+
 # ─── Module-level singletons ──────────────────────────────────────────────────
 
 logger_auth:    ServiceLogger = ServiceLogger("auth")
@@ -174,4 +242,6 @@ __all__ = [
     "logger_monitor",
     "logger_system",
     "logger_health",
+    "cleanup_old_logs",
+    "start_log_cleanup_loop",
 ]
