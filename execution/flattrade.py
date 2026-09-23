@@ -10,7 +10,7 @@ logger = logging.getLogger("DRMT.SCM")
 
 async def exit_flattrade(pos: Position, cred: Credential) -> bool:
     """Flattrade Exit (Direct or Proxy)."""
-    url = "https://piconnect.flattrade.in/PiConnectAPI/PlaceOrder"
+    url = "https://emergeapi.flattrade.in/placeOrder"
     
     tran_type = "S" if pos.quantity > 0 else "B"
     qty = abs(pos.quantity)
@@ -44,20 +44,29 @@ async def exit_flattrade(pos: Position, cred: Credential) -> bool:
         "prctyp": "MKT",
         "ret": "DAY",
         "remarks": app_inst_id,
-        "app_inst_id": app_inst_id
+        "app_inst_id": app_inst_id,
+        "jKey": cred.token,
+        "jkey": cred.token
     }
     
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    body = f"jData={json.dumps(payload)}&jKey={cred.token}"
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0",
+        "source": "WEB",
+        "device": "Chrome",
+        "Origin": "https://emerge.flattrade.in",
+        "Referer": "https://emerge.flattrade.in/"
+    }
     
     try:
+        await logger_exit.info(f"📤 [Flattrade Exit Order Payload] ({cred.client_id}) {pos.symbol}: {json.dumps(payload)}")
         if cred.static_ip:
-            data = await proxy_request("POST", url, str(cred.static_ip), headers=headers, data=body)
+            data = await proxy_request("POST", url, str(cred.static_ip), headers=headers, json_data=payload)
         else:
             session = core_engine.http_session
             if not session:
                 raise RuntimeError("HTTP session not initialized")
-            async with session.post(url, data=body, headers=headers) as resp:
+            async with session.post(url, json=payload, headers=headers) as resp:
                 data = await resp.json(content_type=None)
                 
         if isinstance(data, str):
@@ -66,8 +75,46 @@ async def exit_flattrade(pos: Position, cred: Credential) -> bool:
             except Exception:
                 pass
                 
-        if isinstance(data, dict) and data.get("stat") == "Ok":
-            return True
+        data_str = json.dumps(data, default=str) if isinstance(data, (dict, list)) else str(data)
+        await logger_exit.info(f"📥 [Flattrade Exit Order Response] ({cred.client_id}) {pos.symbol}: {data_str}")
+                
+        data_obj = data[0] if isinstance(data, list) and len(data) > 0 else data
+        if isinstance(data_obj, dict):
+            status = str(data_obj.get("status", "")).upper()
+            stat = str(data_obj.get("stat", "")).lower()
+            if status == "S" or stat == "ok" or "norenordno" in data_obj or "orderid" in data_obj:
+                return True
+                
+            emsg = str(data_obj.get("errMsg", "") or data_obj.get("emsg", "") or "").lower()
+            if status in ("I", "E") or stat == "not_ok" or any(x in emsg for x in ("invalid session", "session expired", "invalid key", "not logged in", "user not logged in")):
+                from credentials.flattrade import login_flattrade
+                try:
+                    await logger_exit.warn(f"🔑 Flattrade auth expired during exit for {pos.symbol}, attempting automatic re-auth...")
+                    new_token = await login_flattrade(cred)
+                    if new_token:
+                        payload["jKey"] = new_token
+                        payload["jkey"] = new_token
+                        if cred.static_ip:
+                            data = await proxy_request("POST", url, str(cred.static_ip), headers=headers, json_data=payload)
+                        else:
+                            async with session.post(url, json=payload, headers=headers) as resp:
+                                data = await resp.json(content_type=None)
+                        if isinstance(data, str):
+                            try:
+                                data = json.loads(data)
+                            except Exception:
+                                pass
+                        data_str = json.dumps(data, default=str) if isinstance(data, (dict, list)) else str(data)
+                        await logger_exit.info(f"📥 [Flattrade Exit Order Retry Response] ({cred.client_id}) {pos.symbol}: {data_str}")
+                        data_obj = data[0] if isinstance(data, list) and len(data) > 0 else data
+                        if isinstance(data_obj, dict):
+                            status = str(data_obj.get("status", "")).upper()
+                            stat = str(data_obj.get("stat", "")).lower()
+                            if status == "S" or stat == "ok" or "norenordno" in data_obj or "orderid" in data_obj:
+                                return True
+                except Exception as retry_err:
+                    await logger_exit.error(f"Flattrade exit re-auth retry failed: {retry_err}")
+
         await logger_exit.error(f"Flattrade exit failed for {pos.symbol}: {data}")
         return False
     except Exception as e:

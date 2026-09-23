@@ -100,10 +100,14 @@ class CoreEngine:
 
     def acquire_api_semaphore(self):
         # Safely acquires a lock before hitting external APIs.
+        if self._api_sem is None:
+            self._api_sem = asyncio.Semaphore(settings.API_CONCURRENCY)
         return self._api_sem
 
     def acquire_exit_semaphore(self):
         # Safely acquires a lock before executing a trade exit.
+        if self._exit_sem is None:
+            self._exit_sem = asyncio.Semaphore(20)
         return self._exit_sem
 
     async def acquire_rate_limit(self, user_id: str):

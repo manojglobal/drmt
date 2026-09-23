@@ -71,19 +71,31 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                     await logger_system.warn(f"Zombie WebSocket detected for user {user_id} (>30s no ping). Exiting loop.")
                     break
                     
-                # 4. Broker Poll (All active credentials)
-                new_data_models = []
-                for cred in credentials:
+                # 4. Broker Poll (All active credentials concurrently)
+                async def _poll_target(c: Credential):
                     try:
-                        positions = await broker_poll(cred)
-                        new_data_models.extend(positions)
+                        return await broker_poll(c)
                     except PermissionError:
-                        await logger_auth.warn(f"🔑 Auth token expired for {cred.broker}:{cred.client_id} ➔ Refreshing")
-                        success = await refresh_token_with_backoff(cred)
-                        if not success:
-                            await logger_system.error(f"❌ Exhausted refresh retries for {cred.broker}:{cred.client_id}. Skipping.")
+                        await logger_auth.warn(f"🔑 Auth token expired for {c.broker}:{c.client_id} ➔ Refreshing")
+                        success = await refresh_token_with_backoff(c)
+                        if success:
+                            try:
+                                return await broker_poll(c)
+                            except Exception as e:
+                                await logger_system.error(f"❌ Post-refresh poll failed for {c.broker}:{c.client_id} - {e}")
+                                return []
+                        else:
+                            await logger_system.error(f"❌ Exhausted refresh retries for {c.broker}:{c.client_id}. Skipping.")
+                            return []
                     except Exception as e:
-                        await logger_system.error(f"❌ Poll failed for {cred.broker}:{cred.client_id} - {e}")
+                        await logger_system.error(f"❌ Poll failed for {c.broker}:{c.client_id} - {e}")
+                        return []
+
+                poll_batch = await asyncio.gather(*[_poll_target(c) for c in credentials], return_exceptions=True)
+                new_data_models = []
+                for res in poll_batch:
+                    if isinstance(res, list):
+                        new_data_models.extend(res)
                 
                 target_count = len(new_data_models) if new_data_models else len(credentials)
                 await logger_system.info(f"─── [POSITION SCAN] Scanning {target_count} Targets ───")

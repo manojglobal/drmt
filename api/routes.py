@@ -97,7 +97,9 @@ async def exit_positions(request: web.Request):
         
     client_results = [
         {
+            "id": r["position"].id if r.get("position") else "",
             "broker": r["broker"],
+            "client_id": r["position"].client_id if r.get("position") else "",
             "symbol": r["symbol"],
             "success": r["success"],
             "message": r["message"]

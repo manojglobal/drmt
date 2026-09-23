@@ -30,14 +30,22 @@ async def execute_exit_order(pos: Position, cred: Credential) -> bool:
 
 async def mass_exit(positions: List[Position], credentials: List[Credential]) -> tuple[int, List[dict]]:
     """Executes a mass exit for multiple positions concurrently through the core engine."""
-    cred_map = {f"{c.broker}:{c.client_id}": c for c in credentials}
+    cred_map = {}
+    for c in credentials:
+        cred_map[f"{c.broker}:{c.client_id}"] = c
+        cred_map[f"{c.broker.upper().replace(' ', '')}:{c.client_id}"] = c
+        cred_map[c.client_id] = c
     
     tasks = []
     task_positions = []
     missing_results = []
 
     for pos in positions:
-        cred = cred_map.get(f"{pos.broker}:{pos.client_id}")
+        cred = (
+            cred_map.get(f"{pos.broker}:{pos.client_id}")
+            or cred_map.get(f"{pos.broker.upper().replace(' ', '')}:{pos.client_id}")
+            or cred_map.get(pos.client_id)
+        )
         if not cred:
             await logger_exit.error(f"No credential found for {pos.broker}:{pos.client_id}")
             missing_results.append({
@@ -49,8 +57,8 @@ async def mass_exit(positions: List[Position], credentials: List[Credential]) ->
             })
             continue
             
-        future = await core_engine.async_submit(execute_exit_order(pos, cred))
-        tasks.append(future)
+        task = asyncio.create_task(execute_exit_order(pos, cred))
+        tasks.append(task)
         task_positions.append(pos)
         
     raw_results = await asyncio.gather(*tasks, return_exceptions=True) if tasks else []

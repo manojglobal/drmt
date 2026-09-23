@@ -1,3 +1,4 @@
+import json
 import logging
 from logger.logger import logger_exit
 import uuid
@@ -38,6 +39,7 @@ async def exit_aliceblue(pos: Position, cred: Credential) -> bool:
         "orderType": "MARKET",
         "validity": "DAY",
         "price": 0.0,
+        "disclosedQuantity": 0,
         "orderTag": "DRMT_EXIT",
         "deviceId": "57a9f9b93ffbd16d3e4be86448a7a472"
     }
@@ -49,8 +51,11 @@ async def exit_aliceblue(pos: Position, cred: Credential) -> bool:
     }
     
     try:
+        await logger_exit.info(f"📤 [AliceBlue Exit Order Payload] ({cred.client_id}) {pos.symbol}: {json.dumps(payload)}")
         async with session.post(url, headers=headers, json=payload) as resp:
             data = await resp.json(content_type=None)
+            data_str = json.dumps(data, default=str) if isinstance(data, (dict, list)) else str(data)
+            await logger_exit.info(f"📥 [AliceBlue Exit Order Response] ({cred.client_id}) {pos.symbol}: {data_str}")
             
             is_ok = False
             if isinstance(data, list) and len(data) > 0:

@@ -356,17 +356,23 @@ function Dashboard({ user, onLogout }) {
 
         let socket = null;
         let pingTimer = null;
+        let reconnectTimer = null;
 
         const connect = () => {
-            if (isActionLocked) return;
+            if (isClosed) return;
             setPollingStatus("Connecting...");
             socket = new WebSocket(wsUrl);
             socket.binaryType = "arraybuffer";
 
             socket.onopen = () => {
+                if (isClosed) {
+                    socket.close();
+                    return;
+                }
                 setWsConnected(true);
                 setPollingStatus("Connected (Live)");
                 reconnectAttempts.current = 0;
+                clearInterval(pingTimer);
                 pingTimer = setInterval(() => {
                     if (socket && socket.readyState === WebSocket.OPEN) {
                         socket.send(new TextEncoder().encode(JSON.stringify({ type: "ping" })));
@@ -375,6 +381,7 @@ function Dashboard({ user, onLogout }) {
             };
 
             socket.onmessage = (event) => {
+                if (isClosed) return;
                 try {
                     let textData;
                     if (typeof event.data === 'string') {
@@ -398,16 +405,20 @@ function Dashboard({ user, onLogout }) {
             };
 
             socket.onclose = () => {
+                if (isClosed) return;
                 setWsConnected(false);
                 setPollingStatus("Disconnected / Connection Lost");
                 clearInterval(pingTimer);
+                clearTimeout(reconnectTimer);
                 const attempt = reconnectAttempts.current;
                 const maxDelay = 30000;
                 const delay = Math.min(1000 * Math.pow(2, attempt), maxDelay);
-                if (!isActionLocked) {
-                    setTimeout(connect, delay);
-                    reconnectAttempts.current += 1;
-                }
+                reconnectTimer = setTimeout(() => {
+                    if (!isClosed) {
+                        reconnectAttempts.current += 1;
+                        connect();
+                    }
+                }, delay);
             };
 
             socket.onerror = (err) => console.error("WS error", err);
@@ -416,10 +427,16 @@ function Dashboard({ user, onLogout }) {
         connect();
 
         return () => {
-            if (socket) socket.close();
-            if (pingTimer) clearInterval(pingTimer);
+            isClosed = true;
+            clearTimeout(reconnectTimer);
+            clearInterval(pingTimer);
+            if (socket) {
+                socket.onclose = null;
+                socket.onerror = null;
+                socket.close();
+            }
         };
-    }, [isActionLocked, TEST_MODE_FORCE_POLL]);
+    }, [TEST_MODE_FORCE_POLL]);
 
     /* ── Dynamic dropdown options (Running) ── */
     const brokersList = useMemo(() => {
@@ -531,13 +548,19 @@ function Dashboard({ user, onLogout }) {
                 setSelectedIds(new Set());
                 addToast(data.message || `Processed exit for ${positionsToExit.length} position(s)`, "success");
                 if (data.results && data.results.length > 0) {
+                    const exitedIds = new Set();
                     data.results.forEach(r => {
                         if (r.success) {
                             addToast(`✅ ${r.broker} - ${r.symbol}: Placed successfully`, 'success');
+                            if (r.id) exitedIds.add(r.id);
+                            exitedIds.add(`${r.broker}:${r.symbol}`);
                         } else {
                             addToast(`❌ ${r.broker} - ${r.symbol} Failed: ${r.message}`, 'error');
                         }
                     });
+                    if (exitedIds.size > 0) {
+                        setPositions(prev => prev.filter(p => !exitedIds.has(p.id) && !exitedIds.has(`${p.broker}:${p.symbol}`)));
+                    }
                 }
             } else {
                 addToast("Failed to dispatch exit commands (Server Error).", "error");

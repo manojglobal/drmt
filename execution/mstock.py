@@ -1,3 +1,4 @@
+import json
 import logging
 from logger.logger import logger_exit
 import uuid
@@ -52,7 +53,7 @@ async def exit_mstock(pos: Position, cred: Credential) -> bool:
         "squareoff": "0",
         "stoploss": "0",
         "trailingStopLoss": "",
-        "disclosedquantity": "",
+        "disclosedquantity": "0",
         "duration": "DAY",
         "ordertag": order_tag
     }
@@ -65,10 +66,22 @@ async def exit_mstock(pos: Position, cred: Credential) -> bool:
     }
     
     try:
+        await logger_exit.info(f"📤 [mStock Exit Order Payload] ({cred.client_id}) {pos.symbol}: {json.dumps(payload)}")
         resp = await proxy_request("POST", url, str(cred.static_ip), headers=headers, json_data=payload)
-        # Check if response implies success. Usually 'status': True or 'status': 'true' or 'message': 'SUCCESS'
-        if isinstance(resp, dict) and (resp.get("status") in (True, "true") or resp.get("message") == "SUCCESS"):
-            return True
+        resp_str = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else str(resp)
+        await logger_exit.info(f"📥 [mStock Exit Order Response] ({cred.client_id}) {pos.symbol}: {resp_str}")
+        # Check if response implies success. mStock can return dict or list of dicts.
+        resp_obj = resp[0] if isinstance(resp, list) and len(resp) > 0 else resp
+        if isinstance(resp_obj, dict):
+            status_val = resp_obj.get("status")
+            msg_val = str(resp_obj.get("message", "")).upper()
+            data_val = resp_obj.get("data")
+            if (
+                status_val in (True, "true")
+                or msg_val == "SUCCESS"
+                or (isinstance(data_val, dict) and "orderid" in data_val)
+            ):
+                return True
         await logger_exit.error(f"MStock exit failed for {pos.symbol}: {resp}")
         return False
     except Exception as e:

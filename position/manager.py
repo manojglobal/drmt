@@ -77,34 +77,72 @@ class PositionManager:
             else:
                 tran_type = "BUY" if qty > 0 else "SELL" # Fallback rule
             
-            avg_price = float(
-                raw.get("netAveragePrice")
-                or raw.get("avg_price")
-                or raw.get("buyavgprice")
-                or raw.get("netavgprc")
-                or raw.get("Price")
-                or 0.0
-            )
-            ltp = float(
-                raw.get("ltp")
-                or raw.get("lp")
-                or raw.get("netprice")
-                or raw.get("avgnetprice")
-                or raw.get("LTP")
-                or avg_price
-                or 0.0
-            )
-            pnl = float(
-                raw.get("pnl")
-                or raw.get("unrealizedPnl")
-                or raw.get("realizedPnl")
-                or raw.get("urmtom")
-                or raw.get("rpnl")
-                or raw.get("MtoM")
-                or raw.get("m2m")
-                or raw.get("M2M")
-                or 0.0
-            )
+            # Extract valid non-zero average entry price
+            avg_price = 0.0
+            avg_candidates = [
+                raw.get("avgnetprice"),
+                raw.get("netAveragePrice"),
+                raw.get("netavgprc"),
+                raw.get("netprice"),
+                raw.get("avg_price"),
+                raw.get("sellavgprice") if tran_type == "SELL" else raw.get("buyavgprice"),
+                raw.get("cfsellavgprice") if tran_type == "SELL" else raw.get("cfbuyavgprice"),
+                raw.get("totalsellavgprice") if tran_type == "SELL" else raw.get("totalbuyavgprice"),
+                raw.get("Price"),
+                raw.get("buyavgprice"),
+                raw.get("sellavgprice"),
+            ]
+            for candidate in avg_candidates:
+                if candidate is not None:
+                    try:
+                        val = float(candidate)
+                        if val > 0:
+                            avg_price = val
+                            break
+                    except (ValueError, TypeError):
+                        continue
+
+            # Extract LTP (Last Traded Price)
+            ltp = 0.0
+            ltp_candidates = [
+                raw.get("ltp"),
+                raw.get("lp"),
+                raw.get("LTP"),
+                raw.get("netprice"),
+                raw.get("avgnetprice"),
+            ]
+            for candidate in ltp_candidates:
+                if candidate is not None:
+                    try:
+                        val = float(candidate)
+                        if val > 0:
+                            ltp = val
+                            break
+                    except (ValueError, TypeError):
+                        continue
+            if ltp == 0.0:
+                ltp = avg_price
+
+            pnl = 0.0
+            pnl_candidates = [
+                raw.get("pnl"),
+                raw.get("unrealizedPnl"),
+                raw.get("realizedPnl"),
+                raw.get("urmtom"),
+                raw.get("rpnl"),
+                raw.get("MtoM"),
+                raw.get("m2m"),
+                raw.get("M2M"),
+            ]
+            for candidate in pnl_candidates:
+                if candidate is not None:
+                    try:
+                        pnl = float(candidate)
+                        if pnl != 0.0:
+                            break
+                    except (ValueError, TypeError):
+                        continue
+
             if pnl == 0.0 and avg_price > 0 and ltp > 0 and qty != 0:
                 if tran_type == "BUY":
                     pnl = (ltp - avg_price) * abs(qty)
