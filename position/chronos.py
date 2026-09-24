@@ -108,8 +108,13 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                             f"  ⏳ [{pos.symbol}] LTP: ₹{pos.ltp:.2f} | Avg: ₹{pos.avg_price:.2f} | Qty: {pos.quantity} | PnL: {pnl_str} ({pnl_pct}) ➔ {status}"
                         )
                 else:
+                    from utils.user_mapping import get_client_username
                     for cred in credentials:
-                        await logger_system.info(f"  ⏳ [{cred.broker}:{cred.client_id}] LTP: ₹0.00 | Positions: 0 | PnL: ₹0.00 ➔ Standby")
+                        if not cred.client_id or not cred.client_id.strip() or cred.broker.upper() == "FAKE":
+                            continue
+                        username = get_client_username(cred.client_id)
+                        user_label = f" ({username})" if username and username != cred.client_id else ""
+                        await logger_system.info(f"  ⏳ [{cred.broker}:{cred.client_id}{user_label}] LTP: ₹0.00 | Positions: 0 | PnL: ₹0.00 ➔ Standby")
                 
                 new_data = [pos.model_dump() for pos in new_data_models]
                 

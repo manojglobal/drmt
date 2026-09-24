@@ -32,10 +32,17 @@ async def exit_flattrade(pos: Position, cred: Credential) -> bool:
         
     app_inst_id = str(uuid.uuid4())
     
+    # Flattrade order routing expects BFO for BSE derivatives (CE/PE/FUT)
+    exch = pos.exchange
+    if str(exch).upper() == "BSE" and any(x in pos.symbol.upper() for x in ("CE", "PE", "FUT")):
+        exch = "BFO"
+    elif str(exch).upper() == "NSE" and any(x in pos.symbol.upper() for x in ("CE", "PE", "FUT")):
+        exch = "NFO"
+        
     payload = {
         "uid": cred.client_id,
         "actid": cred.client_id,
-        "exch": pos.exchange,
+        "exch": exch,
         "tsym": pos.symbol,
         "qty": str(qty),
         "prc": "0",

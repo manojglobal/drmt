@@ -6,6 +6,7 @@ from api.auth import require_auth
 from core.engine import core_engine
 from database.db import get_db
 from models.schemas import Credential
+from utils.user_mapping import get_configured_client_ids
 
 logger = logging.getLogger(__name__)
 
@@ -28,25 +29,34 @@ async def websocket_handler(request: web.Request):
     # We need to fetch the user's active credentials to pass to the polling loop.
     async with get_db() as db:
         db.row_factory = None
+        valid_filter = "status = 'working' AND UPPER(broker) != 'FAKE' AND client_id IS NOT NULL AND TRIM(client_id) != ''"
         if user.username == 'admin':
-            async with db.execute("SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE status = 'working'") as cursor:
+            async with db.execute(f"SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE {valid_filter}") as cursor:
                 rows = await cursor.fetchall()
         else:
-            async with db.execute("SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE status = 'working' AND user_id = ?", (user.id,)) as cursor:
+            async with db.execute(f"SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE {valid_filter} AND user_id = ?", (user.id,)) as cursor:
                 rows = await cursor.fetchall()
             
     if not rows:
         # Don't close the connection, just let them sit connected with an empty list
         pass
         
+    configured_cids = get_configured_client_ids()
     credentials = []
     for row in rows:
-        if "FAKE" in row[1].upper():
+        broker_name = str(row[1] or "").strip().upper()
+        cid = str(row[2] or "").strip()
+        if not broker_name or broker_name == "FAKE" or not cid:
+            continue
+        if configured_cids and cid not in configured_cids:
+            continue
+        # Verify that credential has at least password, api_key, or token configured
+        if not (row[3] or row[6] or row[10]):
             continue
         cred = Credential(
-            id=row[0], broker=row[1], client_id=row[2], api_key=row[3], api_secret=row[4],
-            totp_secret=row[5], password=row[6], static_ip=row[7],
-            fingerprint=row[8], status=row[9], token=row[10], token_updated_at=row[11]
+            id=row[0], broker=row[1], client_id=cid, api_key=row[3] or "", api_secret=row[4] or "",
+            totp_secret=row[5] or "", password=row[6] or "", static_ip=row[7] or "",
+            fingerprint=row[8], status=row[9], token=row[10] or "", token_updated_at=row[11]
         )
         credentials.append(cred)
     

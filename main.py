@@ -35,6 +35,36 @@ async def seed_admin_user():
                 await db.commit()
                 await logger_system.info("Seeded default admin user.")
 
+async def display_configured_credentials():
+    """Logs only configured and verified broker credentials to the terminal on startup."""
+    from utils.user_mapping import get_client_username, get_configured_client_ids
+    configured_cids = get_configured_client_ids()
+    async with get_db() as db:
+        db.row_factory = None
+        query = """
+            SELECT broker, client_id, static_ip, status
+            FROM credentials 
+            WHERE status = 'working' 
+              AND UPPER(broker) != 'FAKE' 
+              AND client_id IS NOT NULL 
+              AND TRIM(client_id) != ''
+            ORDER BY broker, client_id
+        """
+        async with db.execute(query) as cursor:
+            rows = await cursor.fetchall()
+            
+    filtered_rows = [r for r in rows if not configured_cids or r[1] in configured_cids]
+    if filtered_rows:
+        await logger_system.info(f"─── [DRMT] Configured Broker Credentials ({len(filtered_rows)} Active) ───")
+        for broker, client_id, static_ip, status in filtered_rows:
+            name = get_client_username(client_id)
+            ip_str = f" | IP: {static_ip}" if static_ip else ""
+            name_str = f" | Name: {name}" if name and name != client_id else ""
+            await logger_system.info(f"  ✔ [{broker}] Client: {client_id}{name_str}{ip_str}")
+        await logger_system.info("───────────────────────────────────────────────────────")
+    else:
+        await logger_system.info("⚠️  No active broker credentials configured.")
+
 async def on_startup(app: web.Application):
     """Application startup sequence."""
     await logger_system.info("Starting DRMT V2...")
@@ -50,6 +80,9 @@ async def on_startup(app: web.Application):
     
     # 4. Seed Admin User
     await seed_admin_user()
+    
+    # 5. Display Configured Credentials
+    await display_configured_credentials()
     
     # 6. Start Health Monitor
     await health_monitor.start()

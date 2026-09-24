@@ -40,13 +40,27 @@ class PositionManager:
             if qty == 0:
                 continue
                 
-            exchange = (
+            # Determine exchange from payload
+            raw_exch = (
                 raw.get("exchange")
                 or raw.get("exch")
                 or raw.get("exc")
                 or raw.get("Exchange")
                 or ""
             )
+            raw_exch_upper = str(raw_exch).strip().upper()
+            payload_str = str(raw).upper()
+
+            # Rule: If payload contains BSE or BFO, display whichever is present.
+            # If neither is present, default to BSE (preserving other explicit exchanges like NSE/NFO/MCX).
+            if "BFO" in raw_exch_upper or "'BFO'" in payload_str or '"BFO"' in payload_str:
+                exchange = "BFO"
+            elif "BSE" in raw_exch_upper or "'BSE'" in payload_str or '"BSE"' in payload_str:
+                exchange = "BSE"
+            elif raw_exch_upper in ("NSE", "NFO", "MCX", "CDS", "BCD"):
+                exchange = raw_exch_upper
+            else:
+                exchange = "BSE"
             product = (
                 raw.get("product")
                 or raw.get("product_type")
@@ -55,6 +69,17 @@ class PositionManager:
                 or raw.get("Pcode")
                 or ""
             )
+            prod_upper = str(product).upper()
+            if prod_upper in ("I", "MIS"):
+                product = "INTRADAY"
+            elif prod_upper in ("C", "DELIVERY"):
+                product = "CNC"
+            elif prod_upper in ("M", "CARRYFORWARD", "NORMAL"):
+                product = "NRML"
+            elif prod_upper == "B":
+                product = "BO"
+            elif prod_upper == "H":
+                product = "CO"
             order_type = raw.get("order_type") or ""
             
             # Use provided transaction_type if available, otherwise infer from quantity

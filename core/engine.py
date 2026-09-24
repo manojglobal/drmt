@@ -88,8 +88,8 @@ class CoreEngine:
         from position.chronos import polling_loop
         
         task = asyncio.create_task(polling_loop(user_id, ws, credentials, self))
-        self._user_tasks[user_id] = task
-        logger.info(f"🚀 Spawned polling task for user_id {user_id} ({len(credentials)} credentials loaded)")
+        acc_list = ", ".join(f"{c.broker}:{c.client_id}" for c in credentials) if credentials else "None"
+        logger.info(f"🚀 Spawned polling task for user_id {user_id} ({len(credentials)} active accounts: [{acc_list}])")
 
     def remove_user(self, user_id: str):
         # Stops and removes an active polling session for a user.

@@ -2,12 +2,21 @@ import os
 import csv
 import json
 import logging
-from typing import Dict, List
+from typing import Dict, List, Set
 
 logger = logging.getLogger("DRMT.UserMapping")
 
-_cid_to_name: Dict[str, str] = {}
+DEFAULT_CLIENT_NAMES: Dict[str, str] = {
+    "P645M1": "Manoj mStock Demo",
+    "P645M2": "Jagdeesh Sawant",
+    "P645M6": "Rinku Singh",
+}
+
+_cid_to_name: Dict[str, str] = dict(DEFAULT_CLIENT_NAMES)
 _name_to_cids: Dict[str, List[str]] = {}
+for cid, name in DEFAULT_CLIENT_NAMES.items():
+    _name_to_cids.setdefault(name, []).append(cid)
+_configured_cids: Set[str] = set(DEFAULT_CLIENT_NAMES.keys())
 _last_mtime: float = 0.0
 
 def _get_csv_path() -> str:
@@ -15,7 +24,7 @@ def _get_csv_path() -> str:
     return os.path.join(base_dir, "static", "plato_client_credentials.csv")
 
 def _reload_if_needed() -> None:
-    global _cid_to_name, _name_to_cids, _last_mtime
+    global _cid_to_name, _name_to_cids, _configured_cids, _last_mtime
     csv_path = _get_csv_path()
     if not os.path.exists(csv_path):
         return
@@ -25,8 +34,11 @@ def _reload_if_needed() -> None:
         if mtime == _last_mtime and _cid_to_name:
             return
 
-        cid_map: Dict[str, str] = {}
+        cid_map: Dict[str, str] = dict(DEFAULT_CLIENT_NAMES)
         name_map: Dict[str, List[str]] = {}
+        configured_set: Set[str] = set()
+        for cid, name in DEFAULT_CLIENT_NAMES.items():
+            name_map.setdefault(name, []).append(cid)
 
         with open(csv_path, mode="r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
@@ -40,9 +52,11 @@ def _reload_if_needed() -> None:
                 try:
                     creds_json = json.loads(row.get("broker_creds") or "{}")
                     cid = creds_json.get("client_id")
-                    if cid and full_name:
-                        cid_map[cid] = full_name
-                        name_map.setdefault(full_name, []).append(cid)
+                    if cid:
+                        configured_set.add(cid)
+                        if full_name:
+                            cid_map[cid] = full_name
+                            name_map.setdefault(full_name, []).append(cid)
 
                     uid = str(row.get("user_id") or "").strip()
                     if uid and full_name:
@@ -52,9 +66,16 @@ def _reload_if_needed() -> None:
 
         _cid_to_name = cid_map
         _name_to_cids = name_map
+        if configured_set:
+            _configured_cids = configured_set
         _last_mtime = mtime
     except Exception as e:
         logger.error(f"Failed to load credentials CSV mapping: {e}")
+
+def get_configured_client_ids() -> Set[str]:
+    """Returns the set of client_ids actually configured in the static CSV."""
+    _reload_if_needed()
+    return set(_configured_cids)
 
 def get_client_username(client_id: str) -> str:
     """Returns the full username for a given client_id, falling back to client_id if not mapped."""
