@@ -246,10 +246,16 @@ const ActionLogWidget = () => {
 
     return (
         <div className="action-log-widget">
-            <button className="action-log-toggle" onClick={() => setIsOpen(!isOpen)} title="Terminal log ">
-                <span style={{ fontFamily: 'monospace', fontWeight: 'bold' }}>&gt;_</span>
-                <span>Terminal</span>
-                <span className="live-dot" style={{ marginLeft: '4px', background: 'var(--green)', boxShadow: '0 0 5px var(--green)' }} />
+            <button
+                className={`action-log-toggle ${isOpen ? 'active' : ''}`}
+                onClick={() => setIsOpen(!isOpen)}
+                title="Notifications"
+                aria-label="Notifications"
+            >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                    <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                </svg>
             </button>
 
             {isOpen && (
@@ -390,10 +396,10 @@ function CustomFilterDropdown({ label, options, value, onChange, disabled }) {
         <div ref={dropdownRef} className="custom-filter-dropdown">
             <button
                 type="button"
-                className="filter-select custom-dropdown-btn"
+                className={`filter-select custom-dropdown-btn ${isOpen ? 'is-open' : ''} ${!isDefault ? 'has-active-filter' : ''}`}
                 onClick={() => !disabled && setIsOpen(prev => !prev)}
                 disabled={disabled}
-                title={label}
+                title={`${label}: ${selectedOpt ? selectedOpt.label : label}`}
                 aria-label={label}
                 aria-haspopup="listbox"
                 aria-expanded={isOpen}
@@ -1007,7 +1013,7 @@ function Dashboard({ user, onLogout }) {
                         )}
                     </button>
 
-                    <div style={{ position: 'relative', zIndex: 200, height: '36px' }}>
+                    <div style={{ position: 'relative', zIndex: 200, height: '36px', display: 'flex', alignItems: 'center' }}>
                         <ActionLogWidget />
                     </div>
 
@@ -1123,21 +1129,39 @@ function Dashboard({ user, onLogout }) {
                                     />
                                 </div>
 
-                                <select className="filter-select" value={selectedBroker} onChange={e => setSelectedBroker(e.target.value)} disabled={isActionLocked}>
-                                    <option value="ALL">All Brokers</option>
-                                    {brokersList.map(b => <option key={b} value={b}>{b}</option>)}
-                                </select>
+                                <CustomFilterDropdown
+                                    label="All Brokers"
+                                    options={[
+                                        { value: 'ALL', label: 'All Brokers' },
+                                        ...brokersList.map(b => ({ value: b, label: b }))
+                                    ]}
+                                    value={selectedBroker}
+                                    onChange={setSelectedBroker}
+                                    disabled={isActionLocked}
+                                />
 
-                                <select className="filter-select" value={selectedUser} onChange={e => setSelectedUser(e.target.value)} disabled={isActionLocked}>
-                                    <option value="ALL">All Users</option>
-                                    {usersList.map(u => <option key={u} value={u}>{u}</option>)}
-                                </select>
+                                <CustomFilterDropdown
+                                    label="All Users"
+                                    options={[
+                                        { value: 'ALL', label: 'All Users' },
+                                        ...usersList.map(u => ({ value: u, label: u }))
+                                    ]}
+                                    value={selectedUser}
+                                    onChange={setSelectedUser}
+                                    disabled={isActionLocked}
+                                />
 
-                                <select className="filter-select" value={selectedTradeType} onChange={e => setSelectedTradeType(e.target.value)} disabled={isActionLocked}>
-                                    <option value="ALL">All Trade Types</option>
-                                    <option value="BUY">BUY</option>
-                                    <option value="SELL">SELL</option>
-                                </select>
+                                <CustomFilterDropdown
+                                    label="All Trade Types"
+                                    options={[
+                                        { value: 'ALL', label: 'All Trade Types' },
+                                        { value: 'BUY', label: 'BUY' },
+                                        { value: 'SELL', label: 'SELL' }
+                                    ]}
+                                    value={selectedTradeType}
+                                    onChange={setSelectedTradeType}
+                                    disabled={isActionLocked}
+                                />
 
                                 <CustomFilterDropdown
                                     label="All Product"
@@ -1162,33 +1186,32 @@ function Dashboard({ user, onLogout }) {
                                     disabled={isActionLocked}
                                 />
                             </div>
-
-                            <div className="actions-group">
-                                <button
-                                    className="btn-close-action"
-                                    onClick={handleCloseAction}
-                                    disabled={isActionLocked || (filteredPositions.length === 0 && selectedIds.size === 0)}
-                                >
-                                    {isExiting
-                                        ? 'Dispatching...'
-                                        : (selectedIds.size > 0 ? `Close Selected (${selectedIds.size})` : 'Close All')
-                                    }
-                                </button>
-                                <button
-                                    className="btn-cancel-action"
-                                    onClick={handleCancelSelection}
-                                    disabled={isActionLocked || selectedIds.size === 0}
-                                >
-                                    Clear Selection
-                                </button>
-                            </div>
                         </div>
 
                         {/* Monitor Container */}
                         <div className="monitor-container" data-aos="fade-up" data-aos-delay="250">
                             <div className="table-meta-bar">
-                                <div className="positions-count-text">
-                                    Showing <strong>{paginatedPositions.length}</strong> of {filteredPositions.length} positions
+                                <div className="table-meta-left" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <div className="positions-count-text">
+                                        Showing <strong>{paginatedPositions.length}</strong> of {filteredPositions.length} positions
+                                    </div>
+                                    <button
+                                        className="btn-close-action"
+                                        onClick={handleCloseAction}
+                                        disabled={isActionLocked || (filteredPositions.length === 0 && selectedIds.size === 0)}
+                                    >
+                                        {isExiting
+                                            ? 'Dispatching...'
+                                            : (selectedIds.size > 0 ? `Close Selected (${selectedIds.size})` : 'Close All')
+                                        }
+                                    </button>
+                                    <button
+                                        className="btn-cancel-action"
+                                        onClick={handleCancelSelection}
+                                        disabled={isActionLocked || selectedIds.size === 0}
+                                    >
+                                        Clear Selection
+                                    </button>
                                 </div>
                                 <div className="pagination-controls">
                                     <button className="page-nav-btn" onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage <= 1}>&lt;</button>
@@ -1331,21 +1354,39 @@ function Dashboard({ user, onLogout }) {
                                     </select>
                                 </div>
 
-                                <select className="filter-select" value={executedBroker} onChange={e => setExecutedBroker(e.target.value)} disabled={isActionLocked}>
-                                    <option value="ALL">All Brokers</option>
-                                    {executedBrokersList.map(b => <option key={b} value={b}>{b}</option>)}
-                                </select>
+                                <CustomFilterDropdown
+                                    label="All Brokers"
+                                    options={[
+                                        { value: 'ALL', label: 'All Brokers' },
+                                        ...executedBrokersList.map(b => ({ value: b, label: b }))
+                                    ]}
+                                    value={executedBroker}
+                                    onChange={setExecutedBroker}
+                                    disabled={isActionLocked}
+                                />
 
-                                <select className="filter-select" value={executedUser} onChange={e => setExecutedUser(e.target.value)} disabled={isActionLocked}>
-                                    <option value="ALL">All Users</option>
-                                    {executedUsersList.map(u => <option key={u} value={u}>{u}</option>)}
-                                </select>
+                                <CustomFilterDropdown
+                                    label="All Users"
+                                    options={[
+                                        { value: 'ALL', label: 'All Users' },
+                                        ...executedUsersList.map(u => ({ value: u, label: u }))
+                                    ]}
+                                    value={executedUser}
+                                    onChange={setExecutedUser}
+                                    disabled={isActionLocked}
+                                />
 
-                                <select className="filter-select" value={executedTradeType} onChange={e => setExecutedTradeType(e.target.value)} disabled={isActionLocked}>
-                                    <option value="ALL">All Trade Types</option>
-                                    <option value="BUY">BUY</option>
-                                    <option value="SELL">SELL</option>
-                                </select>
+                                <CustomFilterDropdown
+                                    label="All Trade Types"
+                                    options={[
+                                        { value: 'ALL', label: 'All Trade Types' },
+                                        { value: 'BUY', label: 'BUY' },
+                                        { value: 'SELL', label: 'SELL' }
+                                    ]}
+                                    value={executedTradeType}
+                                    onChange={setExecutedTradeType}
+                                    disabled={isActionLocked}
+                                />
                             </div>
 
 
