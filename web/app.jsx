@@ -362,6 +362,71 @@ const getDisplayUsername = (pos) => {
     return pos.username || CLIENT_NAME_MAP[pos.client_id] || pos.client_id || pos.user_id || '';
 };
 
+const isIntradayProduct = (productType) => {
+    if (!productType) return false;
+    const pt = String(productType).toUpperCase().trim();
+    return pt === 'INTRADAY' || pt === 'MIS' || pt === 'BO' || pt === 'CO' || pt === 'I' || pt.includes('INTRADAY');
+};
+
+function CustomFilterDropdown({ label, options, value, onChange, disabled }) {
+    const [isOpen, setIsOpen] = useState(false);
+    const dropdownRef = useRef(null);
+
+    useEffect(() => {
+        const handleClickOutside = (e) => {
+            if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+                setIsOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    const selectedOpt = options.find(o => o.value === value);
+    const isDefault = options.length > 0 && options[0].value === value;
+    const displayText = isDefault ? label : (selectedOpt ? selectedOpt.label : label);
+
+    return (
+        <div ref={dropdownRef} className="custom-filter-dropdown">
+            <button
+                type="button"
+                className="filter-select custom-dropdown-btn"
+                onClick={() => !disabled && setIsOpen(prev => !prev)}
+                disabled={disabled}
+                title={label}
+                aria-label={label}
+                aria-haspopup="listbox"
+                aria-expanded={isOpen}
+            >
+                <span>{displayText}</span>
+            </button>
+
+            {isOpen && (
+                <div className="custom-dropdown-menu" role="listbox">
+                    {options.map((opt) => {
+                        const isSelected = opt.value === value;
+                        return (
+                            <button
+                                key={opt.value}
+                                type="button"
+                                role="option"
+                                aria-selected={isSelected}
+                                className={`custom-dropdown-item ${isSelected ? 'active' : ''}`}
+                                onClick={() => {
+                                    onChange(opt.value);
+                                    setIsOpen(false);
+                                }}
+                            >
+                                <span>{opt.label}</span>
+                            </button>
+                        );
+                    })}
+                </div>
+            )}
+        </div>
+    );
+}
+
 function Dashboard({ user, onLogout }) {
     // CODE FLIP FOR TESTING: Change to 'true' to force 5s polling regardless of market hours or tab visibility
     const TEST_MODE_FORCE_POLL = true;
@@ -398,6 +463,8 @@ function Dashboard({ user, onLogout }) {
     const [selectedBroker, setSelectedBroker] = useState('ALL');
     const [selectedUser, setSelectedUser] = useState('ALL');
     const [selectedTradeType, setSelectedTradeType] = useState('ALL');
+    const [selectedProduct, setSelectedProduct] = useState('INTRADAY');
+    const [selectedPnlStatus, setSelectedPnlStatus] = useState('BOTH');
 
     /* ── Selection & Pagination ── */
     const [selectedIds, setSelectedIds] = useState(new Set());
@@ -560,6 +627,19 @@ function Dashboard({ user, onLogout }) {
                 const side = (pos.transaction_type || pos.transaction || (pos.quantity > 0 ? 'BUY' : 'SELL')).toUpperCase();
                 if (side !== selectedTradeType) return false;
             }
+            if (selectedProduct === 'INTRADAY' || selectedProduct === 'Intraday') {
+                const pt = pos.product_type || pos.product || '';
+                if (!isIntradayProduct(pt)) return false;
+            } else if (selectedProduct === 'HOLDING' || selectedProduct === 'HOLDING_DAY' || selectedProduct === 'Holding Day') {
+                const pt = pos.product_type || pos.product || '';
+                if (isIntradayProduct(pt)) return false;
+            }
+            const pnlVal = typeof pos.pnl === 'number' ? pos.pnl : parseFloat(pos.pnl || 0);
+            if (selectedPnlStatus === 'GAINER' || selectedPnlStatus === 'Gainer') {
+                if (pnlVal <= 0) return false;
+            } else if (selectedPnlStatus === 'LOSER' || selectedPnlStatus === 'Loser') {
+                if (pnlVal >= 0) return false;
+            }
             if (debouncedSearchQuery.trim() !== '') {
                 const q = debouncedSearchQuery.toLowerCase().trim();
                 const matchSymbol = (pos.symbol || '').toLowerCase().includes(q);
@@ -571,10 +651,10 @@ function Dashboard({ user, onLogout }) {
             }
             return true;
         });
-    }, [positions, selectedBroker, selectedUser, selectedTradeType, debouncedSearchQuery]);
+    }, [positions, selectedBroker, selectedUser, selectedTradeType, selectedProduct, selectedPnlStatus, debouncedSearchQuery]);
 
     /* Reset to page 1 on filter change */
-    useEffect(() => { setCurrentPage(1); }, [searchQuery, selectedBroker, selectedUser, selectedTradeType]);
+    useEffect(() => { setCurrentPage(1); }, [searchQuery, selectedBroker, selectedUser, selectedTradeType, selectedProduct, selectedPnlStatus]);
 
     /* Pagination */
     const totalPages = Math.max(1, Math.ceil(filteredPositions.length / pageSize));
@@ -1058,6 +1138,29 @@ function Dashboard({ user, onLogout }) {
                                     <option value="BUY">BUY</option>
                                     <option value="SELL">SELL</option>
                                 </select>
+
+                                <CustomFilterDropdown
+                                    label="All Product"
+                                    options={[
+                                        { value: 'INTRADAY', label: 'Intraday' },
+                                        { value: 'HOLDING', label: 'Holding Day' }
+                                    ]}
+                                    value={selectedProduct}
+                                    onChange={setSelectedProduct}
+                                    disabled={isActionLocked}
+                                />
+
+                                <CustomFilterDropdown
+                                    label="P&L Status"
+                                    options={[
+                                        { value: 'BOTH', label: 'Both' },
+                                        { value: 'GAINER', label: 'Gainer' },
+                                        { value: 'LOSER', label: 'Loser' }
+                                    ]}
+                                    value={selectedPnlStatus}
+                                    onChange={setSelectedPnlStatus}
+                                    disabled={isActionLocked}
+                                />
                             </div>
 
                             <div className="actions-group">
