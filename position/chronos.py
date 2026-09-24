@@ -13,29 +13,35 @@ from logger.logger import logger_system, logger_auth
 logger = logging.getLogger(__name__)
 
 async def refresh_token_with_backoff(cred: Credential) -> bool:
-    """Auto-Refresh on 401/403 with 3 attempts, 2s then 4s backoff (plan spec)."""
+    """Attempts single-attempt credential login. If it fails, adds user to blocklist with zero auto-retries."""
     from credentials.mstock import login_mstock
     from credentials.flattrade import login_flattrade
     from credentials.aliceblue import login_aliceblue
+    from position.blocklist import add_to_blocklist, remove_from_blocklist
+    from utils.user_mapping import get_client_username
     
-    delays = [2, 4]  # sleep between attempt 1→2 and 2→3
-    for attempt in range(1, 4):  # attempts 1, 2, 3
-        try:
-            token = ""
-            if cred.broker.upper() == "MSTOCK":
-                token = await login_mstock(cred)
-            elif cred.broker.upper() == "FLATTRADE":
-                token = await login_flattrade(cred)
-            elif cred.broker.upper() in ("ALICE BLUE", "ALICEBLUE"):
-                token = await login_aliceblue(cred)
-            masked = f"{token[:10]}...{token[-10:]}" if token and len(token) > 20 else str(token)
-            await logger_auth.info(f"🔑 Loaded dynamic auth token: {masked}")
-            return True
-        except Exception as e:
-            await logger_auth.error(f"Refresh failed for {cred.broker}:{cred.client_id} on attempt {attempt}: {e}")
-            if attempt <= len(delays):
-                await asyncio.sleep(delays[attempt - 1])
-    return False
+    username = get_client_username(cred.client_id)
+    try:
+        token = ""
+        if cred.broker.upper() == "MSTOCK":
+            token = await login_mstock(cred)
+        elif cred.broker.upper() == "FLATTRADE":
+            token = await login_flattrade(cred)
+        elif cred.broker.upper() in ("ALICE BLUE", "ALICEBLUE"):
+            token = await login_aliceblue(cred)
+        masked = f"{token[:10]}...{token[-10:]}" if token and len(token) > 20 else str(token)
+        await logger_auth.info(f"🔑 Loaded dynamic auth token: {masked}")
+        remove_from_blocklist(cred.client_id)
+        return True
+    except Exception as e:
+        await logger_auth.error(f"Auth failed for {cred.broker}:{cred.client_id} ({username}): {e}")
+        add_to_blocklist(
+            client_id=cred.client_id,
+            broker=cred.broker,
+            username=username,
+            reason=str(e)
+        )
+        return False
 
 async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: list[Credential], engine) -> None:
     try:
@@ -73,6 +79,11 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                     
                 # 4. Broker Poll (All active credentials concurrently)
                 async def _poll_target(c: Credential):
+                    from position.blocklist import is_blocked
+                    if is_blocked(c.client_id):
+                        # User is in Block List - skip polling to prevent broker lockout
+                        return []
+
                     try:
                         return await broker_poll(c)
                     except PermissionError:
@@ -85,7 +96,7 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                                 await logger_system.error(f"❌ Post-refresh poll failed for {c.broker}:{c.client_id} - {e}")
                                 return []
                         else:
-                            await logger_system.error(f"❌ Exhausted refresh retries for {c.broker}:{c.client_id}. Skipping.")
+                            await logger_system.error(f"❌ Authentication failed for {c.broker}:{c.client_id}. Placed in Block List.")
                             return []
                     except Exception as e:
                         await logger_system.error(f"❌ Poll failed for {c.broker}:{c.client_id} - {e}")
@@ -109,12 +120,16 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                         )
                 else:
                     from utils.user_mapping import get_client_username
+                    from position.blocklist import is_blocked
                     for cred in credentials:
                         if not cred.client_id or not cred.client_id.strip() or cred.broker.upper() == "FAKE":
                             continue
                         username = get_client_username(cred.client_id)
                         user_label = f" ({username})" if username and username != cred.client_id else ""
-                        await logger_system.info(f"  ⏳ [{cred.broker}:{cred.client_id}{user_label}] LTP: ₹0.00 | Positions: 0 | PnL: ₹0.00 ➔ Standby")
+                        if is_blocked(cred.client_id):
+                            await logger_system.info(f"  ⛔ [{cred.broker}:{cred.client_id}{user_label}] Blocked (Check Block list in Terminal)")
+                        else:
+                            await logger_system.info(f"  ⏳ [{cred.broker}:{cred.client_id}{user_label}] LTP: ₹0.00 | Positions: 0 | PnL: ₹0.00 ➔ Standby")
                 
                 new_data = [pos.model_dump() for pos in new_data_models]
                 

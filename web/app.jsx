@@ -178,24 +178,63 @@ const ServerHealthMonitor = () => {
 const ActionLogWidget = () => {
     const [activeTab, setActiveTab] = React.useState('orders');
     const [logs, setLogs] = React.useState([]);
+    const [retryingId, setRetryingId] = React.useState(null);
+    const [actionFeedback, setActionFeedback] = React.useState(null);
+
+    const fetchLogs = React.useCallback(() => {
+        const url = activeTab === 'blocked' ? '/api/blocked-users' : `/api/logs?type=${activeTab}`;
+        fetchWithTimeout(url, {
+            timeout: 10000,
+            headers: { 'Authorization': `Bearer ${localStorage.getItem('drmt_token')}` }
+        })
+            .then(res => res.json())
+            .then(data => {
+                if (Array.isArray(data)) {
+                    setLogs(data);
+                } else if (data && Array.isArray(data.users)) {
+                    setLogs(data.users);
+                }
+            })
+            .catch(() => { });
+    }, [activeTab]);
 
     React.useEffect(() => {
-        const fetchLogs = () => {
-            fetchWithTimeout(`/api/logs?type=${activeTab}`, {
-                timeout: 10000,
-                headers: { 'Authorization': `Bearer ${localStorage.getItem('drmt_token')}` }
-            })
-                .then(res => res.json())
-                .then(data => { if (data) setLogs(data); })
-                .catch(() => { });
-        };
         fetchLogs();
         const interval = setInterval(fetchLogs, 3000);
         return () => clearInterval(interval);
-    }, [activeTab]);
+    }, [fetchLogs]);
+
+    const handleRetryBlocked = async (clientId) => {
+        if (!clientId || retryingId) return;
+        setRetryingId(clientId);
+        setActionFeedback(null);
+        try {
+            const res = await fetchWithTimeout('/api/blocked-users/retry', {
+                method: 'POST',
+                timeout: 15000,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('drmt_token')}`
+                },
+                body: JSON.stringify({ client_id: clientId })
+            });
+            const data = await res.json();
+            if (data && data.success) {
+                setActionFeedback({ type: 'success', text: data.message || 'Re-authenticated successfully!' });
+                fetchLogs();
+            } else {
+                setActionFeedback({ type: 'error', text: data?.message || 'Login failed with updated credentials' });
+                fetchLogs();
+            }
+        } catch (err) {
+            setActionFeedback({ type: 'error', text: 'Network request timed out or failed' });
+        } finally {
+            setRetryingId(null);
+        }
+    };
 
     const getLogIcon = (level, msg) => {
-        const m = msg.toLowerCase();
+        const m = (msg || '').toLowerCase();
         if (level === 'ERROR' || m.includes('fail') || m.includes('error')) return '🔴';
         if (m.includes('success') || m.includes('placed') || m.includes('verified')) return '🟢';
         if (m.includes('in progress') || m.includes('dispatch') || m.includes('starting') || m.includes('booting')) return '🔄';
@@ -224,25 +263,82 @@ const ActionLogWidget = () => {
                         </div>
                     </div>
                     <div className="action-log-tabs">
-                        <button className={`action-log-tab ${activeTab === 'orders' ? 'active' : ''}`} onClick={() => setActiveTab('orders')}>Orders</button>
-                        <button className={`action-log-tab ${activeTab === 'auth' ? 'active' : ''}`} onClick={() => setActiveTab('auth')}>Auth</button>
-                        <button className={`action-log-tab ${activeTab === 'system' ? 'active' : ''}`} onClick={() => setActiveTab('system')}>System</button>
+                        <button className={`action-log-tab ${activeTab === 'orders' ? 'active' : ''}`} onClick={() => { setActiveTab('orders'); setActionFeedback(null); }}>Orders</button>
+                        <button className={`action-log-tab ${activeTab === 'auth' ? 'active' : ''}`} onClick={() => { setActiveTab('auth'); setActionFeedback(null); }}>Auth</button>
+                        <button className={`action-log-tab ${activeTab === 'system' ? 'active' : ''}`} onClick={() => { setActiveTab('system'); setActionFeedback(null); }}>System</button>
+                        <button className={`action-log-tab ${activeTab === 'blocked' ? 'active' : ''}`} onClick={() => { setActiveTab('blocked'); setActionFeedback(null); }}>Block list</button>
                     </div>
                     <div className="action-log-content">
-                        {logs.length === 0 ? (
-                            <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '11px' }}>
-                                No recent activity
+                        {activeTab === 'blocked' ? (
+                            <div className="blocked-users-list">
+                                {actionFeedback && (
+                                    <div className={`blocked-action-feedback ${actionFeedback.type}`}>
+                                        {actionFeedback.text}
+                                    </div>
+                                )}
+                                {logs.length === 0 ? (
+                                    <div style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '11px' }}>
+                                        No blocked users
+                                    </div>
+                                ) : (
+                                    logs.map((user, i) => (
+                                        <div
+                                            key={user.client_id || i}
+                                            className="blocked-user-card"
+                                            onClick={() => handleRetryBlocked(user.client_id)}
+                                            title="Click to fetch updated credentials from static CSV and retry login"
+                                        >
+                                            <div className="blocked-user-card-header">
+                                                <div className="blocked-user-identity">
+                                                    <span className="blocked-user-badge">⛔</span>
+                                                    <span className="blocked-user-name">
+                                                        {user.username || user.client_id}
+                                                    </span>
+                                                    <span className="blocked-user-tag">
+                                                        ({user.broker}:{user.client_id})
+                                                    </span>
+                                                </div>
+                                                <button
+                                                    className="btn-retry-blocked"
+                                                    disabled={retryingId === user.client_id}
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleRetryBlocked(user.client_id);
+                                                    }}
+                                                >
+                                                    {retryingId === user.client_id ? 'Retrying...' : 'Sync & Retry ⟳'}
+                                                </button>
+                                            </div>
+                                            {user.reason && (
+                                                <div className="blocked-user-reason">
+                                                    {user.reason}
+                                                </div>
+                                            )}
+                                            {user.blocked_at && (
+                                                <div className="blocked-user-time">
+                                                    Blocked at: {user.blocked_at}
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))
+                                )}
                             </div>
                         ) : (
-                            logs.map((log, i) => (
-                                <div key={i} className="log-entry">
-                                    <div className="log-icon">{getLogIcon(log.level, log.message)}</div>
-                                    <div className="log-details">
-                                        <div className="log-message">{log.message}</div>
-                                        <div className="log-meta">{log.timestamp}</div>
-                                    </div>
+                            logs.length === 0 ? (
+                                <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '11px' }}>
+                                    No recent activity
                                 </div>
-                            ))
+                            ) : (
+                                logs.map((log, i) => (
+                                    <div key={i} className="log-entry">
+                                        <div className="log-icon">{getLogIcon(log.level, log.message)}</div>
+                                        <div className="log-details">
+                                            <div className="log-message">{log.message}</div>
+                                            <div className="log-meta">{log.timestamp}</div>
+                                        </div>
+                                    </div>
+                                ))
+                            )
                         )}
                     </div>
                 </div>

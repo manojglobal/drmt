@@ -203,11 +203,47 @@ async def get_exited_positions(request: web.Request):
 from logger.logger import logger_auth, logger_exit, logger_system, logger_monitor, logger_health
 from dataclasses import asdict
 
+def get_credentials_from_static_csv(client_id: str):
+    """Parses static/plato_client_credentials.csv on demand to extract updated credentials for a specific client_id."""
+    import os
+    import csv
+    import json
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    csv_path = os.path.join(base_dir, "static", "plato_client_credentials.csv")
+    if not os.path.exists(csv_path):
+        return None
+    try:
+        with open(csv_path, mode="r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if not row.get("broker_creds"):
+                    continue
+                try:
+                    creds = json.loads(row.get("broker_creds") or "{}")
+                    if creds.get("client_id") == client_id:
+                        return {
+                            "client_id": client_id,
+                            "password": creds.get("password") or "",
+                            "api_key": creds.get("api_key") or "",
+                            "totp_secret": creds.get("totp_secret") or "",
+                            "static_ip": str(row.get("static_ip") or "").strip(),
+                            "broker": str(row.get("broker") or "MSTOCK").strip().upper(),
+                        }
+                except Exception:
+                    continue
+    except Exception as e:
+        logger.error(f"Error reading static CSV for {client_id}: {e}")
+    return None
+
 @routes.get('/api/logs')
 async def get_logs(request: web.Request):
     """Fetches logs for the Action Log UI."""
     await require_auth(request)
     log_type = request.query.get('type', 'system')
+    
+    if log_type in ('blocked', 'blocklist'):
+        from position.blocklist import get_blocked_users
+        return web.json_response(get_blocked_users())
     
     loggers = {
         'auth': logger_auth,
@@ -221,4 +257,100 @@ async def get_logs(request: web.Request):
     history = selected_logger.get_history()
     
     return web.json_response([asdict(entry) for entry in history])
+
+@routes.get('/api/blocked-users')
+async def list_blocked_users(request: web.Request):
+    """Returns the list of all currently blocked credentials."""
+    await require_auth(request)
+    from position.blocklist import get_blocked_users
+    return web.json_response(get_blocked_users())
+
+@routes.post('/api/blocked-users/retry')
+async def retry_blocked_user(request: web.Request):
+    """
+    Fetches updated credentials from static CSV for the specified client_id,
+    synchronizes them to SQLite, and attempts 1 single login attempt.
+    """
+    await require_auth(request)
+    
+    client_id = None
+    try:
+        data = await request.json()
+        client_id = data.get("client_id")
+    except Exception:
+        pass
+    if not client_id:
+        client_id = request.query.get("client_id")
+        
+    if not client_id:
+        return web.json_response({"success": False, "message": "Missing 'client_id' parameter."}, status=400)
+        
+    client_id = str(client_id).strip()
+    username = get_client_username(client_id)
+    
+    # 1. Fetch fresh credentials from static CSV
+    fresh_creds = get_credentials_from_static_csv(client_id)
+    if not fresh_creds:
+        return web.json_response({
+            "success": False,
+            "message": f"Credential record for {client_id} ({username}) not found in static CSV.",
+            "blocked": True
+        }, status=404)
+        
+    # 2. Update SQLite credentials table with fresh static values
+    async with get_db() as db:
+        await db.execute("""
+            UPDATE credentials 
+            SET password = ?, api_key = ?, totp_secret = ?, static_ip = ?, status = 'working'
+            WHERE client_id = ?
+        """, (
+            fresh_creds["password"],
+            fresh_creds["api_key"],
+            fresh_creds["totp_secret"],
+            fresh_creds["static_ip"],
+            client_id
+        ))
+        await db.commit()
+        
+        # Load the updated record
+        db.row_factory = None
+        async with db.execute(
+            "SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE client_id = ?",
+            (client_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            
+    if not row:
+        return web.json_response({
+            "success": False,
+            "message": f"User record for {client_id} not found in database.",
+            "blocked": True
+        }, status=404)
+        
+    cred = Credential(
+        id=row[0], broker=row[1], client_id=row[2], api_key=row[3], api_secret=row[4],
+        totp_secret=row[5], password=row[6], static_ip=row[7],
+        fingerprint=row[8], status=row[9], token=row[10], token_updated_at=row[11]
+    )
+    
+    # 3. Attempt single-attempt login
+    logger.info(f"🔄 [BLOCKLIST RETRY] Attempting single login for {cred.broker}:{cred.client_id} ({username}) with updated credentials from CSV")
+    success = await refresh_token_with_backoff(cred)
+    
+    from position.blocklist import get_blocked_user
+    if success:
+        return web.json_response({
+            "success": True,
+            "message": f"Successfully authenticated {username} ({client_id}). User removed from Block List and live polling resumed.",
+            "blocked": False
+        })
+    else:
+        blocked_info = get_blocked_user(client_id)
+        reason = blocked_info.get("reason", "Authentication failed") if blocked_info else "Authentication failed"
+        return web.json_response({
+            "success": False,
+            "message": f"Login failed for {username} ({client_id}): {reason}. Keeping user in Block List.",
+            "blocked": True,
+            "error": reason
+        })
 
