@@ -3,12 +3,6 @@ import logging
 import os
 from aiohttp import web
 
-logging.basicConfig(
-    level=logging.INFO, 
-    format="%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%H:%M:%S"
-)
-
 from settings import settings
 from core.engine import core_engine
 from database.db import init_db, get_db
@@ -17,6 +11,13 @@ from health.monitor import health_monitor
 from logger.logger import logger_system, start_log_cleanup_loop
 from credentials.crypto import hash_password
 from utils.email import init_email_session, close_email_session
+from utils.user_mapping import get_client_username, get_configured_client_ids
+
+logging.basicConfig(
+    level=logging.INFO, 
+    format="%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S"
+)
 
 logger = logging.getLogger("DRMT.System")
 
@@ -37,7 +38,6 @@ async def seed_admin_user():
 
 async def display_configured_credentials():
     """Logs only configured and verified broker credentials to the terminal on startup."""
-    from utils.user_mapping import get_client_username, get_configured_client_ids
     configured_cids = get_configured_client_ids()
     async with get_db() as db:
         db.row_factory = None

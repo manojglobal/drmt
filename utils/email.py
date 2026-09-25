@@ -4,6 +4,8 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
+from settings import settings
+
 logger = logging.getLogger(__name__)
 
 async def init_email_session() -> None:
@@ -76,8 +78,6 @@ async def send_error_email(subject: str, body: str) -> None:
     """Dispatches simple, structured alert email via SMTP."""
     logger.info("SMTP Email notification triggered")
     try:
-        from settings import settings
-
         email_to = settings.EMAIL_TO.strip()
         email_from = settings.EMAIL_FROM.strip()
         host = settings.EMAIL_HOST.strip()

@@ -1,10 +1,11 @@
-import aiohttp
-from typing import Dict, Any, Optional
-from settings import settings
-from core.engine import core_engine
-
 import json
 import logging
+from typing import Dict, Any, Optional
+
+import aiohttp
+
+from settings import settings
+from core.engine import core_engine
 
 logger = logging.getLogger("DRMT.SCM")
 

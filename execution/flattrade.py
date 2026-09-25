@@ -5,6 +5,7 @@ from logger.logger import logger_exit
 from models.schemas import Credential, Position
 from core.engine import core_engine
 from credentials.httpclient import proxy_request
+from credentials.flattrade import login_flattrade
 
 logger = logging.getLogger("DRMT.SCM")
 
@@ -94,7 +95,6 @@ async def exit_flattrade(pos: Position, cred: Credential) -> bool:
                 
             emsg = str(data_obj.get("errMsg", "") or data_obj.get("emsg", "") or "").lower()
             if status in ("I", "E") or stat == "not_ok" or any(x in emsg for x in ("invalid session", "session expired", "invalid key", "not logged in", "user not logged in")):
-                from credentials.flattrade import login_flattrade
                 try:
                     await logger_exit.warn(f"🔑 Flattrade auth expired during exit for {pos.symbol}, attempting automatic re-auth...")
                     new_token = await login_flattrade(cred)

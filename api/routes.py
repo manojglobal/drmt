@@ -1,4 +1,8 @@
+import csv
+import json
 import logging
+import os
+from dataclasses import asdict
 from aiohttp import web
 from api.auth import require_auth
 from database.db import get_db
@@ -6,6 +10,8 @@ from models.schemas import Credential, Position
 from position.chronos import refresh_token_with_backoff
 from execution.engine import mass_exit
 from utils.user_mapping import get_client_username, get_client_ids_for_user, get_configured_client_ids
+from logger.logger import logger_auth, logger_exit, logger_system, logger_monitor, logger_health
+from position.blocklist import get_blocked_users, get_blocked_user
 
 logger = logging.getLogger(__name__)
 
@@ -200,14 +206,8 @@ async def get_exited_positions(request: web.Request):
     return web.json_response({"success": True, "data": result})
 
 
-from logger.logger import logger_auth, logger_exit, logger_system, logger_monitor, logger_health
-from dataclasses import asdict
-
 def get_credentials_from_static_csv(client_id: str):
     """Parses static/plato_client_credentials.csv on demand to extract updated credentials for a specific client_id."""
-    import os
-    import csv
-    import json
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     csv_path = os.path.join(base_dir, "static", "plato_client_credentials.csv")
     if not os.path.exists(csv_path):
@@ -242,7 +242,6 @@ async def get_logs(request: web.Request):
     log_type = request.query.get('type', 'system')
     
     if log_type in ('blocked', 'blocklist'):
-        from position.blocklist import get_blocked_users
         return web.json_response(get_blocked_users())
     
     loggers = {
@@ -262,7 +261,6 @@ async def get_logs(request: web.Request):
 async def list_blocked_users(request: web.Request):
     """Returns the list of all currently blocked credentials."""
     await require_auth(request)
-    from position.blocklist import get_blocked_users
     return web.json_response(get_blocked_users())
 
 @routes.post('/api/blocked-users/retry')
@@ -337,7 +335,6 @@ async def retry_blocked_user(request: web.Request):
     logger.info(f"🔄 [BLOCKLIST RETRY] Attempting single login for {cred.broker}:{cred.client_id} ({username}) with updated credentials from CSV")
     success = await refresh_token_with_backoff(cred)
     
-    from position.blocklist import get_blocked_user
     if success:
         return web.json_response({
             "success": True,

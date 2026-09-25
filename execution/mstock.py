@@ -1,11 +1,11 @@
 import json
 import logging
-from logger.logger import logger_exit
 import uuid
-from models.schemas import Credential, Position
-from credentials.httpclient import proxy_request
 
+from credentials.httpclient import proxy_request
 from execution.mstock_instruments import get_mstock_trading_symbol
+from logger.logger import logger_exit
+from models.schemas import Credential, Position
 
 logger = logging.getLogger(__name__)
 

@@ -1,10 +1,12 @@
-from aiohttp import web
 from datetime import datetime, timedelta
 import json
+
+from aiohttp import web
+
+from credentials.crypto import generate_session_token, verify_password
 from database.db import get_db
-from credentials.crypto import verify_password, generate_session_token
-from models.schemas import User
 from logger.logger import logger_auth
+from models.schemas import User
 
 routes = web.RouteTableDef()
 

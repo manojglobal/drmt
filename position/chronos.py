@@ -9,17 +9,16 @@ from aiohttp import web
 from models.schemas import Credential
 from position.adapters import broker_poll
 from logger.logger import logger_system, logger_auth
+from credentials.mstock import login_mstock
+from credentials.flattrade import login_flattrade
+from credentials.aliceblue import login_aliceblue
+from position.blocklist import add_to_blocklist, remove_from_blocklist, is_blocked
+from utils.user_mapping import get_client_username
 
 logger = logging.getLogger(__name__)
 
 async def refresh_token_with_backoff(cred: Credential) -> bool:
     """Attempts single-attempt credential login. If it fails, adds user to blocklist with zero auto-retries."""
-    from credentials.mstock import login_mstock
-    from credentials.flattrade import login_flattrade
-    from credentials.aliceblue import login_aliceblue
-    from position.blocklist import add_to_blocklist, remove_from_blocklist
-    from utils.user_mapping import get_client_username
-    
     username = get_client_username(cred.client_id)
     try:
         token = ""
@@ -79,7 +78,6 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                     
                 # 4. Broker Poll (All active credentials concurrently)
                 async def _poll_target(c: Credential):
-                    from position.blocklist import is_blocked
                     if is_blocked(c.client_id):
                         # User is in Block List - skip polling to prevent broker lockout
                         return []
@@ -119,8 +117,6 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                             f"  ⏳ [{pos.symbol}] LTP: ₹{pos.ltp:.2f} | Avg: ₹{pos.avg_price:.2f} | Qty: {pos.quantity} | PnL: {pnl_str} ({pnl_pct}) ➔ {status}"
                         )
                 else:
-                    from utils.user_mapping import get_client_username
-                    from position.blocklist import is_blocked
                     for cred in credentials:
                         if not cred.client_id or not cred.client_id.strip() or cred.broker.upper() == "FAKE":
                             continue

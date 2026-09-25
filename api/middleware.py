@@ -1,8 +1,10 @@
+from datetime import datetime
 import json
+
 from aiohttp import web
+
 from core.engine import core_engine
 from database.db import get_db
-from datetime import datetime
 
 @web.middleware
 async def rate_limit_middleware(request: web.Request, handler):

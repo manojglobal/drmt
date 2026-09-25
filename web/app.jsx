@@ -636,7 +636,7 @@ function Dashboard({ user, onLogout }) {
             if (selectedProduct === 'INTRADAY' || selectedProduct === 'Intraday') {
                 const pt = pos.product_type || pos.product || '';
                 if (!isIntradayProduct(pt)) return false;
-            } else if (selectedProduct === 'HOLDING' || selectedProduct === 'HOLDING_DAY' || selectedProduct === 'Holding Day') {
+            } else if (selectedProduct === 'HOLDING' || selectedProduct === 'HOLDING_DAY' || selectedProduct === 'Holding') {
                 const pt = pos.product_type || pos.product || '';
                 if (isIntradayProduct(pt)) return false;
             }
@@ -1151,7 +1151,7 @@ function Dashboard({ user, onLogout }) {
                                     disabled={isActionLocked}
                                 />
 
-                                <CustomFilterDropdown
+                                {/* <CustomFilterDropdown
                                     label="All Trade Types"
                                     options={[
                                         { value: 'ALL', label: 'All Trade Types' },
@@ -1161,13 +1161,13 @@ function Dashboard({ user, onLogout }) {
                                     value={selectedTradeType}
                                     onChange={setSelectedTradeType}
                                     disabled={isActionLocked}
-                                />
+                                /> */}
 
                                 <CustomFilterDropdown
                                     label="All Product"
                                     options={[
                                         { value: 'INTRADAY', label: 'Intraday' },
-                                        { value: 'HOLDING', label: 'Holding Day' }
+                                        { value: 'HOLDING', label: 'Holding' }
                                     ]}
                                     value={selectedProduct}
                                     onChange={setSelectedProduct}
@@ -1376,7 +1376,7 @@ function Dashboard({ user, onLogout }) {
                                     disabled={isActionLocked}
                                 />
 
-                                <CustomFilterDropdown
+                                {/* <CustomFilterDropdown
                                     label="All Trade Types"
                                     options={[
                                         { value: 'ALL', label: 'All Trade Types' },
@@ -1386,7 +1386,10 @@ function Dashboard({ user, onLogout }) {
                                     value={executedTradeType}
                                     onChange={setExecutedTradeType}
                                     disabled={isActionLocked}
-                                />
+                                /> */}
+
+
+
                             </div>
 
 

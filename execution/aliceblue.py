@@ -1,10 +1,11 @@
+import asyncio
 import json
 import logging
-from logger.logger import logger_exit
 import uuid
-import asyncio
-from models.schemas import Credential, Position
+
 from core.engine import core_engine
+from logger.logger import logger_exit
+from models.schemas import Credential, Position
 
 logger = logging.getLogger("DRMT.SCM")
 

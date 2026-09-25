@@ -29,6 +29,8 @@ from zoneinfo import ZoneInfo
 import aiofiles
 import aiofiles.os
 
+from utils.email import send_error_email
+
 _IST = ZoneInfo("Asia/Kolkata")
 _stdlib = logging.getLogger(__name__)
 _LOG_BASE_DIR = "data/logs"
@@ -80,7 +82,6 @@ class ServiceLogger:
         await self._log("ERROR", msg, module_override=module)
         # Fire-and-forget: never blocks, never raises to caller
         try:
-            from utils.email import send_error_email
             asyncio.create_task(
                 send_error_email(f"DRMT ERROR [{self.name}]: {module}", msg),
                 name=f"err_email_{self.name}",

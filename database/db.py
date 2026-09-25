@@ -1,8 +1,9 @@
 import asyncio
-import logging
 from contextlib import asynccontextmanager
-import aiosqlite
+import logging
 import os
+
+import aiosqlite
 
 from settings import settings
 
