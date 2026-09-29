@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 async def refresh_token_with_backoff(cred: Credential) -> bool:
     """Attempts single-attempt credential login. If it fails, adds user to blocklist with zero auto-retries."""
     username = get_client_username(cred.client_id)
+    await logger_auth.info(f"🔄 Authenticating {cred.broker}:{cred.client_id} ({username})...")
     try:
         token = ""
         if cred.broker.upper() == "MSTOCK":
@@ -28,12 +29,12 @@ async def refresh_token_with_backoff(cred: Credential) -> bool:
             token = await login_flattrade(cred)
         elif cred.broker.upper() in ("ALICE BLUE", "ALICEBLUE"):
             token = await login_aliceblue(cred)
-        masked = f"{token[:10]}...{token[-10:]}" if token and len(token) > 20 else str(token)
-        await logger_auth.info(f"🔑 Loaded dynamic auth token: {masked}")
+        masked = f"{token[:10]}...{token[-10:]}" if token and len(token) > 20 else ("***" if token else "empty")
+        await logger_auth.info(f"✅ Authentication successful for {cred.broker}:{cred.client_id} ({username}) [token: {masked}]")
         remove_from_blocklist(cred.client_id)
         return True
     except Exception as e:
-        await logger_auth.error(f"Auth failed for {cred.broker}:{cred.client_id} ({username}): {e}")
+        await logger_auth.error(f"❌ Auth failed for {cred.broker}:{cred.client_id} ({username}): {e}")
         add_to_blocklist(
             client_id=cred.client_id,
             broker=cred.broker,
@@ -100,14 +101,16 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                         await logger_system.error(f"❌ Poll failed for {c.broker}:{c.client_id} - {e}")
                         return []
 
+                t_poll_start = time.monotonic()
                 poll_batch = await asyncio.gather(*[_poll_target(c) for c in credentials], return_exceptions=True)
+                poll_duration_ms = (time.monotonic() - t_poll_start) * 1000
                 new_data_models = []
                 for res in poll_batch:
                     if isinstance(res, list):
                         new_data_models.extend(res)
                 
                 target_count = len(new_data_models) if new_data_models else len(credentials)
-                await logger_system.info(f"─── [POSITION SCAN] Scanning {target_count} Targets ───")
+                await logger_system.info(f"─── [POSITION SCAN] Scanned {target_count} Targets in {poll_duration_ms:.1f}ms ───")
                 if new_data_models:
                     for pos in new_data_models:
                         pnl_pct = f"{(pos.pnl / (pos.avg_price * abs(pos.quantity))) * 100:+.2f}%" if (pos.avg_price and pos.quantity) else "+0.00%"
@@ -137,6 +140,7 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                         timeout=3.0
                     )
                     await engine.redis_pool.set(redis_key, json.dumps(new_data))
+                    await logger_system.info(f"⚡ [POSITION PUSH] Pushed {len(new_data)} position(s) to WebSocket and synced Redis cache")
                     last_snapshot = new_data
                     
             except asyncio.TimeoutError:

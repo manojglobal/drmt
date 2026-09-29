@@ -72,6 +72,18 @@ class DatabasePool:
                                 logger.debug(f"Ignoring duplicate column error during migration 003: {e}")
                             else:
                                 raise
+
+            mig_004 = os.path.join(base_dir, "migrations", "004_auth_audit_logs.sql")
+            if os.path.exists(mig_004):
+                with open(mig_004, 'r') as f:
+                    statements = f.read().split(';')
+                    for stmt in statements:
+                        if not stmt.strip():
+                            continue
+                        try:
+                            await conn.execute(stmt)
+                        except aiosqlite.OperationalError as e:
+                            logger.debug(f"Ignoring operational error during migration 004: {e}")
             await conn.commit()
         
         self._initialized = True

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from typing import List
 
 from core.engine import core_engine
@@ -31,6 +32,9 @@ async def execute_exit_order(pos: Position, cred: Credential) -> bool:
 
 async def mass_exit(positions: List[Position], credentials: List[Credential]) -> tuple[int, List[dict]]:
     """Executes a mass exit for multiple positions concurrently through the core engine."""
+    await logger_exit.info(f"🚨 [MASS EXIT START] Initiating square-off for {len(positions)} position(s)...")
+    t0 = time.monotonic()
+    
     cred_map = {}
     for c in credentials:
         cred_map[f"{c.broker}:{c.client_id}"] = c
@@ -48,7 +52,7 @@ async def mass_exit(positions: List[Position], credentials: List[Credential]) ->
             or cred_map.get(pos.client_id)
         )
         if not cred:
-            await logger_exit.error(f"No credential found for {pos.broker}:{pos.client_id}")
+            await logger_exit.error(f"❌ No active credential found for {pos.broker}:{pos.client_id} (symbol={pos.symbol})")
             missing_results.append({
                 "broker": pos.broker,
                 "symbol": pos.symbol,
@@ -77,4 +81,8 @@ async def mass_exit(positions: List[Position], credentials: List[Credential]) ->
         })
         
     success_count = sum(1 for r in results if r["success"] is True)
+    elapsed_ms = (time.monotonic() - t0) * 1000
+    await logger_exit.info(
+        f"🏁 [MASS EXIT COMPLETE] {success_count}/{len(positions)} order(s) placed successfully in {elapsed_ms:.1f}ms"
+    )
     return success_count, results

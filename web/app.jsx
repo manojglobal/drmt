@@ -182,7 +182,14 @@ const ActionLogWidget = () => {
     const [actionFeedback, setActionFeedback] = React.useState(null);
 
     const fetchLogs = React.useCallback(() => {
-        const url = activeTab === 'blocked' ? '/api/blocked-users' : `/api/logs?type=${activeTab}`;
+        let url;
+        if (activeTab === 'blocked') {
+            url = '/api/blocked-users';
+        } else if (activeTab === 'audit') {
+            url = '/api/audit-logs?limit=50';
+        } else {
+            url = `/api/logs?type=${activeTab}`;
+        }
         fetchWithTimeout(url, {
             timeout: 10000,
             headers: { 'Authorization': `Bearer ${localStorage.getItem('drmt_token')}` }
@@ -191,6 +198,8 @@ const ActionLogWidget = () => {
             .then(data => {
                 if (Array.isArray(data)) {
                     setLogs(data);
+                } else if (data && Array.isArray(data.data)) {
+                    setLogs(data.data);
                 } else if (data && Array.isArray(data.users)) {
                     setLogs(data.users);
                 }
@@ -271,11 +280,36 @@ const ActionLogWidget = () => {
                     <div className="action-log-tabs">
                         <button className={`action-log-tab ${activeTab === 'orders' ? 'active' : ''}`} onClick={() => { setActiveTab('orders'); setActionFeedback(null); }}>Orders</button>
                         <button className={`action-log-tab ${activeTab === 'auth' ? 'active' : ''}`} onClick={() => { setActiveTab('auth'); setActionFeedback(null); }}>Auth</button>
+                        <button className={`action-log-tab ${activeTab === 'audit' ? 'active' : ''}`} onClick={() => { setActiveTab('audit'); setActionFeedback(null); }}>Audit</button>
                         <button className={`action-log-tab ${activeTab === 'system' ? 'active' : ''}`} onClick={() => { setActiveTab('system'); setActionFeedback(null); }}>System</button>
                         <button className={`action-log-tab ${activeTab === 'blocked' ? 'active' : ''}`} onClick={() => { setActiveTab('blocked'); setActionFeedback(null); }}>Block list</button>
                     </div>
                     <div className="action-log-content">
-                        {activeTab === 'blocked' ? (
+                        {activeTab === 'audit' ? (
+                            logs.length === 0 ? (
+                                <div style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '11px' }}>
+                                    No audit records found
+                                </div>
+                            ) : (
+                                logs.map((item, i) => (
+                                    <div key={item.id || i} className="log-entry audit-log-entry">
+                                        <div className="log-icon">{item.status === 'SUCCESS' ? '🟢' : '🔴'}</div>
+                                        <div className="log-details">
+                                            <div className="log-message" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                                                <span style={{ fontWeight: 600 }}>{item.action} : {item.username || 'unknown'}</span>
+                                                <span className={`badge ${item.status === 'SUCCESS' ? 'badge-success' : 'badge-danger'}`} style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px' }}>
+                                                    {item.status}
+                                                </span>
+                                            </div>
+                                            <div className="log-meta" style={{ display: 'flex', justifyContent: 'space-between', marginTop: '2px', fontSize: '11px' }}>
+                                                <span>IP: {item.ip_address || 'unknown'}{item.details ? ` (${item.details})` : ''}</span>
+                                                <span>{item.timestamp}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))
+                            )
+                        ) : activeTab === 'blocked' ? (
                             <div className="blocked-users-list">
                                 {actionFeedback && (
                                     <div className={`blocked-action-feedback ${actionFeedback.type}`}>
@@ -437,7 +471,7 @@ function Dashboard({ user, onLogout }) {
     // CODE FLIP FOR TESTING: Change to 'true' to force 5s polling regardless of market hours or tab visibility
     const TEST_MODE_FORCE_POLL = true;
 
-    // const [isVisible, setIsVisible]       = useState(!document.hidden);
+    const [isVisible, setIsVisible]         = useState(!document.hidden);
     const [pollingStatus, setPollingStatus] = useState('Active');
 
     useEffect(() => {

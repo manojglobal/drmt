@@ -47,6 +47,35 @@ class LogEntry:
     module: str      # "filename.py:lineno"
 
 
+# ─── Credential Sanitization (Zero-Leakage Guarantee) ─────────────────────────
+
+SENSITIVE_PATTERNS = [
+    # Passwords in JSON, query strings, or logs (quoted and unquoted)
+    (re.compile(r'([\"\']?password[\"\']?\s*[:=]\s*[\"\']?)([^\"\'\s,;}{]+)([\"\']?)', re.IGNORECASE), r'\g<1>***\g<3>'),
+    # TOTP secrets
+    (re.compile(r'([\"\']?totp_secret(?:_key)?[\"\']?\s*[:=]\s*[\"\']?)([^\"\'\s,;}{]+)([\"\']?)', re.IGNORECASE), r'\g<1>***\g<3>'),
+    # API keys & private keys
+    (re.compile(r'([\"\']?(?:api_key|api_secret|app_code|X-PrivateKey|private_key)[\"\']?\s*[:=]\s*[\"\']?)([^\"\'\s,;}{]+)([\"\']?)', re.IGNORECASE), r'\g<1>***\g<3>'),
+    # Access tokens and tokens
+    (re.compile(r'([\"\']?(?:access_token|token)[\"\']?\s*[:=]\s*[\"\']?)([^\"\'\s,;}{]+)([\"\']?)', re.IGNORECASE), r'\g<1>***\g<3>'),
+    # Bearer tokens: mask inner characters
+    (re.compile(r'(Bearer\s+)([A-Za-z0-9_\-\.]{6})([A-Za-z0-9_\-\.]+)([A-Za-z0-9_\-\.]{4})', re.IGNORECASE), r'\g<1>\g<2>***\g<4>'),
+    # JWT tokens in general
+    (re.compile(r'(eyJ[A-Za-z0-9_\-]{6})([A-Za-z0-9_\-\.]+)([A-Za-z0-9_\-]{4})'), r'\g<1>***\g<3>'),
+    # Flattrade jKey/susertoken
+    (re.compile(r'([\"\']?jKey[\"\']?\s*[:=]\s*[\"\']?)([^\"\'\s,;}{]+)([\"\']?)', re.IGNORECASE), r'\g<1>***\g<3>'),
+    (re.compile(r'([\"\']?susertoken[\"\']?\s*[:=]\s*[\"\']?)([^\"\'\s,;}{]+)([\"\']?)', re.IGNORECASE), r'\g<1>***\g<3>'),
+]
+
+def sanitize_log_message(msg: str) -> str:
+    """Masks sensitive credentials (passwords, tokens, TOTP secrets, API keys) from log strings."""
+    if not isinstance(msg, str):
+        msg = str(msg)
+    for pattern, repl in SENSITIVE_PATTERNS:
+        msg = pattern.sub(repl, msg)
+    return msg
+
+
 # ─── ServiceLogger ────────────────────────────────────────────────────────────
 
 class ServiceLogger:
@@ -97,6 +126,7 @@ class ServiceLogger:
 
     async def _log(self, level: str, msg: str, module_override: Optional[str] = None) -> None:
         # Internal helper that formats and writes log entries.
+        msg = sanitize_log_message(msg)
         module = module_override or self._caller_module()
         now_ist = datetime.now(tz=_IST)
         timestamp = now_ist.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
@@ -230,6 +260,8 @@ async def start_log_cleanup_loop(retention_days: int = 30, interval_hours: int =
 # ─── Module-level singletons ──────────────────────────────────────────────────
 
 logger_auth:    ServiceLogger = ServiceLogger("auth")
+logger_audit:   ServiceLogger = ServiceLogger("audit")
+logger_api:     ServiceLogger = ServiceLogger("api")
 logger_exit:    ServiceLogger = ServiceLogger("exit")
 logger_monitor: ServiceLogger = ServiceLogger("monitor")
 logger_system:  ServiceLogger = ServiceLogger("system")
@@ -239,10 +271,13 @@ __all__ = [
     "LogEntry",
     "ServiceLogger",
     "logger_auth",
+    "logger_audit",
+    "logger_api",
     "logger_exit",
     "logger_monitor",
     "logger_system",
     "logger_health",
     "cleanup_old_logs",
     "start_log_cleanup_loop",
+    "sanitize_log_message",
 ]

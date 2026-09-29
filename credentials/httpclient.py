@@ -1,11 +1,13 @@
 import json
 import logging
+import time
 from typing import Dict, Any, Optional
 
 import aiohttp
 
 from settings import settings
 from core.engine import core_engine
+from logger.logger import logger_api, sanitize_log_message
 
 logger = logging.getLogger("DRMT.SCM")
 
@@ -39,10 +41,16 @@ async def proxy_request(
     if not session:
         raise RuntimeError("Core Engine HTTP session not initialized")
         
+    t0 = time.monotonic()
+    safe_url = sanitize_log_message(url)
+    logger.info(f"📤 [PROXY REQ] {method} {safe_url} (source_ip={source_ip})")
+    await logger_api.info(f"📤 [PROXY REQ] {method} {safe_url} (source_ip={source_ip})")
+
     async with session.post(settings.DRMT_PROXY_URL, json=payload) as resp:
         try:
             resp_data = await resp.json()
             resp.raise_for_status()
+            elapsed_ms = (time.monotonic() - t0) * 1000
             
             # Check if this is wrapped by DRMT proxy
             if isinstance(resp_data, dict) and "status_code" in resp_data:
@@ -59,7 +67,9 @@ async def proxy_request(
                 resp_str = json.dumps(broker_body, default=str) if isinstance(broker_body, (dict, list)) else str(broker_body)
                 if len(resp_str) > 2000:
                     resp_str = resp_str[:2000] + "... [truncated]"
-                logger.info(f"📥 API Response: {resp_str}")
+                sanitized_resp = sanitize_log_message(resp_str)
+                logger.info(f"📥 API Response ({elapsed_ms:.1f}ms): {sanitized_resp}")
+                await logger_api.info(f"📥 [PROXY RESP] {method} {safe_url} -> HTTP {target_sc} in {elapsed_ms:.1f}ms")
                 
                 if target_sc in (401, 403):
                     raise PermissionError(f"Broker Auth Error (HTTP {target_sc}): {broker_body}")
@@ -71,13 +81,20 @@ async def proxy_request(
                 resp_str = json.dumps(resp_data, default=str)
                 if len(resp_str) > 2000:
                     resp_str = resp_str[:2000] + "... [truncated]"
-                logger.info(f"📥 API Response: {resp_str}")
+                sanitized_resp = sanitize_log_message(resp_str)
+                logger.info(f"📥 API Response ({elapsed_ms:.1f}ms): {sanitized_resp}")
+                await logger_api.info(f"📥 [PROXY RESP] {method} {safe_url} -> HTTP {resp.status} in {elapsed_ms:.1f}ms")
                 return resp_data
         except aiohttp.ContentTypeError:
+            elapsed_ms = (time.monotonic() - t0) * 1000
             resp_text = await resp.text()
-            logger.info(f"📥 API Response: {resp_text[:500]}")
+            sanitized_text = sanitize_log_message(resp_text[:500])
+            logger.info(f"📥 API Response ({elapsed_ms:.1f}ms): {sanitized_text}")
+            await logger_api.info(f"📥 [PROXY RESP] {method} {safe_url} -> HTTP {resp.status} (text) in {elapsed_ms:.1f}ms")
             resp.raise_for_status()
             return resp_text
         except Exception as e:
-            logger.error(f"❌ API Error: {e}")
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            logger.error(f"❌ API Error ({elapsed_ms:.1f}ms): {e}")
+            await logger_api.error(f"❌ [PROXY ERR] {method} {safe_url} after {elapsed_ms:.1f}ms: {e}")
             raise

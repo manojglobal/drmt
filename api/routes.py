@@ -10,8 +10,11 @@ from models.schemas import Credential, Position
 from position.chronos import refresh_token_with_backoff
 from execution.engine import mass_exit
 from utils.user_mapping import get_client_username, get_client_ids_for_user, get_configured_client_ids
-from logger.logger import logger_auth, logger_exit, logger_system, logger_monitor, logger_health
 from position.blocklist import get_blocked_users, get_blocked_user
+from logger.logger import (
+    logger_auth, logger_exit, logger_system, logger_monitor,
+    logger_health, logger_audit, logger_api
+)
 
 logger = logging.getLogger(__name__)
 
@@ -207,10 +210,15 @@ async def get_exited_positions(request: web.Request):
 
 
 def get_credentials_from_static_csv(client_id: str):
-    """Parses static/plato_client_credentials.csv on demand to extract updated credentials for a specific client_id."""
+    """Parses static CSV on demand to extract updated credentials for a specific client_id."""
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    csv_path = os.path.join(base_dir, "static", "plato_client_credentials.csv")
-    if not os.path.exists(csv_path):
+    csv_path = None
+    for fname in ("plato_client_credentials_flattrade.csv", "plato_client_credentials.csv"):
+        candidate = os.path.join(base_dir, "static", fname)
+        if os.path.exists(candidate):
+            csv_path = candidate
+            break
+    if not csv_path or not os.path.exists(csv_path):
         return None
     try:
         with open(csv_path, mode="r", encoding="utf-8") as f:
@@ -225,9 +233,10 @@ def get_credentials_from_static_csv(client_id: str):
                             "client_id": client_id,
                             "password": creds.get("password") or "",
                             "api_key": creds.get("api_key") or "",
-                            "totp_secret": creds.get("totp_secret") or "",
+                            "totp_secret": creds.get("totp_secret") or creds.get("totp_secret_key") or "",
                             "static_ip": str(row.get("static_ip") or "").strip(),
                             "broker": str(row.get("broker") or "MSTOCK").strip().upper(),
+                            "token": creds.get("access_token") or creds.get("token") or "",
                         }
                 except Exception:
                     continue
@@ -246,6 +255,8 @@ async def get_logs(request: web.Request):
     
     loggers = {
         'auth': logger_auth,
+        'audit': logger_audit,
+        'api': logger_api,
         'orders': logger_exit,
         'system': logger_system,
         'monitor': logger_monitor,
@@ -256,6 +267,43 @@ async def get_logs(request: web.Request):
     history = selected_logger.get_history()
     
     return web.json_response([asdict(entry) for entry in history])
+
+@routes.get('/api/audit-logs')
+async def get_audit_logs(request: web.Request):
+    """
+    Returns structured login/logout audit trail from SQLite auth_audit_logs table.
+    Supports limit, offset, action, username, status filter.
+    """
+    await require_auth(request)
+    limit = int(request.query.get("limit", 100))
+    offset = int(request.query.get("offset", 0))
+    action_filter = request.query.get("action")
+    status_filter = request.query.get("status")
+    username_filter = request.query.get("username")
+    
+    query = "SELECT id, timestamp, username, action, status, ip_address, user_agent, details FROM auth_audit_logs WHERE 1=1"
+    params = []
+    
+    if action_filter:
+        query += " AND action = ?"
+        params.append(action_filter)
+    if status_filter:
+        query += " AND status = ?"
+        params.append(status_filter)
+    if username_filter:
+        query += " AND username = ?"
+        params.append(username_filter)
+        
+    query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+    
+    async with get_db() as db:
+        async with db.execute(query, params) as cursor:
+            columns = [desc[0] for desc in cursor.description]
+            rows = await cursor.fetchall()
+            logs = [dict(zip(columns, row)) for row in rows]
+            
+    return web.json_response({"success": True, "data": logs, "total": len(logs)})
 
 @routes.get('/api/blocked-users')
 async def list_blocked_users(request: web.Request):
@@ -297,17 +345,31 @@ async def retry_blocked_user(request: web.Request):
         
     # 2. Update SQLite credentials table with fresh static values
     async with get_db() as db:
-        await db.execute("""
-            UPDATE credentials 
-            SET password = ?, api_key = ?, totp_secret = ?, static_ip = ?, status = 'working'
-            WHERE client_id = ?
-        """, (
-            fresh_creds["password"],
-            fresh_creds["api_key"],
-            fresh_creds["totp_secret"],
-            fresh_creds["static_ip"],
-            client_id
-        ))
+        if fresh_creds.get("token"):
+            await db.execute("""
+                UPDATE credentials 
+                SET password = ?, api_key = ?, totp_secret = ?, static_ip = ?, status = 'working', token = ?, token_updated_at = datetime('now', 'localtime')
+                WHERE client_id = ?
+            """, (
+                fresh_creds["password"],
+                fresh_creds["api_key"],
+                fresh_creds["totp_secret"],
+                fresh_creds["static_ip"],
+                fresh_creds["token"],
+                client_id
+            ))
+        else:
+            await db.execute("""
+                UPDATE credentials 
+                SET password = ?, api_key = ?, totp_secret = ?, static_ip = ?, status = 'working'
+                WHERE client_id = ?
+            """, (
+                fresh_creds["password"],
+                fresh_creds["api_key"],
+                fresh_creds["totp_secret"],
+                fresh_creds["static_ip"],
+                client_id
+            ))
         await db.commit()
         
         # Load the updated record

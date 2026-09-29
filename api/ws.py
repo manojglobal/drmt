@@ -2,11 +2,12 @@ import logging
 import json
 import time
 from aiohttp import web
-from api.auth import require_auth
+from api.auth import require_auth, get_client_ip
 from core.engine import core_engine
 from database.db import get_db
 from models.schemas import Credential
 from utils.user_mapping import get_configured_client_ids
+from logger.logger import logger_api, logger_system
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,10 @@ async def websocket_handler(request: web.Request):
         )
         credentials.append(cred)
     
+    client_ip = get_client_ip(request)
+    logger.info(f"🔌 [WS CONNECT] Client connected: user={user.username} (id={user.id}) from {client_ip}, active_creds={len(credentials)}")
+    await logger_api.info(f"🔌 [WS CONNECT] user={user.username} (id={user.id}) ip={client_ip} creds={len(credentials)}")
+
     # Unique User Management: Core Engine handles cancelling old tasks
     await core_engine.spawn_user(str(user.id), ws, credentials)
     
@@ -79,6 +84,7 @@ async def websocket_handler(request: web.Request):
         logger.error(f"WebSocket Exception in async for loop: {e}")
         pass  # swallow disconnect errors - chronos loop handles cleanup
         
-    logger.info(f"WebSocket loop ended for user {user.id}. closed={ws.closed}, close_code={ws.close_code}")
+    logger.info(f"🔌 [WS DISCONNECT] Client disconnected: user={user.username} (id={user.id}), closed={ws.closed}, close_code={ws.close_code}")
+    await logger_api.info(f"🔌 [WS DISCONNECT] user={user.username} (id={user.id}) code={ws.close_code}")
         
     return ws

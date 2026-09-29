@@ -61,3 +61,15 @@ class SystemLog(BaseModel):
     level: str
     message: str
     module: str
+
+class AuthAuditLog(BaseModel):
+    id: Optional[int] = None
+    user_id: Optional[int] = None
+    username: str
+    action: str
+    status: str
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    details: Optional[str] = None
+    timestamp: Optional[str] = None
+

@@ -21,7 +21,11 @@ _last_mtime: float = 0.0
 
 def _get_csv_path() -> str:
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base_dir, "static", "plato_client_credentials.csv")
+    for fname in ("plato_client_credentials_flattrade.csv", "plato_client_credentials.csv"):
+        candidate = os.path.join(base_dir, "static", fname)
+        if os.path.exists(candidate):
+            return candidate
+    return os.path.join(base_dir, "static", "plato_client_credentials_flattrade.csv")
 
 def _reload_if_needed() -> None:
     global _cid_to_name, _name_to_cids, _configured_cids, _last_mtime
@@ -67,7 +71,7 @@ def _reload_if_needed() -> None:
         _cid_to_name = cid_map
         _name_to_cids = name_map
         if configured_set:
-            _configured_cids = configured_set
+            _configured_cids = set(DEFAULT_CLIENT_NAMES.keys()) | configured_set
         _last_mtime = mtime
     except Exception as e:
         logger.error(f"Failed to load credentials CSV mapping: {e}")
