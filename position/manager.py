@@ -28,13 +28,18 @@ class PositionManager:
                 or raw.get("TrdSym")
                 or "UNKNOWN"
             )
-            qty = int(
-                raw.get("netQuantity")
+            qty_raw = (
+                raw.get("netQty")
+                or raw.get("netQuantity")
                 or raw.get("quantity")
                 or raw.get("netqty")
                 or raw.get("Netqty")
                 or 0
             )
+            try:
+                qty = int(qty_raw)
+            except (ValueError, TypeError):
+                qty = 0
             
             # Rule: Zero-Qty -> actively skip/delete from tracking
             if qty == 0:
@@ -49,6 +54,11 @@ class PositionManager:
                 or ""
             )
             raw_exch_upper = str(raw_exch).strip().upper()
+            if not raw_exch_upper and ":" in symbol:
+                prefix = symbol.split(":")[0].upper()
+                if prefix in ("NSE", "BSE", "MCX", "BFO", "NFO", "CDS", "BCD"):
+                    raw_exch_upper = prefix
+
             payload_str = str(raw).upper()
 
             # Rule: If payload contains BSE or BFO, display whichever is present.
@@ -64,21 +74,22 @@ class PositionManager:
             product = (
                 raw.get("product")
                 or raw.get("product_type")
+                or raw.get("productType")
                 or raw.get("producttype")
                 or raw.get("prd")
                 or raw.get("Pcode")
                 or ""
             )
             prod_upper = str(product).upper()
-            if prod_upper in ("I", "MIS"):
+            if prod_upper in ("I", "MIS", "INTRADAY"):
                 product = "INTRADAY"
-            elif prod_upper in ("C", "DELIVERY"):
+            elif prod_upper in ("C", "DELIVERY", "CNC"):
                 product = "CNC"
-            elif prod_upper in ("M", "CARRYFORWARD", "NORMAL"):
+            elif prod_upper in ("M", "CARRYFORWARD", "NORMAL", "MARGIN", "NRML"):
                 product = "NRML"
-            elif prod_upper == "B":
+            elif prod_upper in ("B", "BO"):
                 product = "BO"
-            elif prod_upper == "H":
+            elif prod_upper in ("H", "CO"):
                 product = "CO"
             order_type = raw.get("order_type") or ""
             
@@ -105,6 +116,8 @@ class PositionManager:
             # Extract valid non-zero average entry price
             avg_price = 0.0
             avg_candidates = [
+                raw.get("netAvg"),
+                raw.get("avgPrice"),
                 raw.get("avgnetprice"),
                 raw.get("netAveragePrice"),
                 raw.get("netavgprc"),
@@ -150,6 +163,7 @@ class PositionManager:
 
             pnl = 0.0
             pnl_candidates = [
+                raw.get("pl"),
                 raw.get("pnl"),
                 raw.get("unrealizedPnl"),
                 raw.get("realizedPnl"),
@@ -184,6 +198,7 @@ class PositionManager:
                 or raw.get("symboltoken")
                 or raw.get("sym")
                 or raw.get("Token")
+                or raw.get("id")
                 or ""
             )
             

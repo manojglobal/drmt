@@ -7,6 +7,7 @@ from core.engine import core_engine
 from execution.aliceblue import exit_aliceblue
 from execution.flattrade import exit_flattrade
 from execution.mstock import exit_mstock
+from execution.fyers import exit_fyers
 from logger.logger import logger_exit
 from models.schemas import Credential, Position
 
@@ -22,6 +23,8 @@ async def execute_exit_order(pos: Position, cred: Credential) -> bool:
                 return await exit_aliceblue(pos, cred)
             elif cred.broker.upper() == "FLATTRADE":
                 return await exit_flattrade(pos, cred)
+            elif cred.broker.upper() == "FYERS":
+                return await exit_fyers(pos, cred)
             else:
                 await logger_exit.warn(f"Unknown broker for exit: {cred.broker}")
                 return False

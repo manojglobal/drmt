@@ -8,6 +8,7 @@ from credentials.httpclient import proxy_request
 from core.engine import core_engine
 from position.manager import PositionManager
 from execution.mstock_instruments import ensure_mstock_instruments_cached
+from credentials.fyers import get_fyers_auth_header
 from logger.logger import logger_system
 
 logger = logging.getLogger("DRMT.SCM")
@@ -222,6 +223,69 @@ async def poll_aliceblue(cred: Credential) -> List[Position]:
         raise RuntimeError(f"AliceBlue Poll Error: {e}")
 
 
+async def poll_fyers(cred: Credential) -> List[Position]:
+    """Fyers Position Polling (Direct or via DRMT Proxy)."""
+    url = "https://api-t1.fyers.in/api/v3/positions"
+    auth_header = get_fyers_auth_header(cred)
+    if not auth_header:
+        raise PermissionError(f"Fyers Auth Error: no token available for {cred.client_id}")
+
+    headers = {
+        "Authorization": auth_header,
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (DRMT Fyers Adapter)"
+    }
+
+    try:
+        if cred.static_ip:
+            resp = await proxy_request("GET", url, str(cred.static_ip), headers=headers)
+        else:
+            session = core_engine.http_session
+            if not session:
+                raise RuntimeError("HTTP session not initialized")
+            async with session.get(url, headers=headers) as r:
+                if r.status in (401, 403):
+                    raise PermissionError(f"Fyers Auth Error: HTTP {r.status}")
+                resp = await r.json(content_type=None)
+
+        if isinstance(resp, str):
+            try:
+                resp = json.loads(resp)
+            except Exception:
+                resp = {}
+
+        if isinstance(resp, dict):
+            code_val = resp.get("code")
+            s_val = str(resp.get("s", "")).lower()
+            msg = str(resp.get("message") or resp.get("errMsg") or "").lower()
+
+            if code_val in (401, 403) or any(x in msg for x in ("token expired", "invalid token", "unauthorized", "session expired")):
+                raise PermissionError(f"Fyers Auth Error for {cred.client_id}: {msg} (code={code_val})")
+
+            raw_list = resp.get("netPositions") or resp.get("positions") or []
+            if not isinstance(raw_list, list):
+                raw_list = []
+        elif isinstance(resp, list):
+            raw_list = resp
+        else:
+            raw_list = []
+
+        if raw_list:
+            payload_str = json.dumps(raw_list, default=str)
+            if _last_raw_payloads.get(f"fyers:{cred.client_id}") != payload_str:
+                _last_raw_payloads[f"fyers:{cred.client_id}"] = payload_str
+                log_snippet = payload_str[:10000] + ("... [truncated]" if len(payload_str) > 10000 else "")
+                await logger_system.info(f"📥 [Fyers Positions Payload] ({cred.client_id}): {log_snippet}")
+        else:
+            _last_raw_payloads.pop(f"fyers:{cred.client_id}", None)
+
+        return PositionManager.normalize_positions(raw_list, cred.broker, cred.client_id)
+    except Exception as e:
+        if "401" in str(e) or "403" in str(e) or isinstance(e, PermissionError):
+            raise PermissionError(f"Fyers Auth Error: {e}")
+        raise
+
+
 async def broker_poll(cred: Credential) -> List[Position]:
     """Router for broker polling based on credential."""
     if cred.broker.upper() == "FAKE":
@@ -232,6 +296,8 @@ async def broker_poll(cred: Credential) -> List[Position]:
         return await poll_flattrade(cred)
     elif cred.broker.upper() in ("ALICE BLUE", "ALICEBLUE"):
         return await poll_aliceblue(cred)
+    elif cred.broker.upper() == "FYERS":
+        return await poll_fyers(cred)
     else:
         logger.warning(f"Unknown broker: {cred.broker}")
         return []

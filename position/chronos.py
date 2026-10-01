@@ -12,6 +12,7 @@ from logger.logger import logger_system, logger_auth
 from credentials.mstock import login_mstock
 from credentials.flattrade import login_flattrade
 from credentials.aliceblue import login_aliceblue
+from credentials.fyers import login_fyers
 from position.blocklist import add_to_blocklist, remove_from_blocklist, is_blocked
 from utils.user_mapping import get_client_username
 
@@ -29,6 +30,8 @@ async def refresh_token_with_backoff(cred: Credential) -> bool:
             token = await login_flattrade(cred)
         elif cred.broker.upper() in ("ALICE BLUE", "ALICEBLUE"):
             token = await login_aliceblue(cred)
+        elif cred.broker.upper() == "FYERS":
+            token = await login_fyers(cred)
         masked = f"{token[:10]}...{token[-10:]}" if token and len(token) > 20 else ("***" if token else "empty")
         await logger_auth.info(f"✅ Authentication successful for {cred.broker}:{cred.client_id} ({username}) [token: {masked}]")
         remove_from_blocklist(cred.client_id)

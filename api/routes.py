@@ -232,7 +232,7 @@ def get_credentials_from_static_csv(client_id: str):
                         return {
                             "client_id": client_id,
                             "password": creds.get("password") or "",
-                            "api_key": creds.get("api_key") or "",
+                            "api_key": creds.get("api_key") or creds.get("app_id") or "",
                             "totp_secret": creds.get("totp_secret") or creds.get("totp_secret_key") or "",
                             "static_ip": str(row.get("static_ip") or "").strip(),
                             "broker": str(row.get("broker") or "MSTOCK").strip().upper(),
