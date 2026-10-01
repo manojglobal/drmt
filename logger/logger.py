@@ -30,10 +30,11 @@ import aiofiles
 import aiofiles.os
 
 from utils.email import send_error_email
+from utils.paths import get_app_dir
 
 _IST = ZoneInfo("Asia/Kolkata")
 _stdlib = logging.getLogger(__name__)
-_LOG_BASE_DIR = "data/logs"
+_LOG_BASE_DIR = os.path.join(get_app_dir(), "data", "logs")
 
 
 # ─── Data structures ─────────────────────────────────────────────────────────

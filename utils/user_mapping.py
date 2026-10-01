@@ -20,7 +20,8 @@ _configured_cids: Set[str] = set(DEFAULT_CLIENT_NAMES.keys())
 _last_mtime: float = 0.0
 
 def _get_csv_path() -> str:
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    from utils.paths import get_app_dir
+    base_dir = get_app_dir()
     for fname in ("plato_client_credentials_flattrade.csv", "plato_client_credentials.csv"):
         candidate = os.path.join(base_dir, "static", fname)
         if os.path.exists(candidate):

@@ -1,4 +1,8 @@
+import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from utils.paths import get_app_dir
+
+_env_path = os.path.join(get_app_dir(), ".env")
 
 class Settings(BaseSettings):
     DB_PATH: str = "data/drmt.db"
@@ -21,6 +25,6 @@ class Settings(BaseSettings):
     CONFIG_ME_URL: str = "https://config.me/api/credentials"
     CONFIG_ME_API_KEY: str = ""
     
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_env_path, env_file_encoding="utf-8", extra="ignore")
 
 settings = Settings()

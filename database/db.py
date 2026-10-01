@@ -22,9 +22,10 @@ class DatabasePool:
         if self._initialized:
             return
 
-        # Resolve absolute path relative to project root so CWD doesn't matter
+        # Resolve absolute path relative to project root or app dir so CWD doesn't matter
+        from utils.paths import get_bundle_dir, get_app_dir
         if not os.path.isabs(self.db_path):
-            base_dir_root = os.path.dirname(os.path.dirname(__file__))
+            base_dir_root = get_app_dir()
             self.db_path = os.path.join(base_dir_root, self.db_path)
 
         db_dir = os.path.dirname(self.db_path)
@@ -35,10 +36,10 @@ class DatabasePool:
             await conn.execute("PRAGMA journal_mode=WAL;")
             await conn.execute("PRAGMA foreign_keys=ON;")
             
-            # Read migrations
-            base_dir = os.path.dirname(os.path.dirname(__file__))
-            mig_001 = os.path.join(base_dir, "migrations", "001_init.sql")
-            mig_002 = os.path.join(base_dir, "migrations", "002_credentials_extended.sql")
+            # Read migrations from bundled resource directory
+            bundle_dir = get_bundle_dir()
+            mig_001 = os.path.join(bundle_dir, "migrations", "001_init.sql")
+            mig_002 = os.path.join(bundle_dir, "migrations", "002_credentials_extended.sql")
 
             if os.path.exists(mig_001):
                 with open(mig_001, 'r') as f:
@@ -58,7 +59,7 @@ class DatabasePool:
                             else:
                                 raise
 
-            mig_003 = os.path.join(base_dir, "migrations", "003_token_columns.sql")
+            mig_003 = os.path.join(bundle_dir, "migrations", "003_token_columns.sql")
             if os.path.exists(mig_003):
                 with open(mig_003, 'r') as f:
                     statements = f.read().split(';')
@@ -73,7 +74,7 @@ class DatabasePool:
                             else:
                                 raise
 
-            mig_004 = os.path.join(base_dir, "migrations", "004_auth_audit_logs.sql")
+            mig_004 = os.path.join(bundle_dir, "migrations", "004_auth_audit_logs.sql")
             if os.path.exists(mig_004):
                 with open(mig_004, 'r') as f:
                     statements = f.read().split(';')

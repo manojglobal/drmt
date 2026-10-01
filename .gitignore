@@ -4,6 +4,8 @@ drmt.exe
 *.exe
 *.out
 *.app
+build/
+dist/
 
 # Database files
 drmt.db

@@ -124,21 +124,15 @@ def create_app() -> web.Application:
     # Health check route
     app.router.add_get('/api/health', lambda request: web.json_response(health_monitor.get_server_status()))
     
-    # Register Static Files (React SPA)
-    # web/ lives at project root: /opt/drmt/drmt/web
-    project_root = os.path.dirname(os.path.abspath(__file__))
-    web_dir = os.path.join(project_root, "web")
-    os.makedirs(web_dir, exist_ok=True)
-    index_path = os.path.join(web_dir, "index.html")
-    if not os.path.exists(index_path):
-        with open(index_path, "w") as f:
-            f.write("<html><body><h1>DRMT V2 — Frontend Setup Required</h1></body></html>")
-
-    app.router.add_static('/', web_dir, name='static', show_index=True)
+    # Register Embedded Frontend (In-Memory React SPA)
+    from web.embedded import setup_embedded_frontend
+    setup_embedded_frontend(app)
     
     return app
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     app = create_app()
     # Disable aiohttp access logs to prevent terminal spam from constant UI polling
     web.run_app(app, host="0.0.0.0", port=8000, access_log=None, print=logger.info)

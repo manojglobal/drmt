@@ -211,7 +211,8 @@ async def get_exited_positions(request: web.Request):
 
 def get_credentials_from_static_csv(client_id: str):
     """Parses static CSV on demand to extract updated credentials for a specific client_id."""
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    from utils.paths import get_app_dir
+    base_dir = get_app_dir()
     csv_path = None
     for fname in ("plato_client_credentials_flattrade.csv", "plato_client_credentials.csv"):
         candidate = os.path.join(base_dir, "static", fname)

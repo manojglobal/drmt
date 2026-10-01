@@ -33,6 +33,18 @@ async def rate_limit_middleware(request: web.Request, handler):
                 f"[HTTP] {request.method} {request.path} -> {response.status} ({elapsed_ms:.1f}ms) [{user_identifier}]"
             )
         return response
+    except web.HTTPException as ex:
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        if request.path.startswith("/api"):
+            if ex.status < 500:
+                await logger_api.info(
+                    f"[HTTP] {request.method} {request.path} -> {ex.status} ({elapsed_ms:.1f}ms) [{user_identifier}]"
+                )
+            else:
+                await logger_api.error(
+                    f"[HTTP] {request.method} {request.path} -> EXCEPTION {type(ex).__name__}: {ex} ({elapsed_ms:.1f}ms) [{user_identifier}]"
+                )
+        raise
     except Exception as e:
         elapsed_ms = (time.monotonic() - t0) * 1000
         if request.path.startswith("/api"):
