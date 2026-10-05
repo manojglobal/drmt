@@ -18,9 +18,6 @@ if not exist "dist\drmt\static" mkdir "dist\drmt\static"
 if not exist "dist\drmt\data" mkdir "dist\drmt\data"
 if not exist "dist\drmt\data\logs" mkdir "dist\drmt\data\logs"
 
-if exist "static\plato_client_credentials_flattrade.csv" (
-    copy /Y "static\plato_client_credentials_flattrade.csv" "dist\drmt\static\"
-)
 if exist "data\drmt.db" (
     copy /Y "data\drmt.db" "dist\drmt\data\"
 )

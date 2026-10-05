@@ -43,11 +43,15 @@ async def websocket_handler(request: web.Request):
         pass
         
     configured_cids = get_configured_client_ids()
+    # Only include brokers the engine can actually poll
+    SUPPORTED_BROKERS = {"MSTOCK", "FLATTRADE", "ALICE BLUE", "ALICEBLUE", "FYERS"}
     credentials = []
     for row in rows:
         broker_name = str(row[1] or "").strip().upper()
         cid = str(row[2] or "").strip()
         if not broker_name or broker_name == "FAKE" or not cid:
+            continue
+        if broker_name not in SUPPORTED_BROKERS:
             continue
         if configured_cids and cid not in configured_cids:
             continue

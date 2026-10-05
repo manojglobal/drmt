@@ -26,10 +26,6 @@ echo ""
 echo "[3/3] Preparing deployment folders..."
 mkdir -p dist/drmt/static dist/drmt/data/logs
 
-if [ -f "static/plato_client_credentials_flattrade.csv" ]; then
-    cp -f "static/plato_client_credentials_flattrade.csv" "dist/drmt/static/"
-fi
-
 if [ -f "data/drmt.db" ]; then
     cp -f "data/drmt.db" "dist/drmt/data/drmt.db"
 fi

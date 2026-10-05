@@ -3,7 +3,7 @@ import json
 import logging
 import random
 import time
-from typing import Optional
+from typing import Optional, Dict, Tuple
 
 from aiohttp import web
 from models.schemas import Credential
@@ -17,6 +17,10 @@ from position.blocklist import add_to_blocklist, remove_from_blocklist, is_block
 from utils.user_mapping import get_client_username
 
 logger = logging.getLogger(__name__)
+
+# Track poll errors to throttle repeated console logs for persistent failures
+_POLL_ERROR_THROTTLE_SEC = 30.0
+_last_poll_errors: Dict[str, Tuple[str, float]] = {}  # client_id -> (clean_err, timestamp)
 
 async def refresh_token_with_backoff(cred: Credential) -> bool:
     """Attempts single-attempt credential login. If it fails, adds user to blocklist with zero auto-retries."""
@@ -37,12 +41,23 @@ async def refresh_token_with_backoff(cred: Credential) -> bool:
         remove_from_blocklist(cred.client_id)
         return True
     except Exception as e:
+        err_msg = str(e)
+        # Transient network / gateway errors (500, 502, 503, 504, Timeout) should NOT trigger blocklist
+        is_transient = any(
+            code in err_msg
+            for code in ("500", "502", "503", "504", "Bad Gateway", "Gateway Timeout", "Timeout", "Connection reset", "Connection refused", "IA500", "Internal Server Error")
+        ) or isinstance(e, (asyncio.TimeoutError, ConnectionError))
+
+        if is_transient:
+            await logger_auth.warn(f"⚠️  Transient network error authenticating {cred.broker}:{cred.client_id} ({username}): {e} (skipping blocklist)")
+            return False
+
         await logger_auth.error(f"❌ Auth failed for {cred.broker}:{cred.client_id} ({username}): {e}")
         add_to_blocklist(
             client_id=cred.client_id,
             broker=cred.broker,
             username=username,
-            reason=str(e)
+            reason=err_msg
         )
         return False
 
@@ -87,21 +102,51 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                         return []
 
                     try:
-                        return await broker_poll(c)
+                        res = await broker_poll(c)
+                        if c.client_id in _last_poll_errors:
+                            _last_poll_errors.pop(c.client_id, None)
+                            await logger_system.info(f"✅ Connection restored for {c.broker}:{c.client_id}")
+                        return res
                     except PermissionError:
                         await logger_auth.warn(f"🔑 Auth token expired for {c.broker}:{c.client_id} ➔ Refreshing")
                         success = await refresh_token_with_backoff(c)
                         if success:
                             try:
-                                return await broker_poll(c)
+                                res = await broker_poll(c)
+                                if c.client_id in _last_poll_errors:
+                                    _last_poll_errors.pop(c.client_id, None)
+                                    await logger_system.info(f"✅ Connection restored for {c.broker}:{c.client_id}")
+                                return res
                             except Exception as e:
-                                await logger_system.error(f"❌ Post-refresh poll failed for {c.broker}:{c.client_id} - {e}")
+                                now = time.monotonic()
+                                err_str = str(e)
+                                prev = _last_poll_errors.get(c.client_id)
+                                if not prev or prev[0] != err_str or (now - prev[1]) >= _POLL_ERROR_THROTTLE_SEC:
+                                    _last_poll_errors[c.client_id] = (err_str, now)
+                                    await logger_system.error(f"❌ Post-refresh poll failed for {c.broker}:{c.client_id} - {e}")
                                 return []
                         else:
-                            await logger_system.error(f"❌ Authentication failed for {c.broker}:{c.client_id}. Placed in Block List.")
+                            if is_blocked(c.client_id):
+                                await logger_system.error(f"❌ Authentication failed for {c.broker}:{c.client_id}. Placed in Block List.")
+                            else:
+                                await logger_system.warn(f"⚠️  Temporary refresh failure for {c.broker}:{c.client_id} - will retry next cycle.")
                             return []
                     except Exception as e:
-                        await logger_system.error(f"❌ Poll failed for {c.broker}:{c.client_id} - {e}")
+                        err_str = str(e)
+                        is_transient = any(
+                            code in err_str
+                            for code in ("500", "502", "503", "504", "Bad Gateway", "Gateway Timeout", "Timeout", "Connection reset", "Connection refused", "IA500", "Internal Server Error")
+                        ) or isinstance(e, (asyncio.TimeoutError, ConnectionError))
+
+                        now = time.monotonic()
+                        prev = _last_poll_errors.get(c.client_id)
+                        # Throttle consecutive identical errors for 30s per account
+                        if not prev or prev[0] != err_str or (now - prev[1]) >= _POLL_ERROR_THROTTLE_SEC:
+                            _last_poll_errors[c.client_id] = (err_str, now)
+                            if is_transient:
+                                await logger_system.warn(f"⚠️  Poll transient error for {c.broker}:{c.client_id} - {e}")
+                            else:
+                                await logger_system.error(f"❌ Poll failed for {c.broker}:{c.client_id} - {e}")
                         return []
 
                 t_poll_start = time.monotonic()

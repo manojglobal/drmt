@@ -1,12 +1,19 @@
 import asyncio
 import logging
 import smtplib
+import time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from typing import Dict
 
 from settings import settings
 
 logger = logging.getLogger(__name__)
+
+# Throttle: max 1 concurrent SMTP connection + 30-second subject dedup
+_EMAIL_SEMAPHORE = asyncio.Semaphore(1)
+_RECENT_SUBJECTS: Dict[str, float] = {}
+_EMAIL_DEDUP_SECONDS = 30
 
 async def init_email_session() -> None:
     pass
@@ -75,8 +82,18 @@ def _send_email_sync(subject: str, plain_body: str, html_body: str, email_to: st
         server.quit()
 
 async def send_error_email(subject: str, body: str) -> None:
-    """Dispatches simple, structured alert email via SMTP."""
-    logger.info("SMTP Email notification triggered")
+    """Dispatches simple, structured alert email via SMTP.
+
+    Throttled: max 1 concurrent SMTP connection; duplicate subjects
+    are suppressed for _EMAIL_DEDUP_SECONDS seconds.
+    """
+    # Dedup: skip if same subject was sent recently
+    now = time.monotonic()
+    last_sent = _RECENT_SUBJECTS.get(subject, 0.0)
+    if now - last_sent < _EMAIL_DEDUP_SECONDS:
+        return
+
+    logger.debug("SMTP Email notification triggered")
     try:
         email_to = settings.EMAIL_TO.strip()
         email_from = settings.EMAIL_FROM.strip()
@@ -95,20 +112,29 @@ async def send_error_email(subject: str, body: str) -> None:
 
         plain_text, html_content = format_drmt_email(subject, body)
 
-        logger.info("SMTP email provider request started")
-        await asyncio.to_thread(
-            _send_email_sync,
-            subject,
-            plain_text,
-            html_content,
-            email_to,
-            email_from,
-            host,
-            port,
-            user,
-            password
-        )
-        logger.info("Email notification sent successfully via SMTP")
+        # Throttle: only 1 SMTP connection at a time
+        async with _EMAIL_SEMAPHORE:
+            # Re-check dedup after acquiring semaphore (another coroutine may have just sent)
+            now = time.monotonic()
+            if now - _RECENT_SUBJECTS.get(subject, 0.0) < _EMAIL_DEDUP_SECONDS:
+                logger.debug(f"SMTP dedup (post-lock): suppressing '{subject}'")
+                return
+
+            _RECENT_SUBJECTS[subject] = now
+            logger.debug("SMTP email provider request started")
+            await asyncio.to_thread(
+                _send_email_sync,
+                subject,
+                plain_text,
+                html_content,
+                email_to,
+                email_from,
+                host,
+                port,
+                user,
+                password
+            )
+            logger.debug("Email notification sent successfully via SMTP")
 
     except Exception as e:
         logger.error(f"Email notification failed: {e}")

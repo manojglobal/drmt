@@ -1,155 +1,156 @@
 # DRMT V2 — PROJECT CONTEXT
 
-> **Disaster Recovery Management Tool** — A self-contained Python backend + embedded React frontend that monitors live trading positions across multiple Indian stock brokers and provides a single "emergency exit" button to flatten them with a market order.
+> **Disaster Recovery Management Tool** — High-performance asynchronous Python backend (`asyncio` / `aiohttp`) + embedded React 18 frontend that monitors live trading positions across multiple Indian stock brokers (MStock, Flattrade, Alice Blue, Fyers) and provides a single "emergency exit" button to flatten positions with market orders.
 
 ---
 
 ## 1. Project Purpose & Overview
 
-DRMT V2 is an internal trading operations tool used by **Quantivo** (an algorithmic trading firm). Its core job is:
+DRMT V2 is an internal trading operations tool used by **Quantivo** (an algorithmic trading firm). Its core capabilities are:
 
-1. **Aggregate live open positions** from multiple broker accounts simultaneously (MStock, AliceBlue, Flattrade).
-2. **Display them in a real-time dashboard** (React SPA served from Python itself).
-3. **Allow bulk or selective emergency exit** — clicking "Close All" or selecting specific positions fires market orders to the relevant broker APIs to flatten those positions immediately.
-4. **Track exit history** — successfully placed exits are recorded in SQLite for audit / post-trade analysis.
-5. **Monitor broker credentials** — automatically generates (via TOTP + password login) and refreshes broker access tokens on startup and on 401 errors.
-6. **Monitor server health** — pings configured trading platform servers (Quantivo test/demo) every minute.
-
-This tool is designed for disaster recovery — if an algorithmic strategy misbehaves, the operator can log in and immediately exit all positions across all connected broker accounts from a single dashboard.
+1. **Aggregate live open positions** from multiple broker accounts concurrently (MStock, Flattrade, Alice Blue, Fyers) with sub-second latency.
+2. **Push-based live streaming** via Chronos Engine over WebSocket (`/api/ws/positions`), diffing against Redis so updates stream to the browser only when positions, quantities, or PnL change.
+3. **Allow bulk or selective emergency exit** — clicking "Close All" or selecting specific positions fires market orders through broker APIs to flatten positions immediately under bounded concurrency (`asyncio.Semaphore(20)`).
+4. **Track exit history** — successfully placed exits are recorded in SQLite (`exited_positions`) for post-trade analysis, audit, and client-side CSV export.
+5. **Dynamic broker credentials loader** — automatically downloads and synchronizes 42+ broker credentials from a remote secure CSV URL into SQLite on startup and on-demand.
+6. **Token lifecycle & auto-refresh** — automated TOTP and password login, non-destructive token refresh with backoff on 401/403 errors, and automatic recovery.
+7. **Transient error resilience & blocklist** — differentiates transient network/load-balancer errors (500, 502, 503, 504) from genuine auth rejections, avoiding false blocklisting and providing 1-click sync & retry from the dashboard.
+8. **Monitor server health** — concurrently pings configured trading platform servers (Quantivo test/demo) every minute.
+9. **Standalone executable distribution** — packaged via PyInstaller into a self-contained bundle (`dist/drmt/`) runnable without external Python or node installations.
 
 ---
 
 ## 2. Tech Stack
 
-| Layer | Technology |
-|---|---|
-| **Language** | Python 1.25 |
-| **HTTP Server** | Python standard `net/http` (no frameworks) |
-| **Database** | SQLite (via `modernc.org/sqlite`, WAL mode) |
-| **ORM/Query** | `github.com/jmoiron/sqlx` |
-| **WebSocket** | `github.com/gorilla/websocket` (Flattrade WS — unused in production) |
-| **Auth Hashing** | `golang.org/x/crypto/bcrypt` |
-| **TOTP** | `github.com/pquerna/otp` |
-| **UUIDs** | `github.com/google/uuid` |
-| **Frontend** | React 18 (via CDN), Babel standalone (in-browser JSX) |
-| **Styling** | Vanilla CSS (`web/style.css`) |
-| **Deployment** | Single binary (all web assets embedded via `go:embed`) or Docker |
+| Layer | Technology | Version | Purpose |
+|---|---|---|---|
+| **Language** | Python | 3.12 (`asyncio`) | Core runtime & asynchronous event loop |
+| **HTTP Server & Client** | `aiohttp` | 3.9.5 | Async REST API, WebSocket server, and outbound HTTP client |
+| **Database** | SQLite via `aiosqlite` | 0.20.0 | Asynchronous SQLite connection pool, WAL mode, migrations |
+| **State Caching & Diffing** | `redis` | 5.0.4 | In-memory position snapshot caching (`positions:{user_id}`) |
+| **Data Validation** | `pydantic` / `pydantic-settings` | 2.7.1 / 2.2.1 | Strict schema validation and `.env` settings loading |
+| **Auth & Cryptography** | `bcrypt` / `pycryptodome` / `pyotp` | 4.1.3 / 3.20.0 / 2.9.0 | JWT auth, AES-CBC password encryption, TOTP generation |
+| **Async File I/O** | `aiofiles` | 23.2.1 | Non-blocking file writing and log rotation |
+| **Packaging** | `pyinstaller` | 6.22.3 | Standalone single-folder distribution (`dist/drmt/`) |
+| **Frontend** | React 18 (CDN), Babel standalone | 18.x | In-browser JSX compilation, zero-build frontend |
+| **Styling** | Vanilla CSS (`web/style.css`) | Custom | High-contrast dark trading-terminal aesthetic |
+| **Asset Delivery** | `web/embedded.py` | Custom | Compressed in-memory fallback assets with live disk override |
 
-**No build step is required for the frontend** — React and Babel are loaded from `unpkg.com` CDN. The `app.jsx` is parsed by Babel in the browser at runtime.
+**No build step is required for the frontend** — React and Babel are loaded from CDN or served from `web/`. The `app.jsx` is parsed by Babel in the browser at runtime.
 
 ---
 
 ## 3. Folder / File Structure
 
 ```
-drmt_v2/
-├── cmd/
-│   └── drmt/
-│       └── main.py              # Entry point — wires everything together
-├── 
-│   ├── api/                     # HTTP handlers (REST API)
-│   │   ├── exit.py              # POST /api/positions/exit + exited positions GET/DATE handlers
-│   │   ├── handlers.py          # Login, Logout, Me, Positions handlers
-│   │   ├── health.py            # GET /api/health/servers
-│   │   ├── logs.py              # GET /api/logs
-│   │   └── middleware.py        # AuthMiddleware (session cookie validation)
-│   ├── auth/
-│   │   └── auth.py              # bcrypt password, session token CRUD in SQLite
-│   ├── broker/                  # EMPTY — placeholder only
-│   ├── config/
-│   │   ├── config.py            # Config struct + Load() from env/.env file
-│   │   └── constants.py         # Broker names, API URLs, limits, ServersToCheck map
-│   ├── credentials/             # Broker login automation & token lifecycle
-│   │   ├── aliceblue.py         # AliceBlue 6-step web login + token generation
-│   │   ├── crypto.py            # TOTP, SHA256, MD5 helpers
-│   │   ├── dedup.py             # DedupEngine: groups creds, validates or regenerates tokens
-│   │   ├── dropbox.py           # DropboxClient — reads CSV from Dropbox (BYPASSED)
-│   │   ├── flattrade.py         # Flattrade login (SHA256 password + TOTP) token generation
-│   │   ├── httpclient.py        # RESTProxyTransport + NewHTTPClientWithProxy
-│   │   ├── init.py              # InitializeCredentials() — entry point for credential boot
-│   │   ├── mstock.py            # MStock 2-step login (password + TOTP verify) token generation
-│   │   ├── parser.py            # ParsedCredential struct (wraps models.Credential)
-│   │   └── refresh.py           # RefreshAccessToken() — on-demand token refresh (3 retries)
-│   ├── events/                  # EMPTY — placeholder only
-│   ├── execution/
-│   │   ├── engine.py            # Engine: ExecuteExit() — dispatches market orders per broker
-│   │   └── mstock_instruments.py # LoadMStockInstruments() — token->symbol/exchange cache
-│   ├── health/
-│   │   └── monitor.py           # Monitor: pings ServersToCheck every 1 minute
-│   ├── logger/
-│   │   └── logger.py            # ServiceLogger: console + hourly rotating file logs + in-memory ring buffer
-│   ├── models/
-│   │   └── models.py            # All shared structs: User, Session, Credential, Position, ExitHistory, SystemLog, ExitedPosition
-│   ├── persistence/
-│   │   └── db.py                # InitDB() — opens SQLite, enables WAL + FK, runs migrations
-│   └── position/
-│       ├── adapter.py           # BrokerAdapter interface
-│       ├── aliceblue.py         # AliceBlueAdapter — polls /positions every 5s
-│       ├── flattrade.py         # FlattradeAdapter — polls /getPositonBook every 5s
-│       ├── flattrade_ws.py      # FlattradeWSAdapter — WebSocket (NOT used in main.py)
-│       ├── manager.py           # Manager: thread-safe in-memory position store; Feed channel
-│       └── mstock.py            # MStockAdapter — polls /portfolio/positions every 5s
-├── migrations/
-│   ├── 001_init.sql             # Base schema: users, sessions, credentials, positions, exit_history, system_logs, exited_positions
-│   └── 002_credentials_extended.sql # Adds broker-specific columns to credentials table
-├── web/
-│   ├── index.html               # SPA shell — loads React CDN + Babel + app.jsx
-│   ├── app.jsx                  # Entire React frontend (1225 lines, single file)
-│   └── style.css                # All CSS (dark theme, 19KB)
+drmt/
+├── api/                             # REST API & WebSocket handlers
+│   ├── __init__.py
+│   ├── auth.py                      # Login, Logout, Me, JWT generation & verification
+│   ├── middleware.py                # Rate-limiting, JWT validation, operational log filter
+│   ├── routes.py                    # REST endpoints (positions, exited, health, logs, blocked-users)
+│   └── ws.py                        # WebSocket endpoint (/api/ws/positions)
+├── core/
+│   ├── __init__.py
+│   └── engine.py                    # CoreEngine: 50 persistent background workers, Master Queue (500)
+├── credentials/                     # Broker login automation & token lifecycle
+│   ├── __init__.py
+│   ├── aliceblue.py                 # Alice Blue 6-step AES-CBC login & token generation
+│   ├── crypto.py                    # SHA256, MD5, TOTP helpers, bcrypt password hashing
+│   ├── dynamic_loader.py            # Remote CSV credentials loader (auto-sync 42+ accounts to SQLite)
+│   ├── flattrade.py                 # Flattrade login (SHA256 password + TOTP) & token extraction
+│   ├── fyers.py                     # Fyers login & TOTP token generation
+│   ├── httpclient.py                # Proxy request transport with auto-retry (500/502/503/504 backoff)
+│   ├── mstock.py                    # MStock 2-step login (password + TOTP verify)
+│   └── refresh.py                   # On-demand token refresh with backoff
+├── database/
+│   ├── __init__.py
+│   └── db.py                        # Asynchronous connection pool (aiosqlite) with WAL mode & migrations
+├── execution/                       # Market order execution engines
+│   ├── __init__.py
+│   ├── aliceblue.py                 # Alice Blue market order exit
+│   ├── engine.py                    # Mass exit engine with Semaphore(20) order throttling
+│   ├── flattrade.py                 # Flattrade market order exit
+│   ├── fyers.py                     # Fyers market order exit
+│   ├── mstock.py                    # MStock Type B regular order exit
+│   └── mstock_instruments.py        # MStock instrument cache loader into Redis
+├── health/
+│   ├── __init__.py
+│   └── monitor.py                   # HealthMonitor: concurrent server ping checks every 1 min
+├── logger/
+│   ├── __init__.py
+│   └── logger.py                    # Standard DRMT IST formatter, single-line error cleaner, daily file rotation
+├── migrations/                      # SQLite schema migrations
+│   ├── 001_init.sql                 # Base schema: users, sessions, credentials, positions, exited_positions
+│   ├── 002_credentials_extended.sql # Extended broker columns
+│   ├── 003_add_app_code_to_credentials.sql # App code column
+│   └── 004_auth_audit_logs.sql      # Auth audit logging table
+├── models/
+│   ├── __init__.py
+│   └── schemas.py                   # Pydantic schemas (User, Credential, Position, ExitOrder, etc.)
+├── position/                        # Real-time position aggregation & Chronos loop
+│   ├── __init__.py
+│   ├── adapters.py                  # Unified broker pollers (MStock, Flattrade, Alice Blue, Fyers)
+│   ├── blocklist.py                 # In-memory thread-safe blocklist with reason & timestamp
+│   ├── chronos.py                   # Chronos loop: 1s cycle, concurrent broker poll, Redis diff, WS push
+│   └── manager.py                   # PositionManager: position normalization, sorting & filtering
+├── utils/
+│   ├── __init__.py
+│   ├── email.py                     # Async SMTP alert notifications with 30s dedup & connection semaphore
+│   ├── paths.py                     # PyInstaller bundle / runtime directory path resolver
+│   └── user_mapping.py              # Maps client_id to trader name & resolves configured client IDs
+├── web/                             # React SPA frontend assets
+│   ├── __init__.py
+│   ├── app.jsx                      # React 18 SPA (Action Log, Running/Executed tabs, Health monitor)
+│   ├── embedded.py                  # Compressed in-memory frontend assets (fallback for standalone binary)
+│   ├── index.html                   # SPA HTML shell
+│   └── style.css                    # Dark theme CSS with 4-tab balanced Action Log dropdown
 ├── data/
-│   ├── drmt.db                  # SQLite database (live data — DO NOT delete)
-│   ├── drmt.db-shm              # SQLite WAL shared memory
-│   ├── drmt.db-wal              # SQLite WAL log
-│   └── logs/                   # Hourly rotating log files (per logger service)
-├── static/
-│   └── plato_client_credentials.csv  # CSV with broker credentials (legacy, now loaded from DB)
-├── scripts/                     # Standalone Python test/debug scripts (not part of main binary)
-│   ├── test_aliceblue.py
-│   ├── test_flattrade.py
-│   ├── test_flattrade_csv_token.py
-│   ├── test_flattrade_pos.py
-│   ├── test_flattrade_positions.py
-│   └── update_db.py
-├── embed.py                     # go:embed directive for web/* and migrations/*
-├── requirements.txt                       # Module: drmt, Python 1.25
-├── go.sum
-├── Dockerfile                   # Multi-stage: golang:1.25-alpine -> alpine:latest
-├── docker-compose.yml           # Maps port 8000, mounts ./data volume, TZ=Asia/Kolkata
-├── drmt                         # Pre-built Linux binary (committed to repo)
-├── drmt.exe / drmt-windows.exe  # Pre-built Windows binaries
-├── server.log                   # Stdout log from running server
-├── AGENTS.md / CLAUDE.md        # GitNexus AI code intelligence instructions
-└── .gitnexus/                   # GitNexus index
+│   ├── drmt.db                      # SQLite database (WAL mode)
+│   └── logs/                        # Daily service logs (auth, api, system, exit, health)
+├── build_exe.sh                     # Linux standalone PyInstaller build script
+├── build_exe.bat                    # Windows standalone PyInstaller build script
+├── run.sh                           # Linux standalone launcher script
+├── run.bat                          # Windows standalone launcher script
+├── main.py                          # Application entry point & startup lifecycle
+├── settings.py                      # Pydantic BaseSettings (PORT=10000, DB, Redis, Proxy, Email)
+├── requirements.txt                 # Pinned Python package dependencies
+├── .env                             # Local configuration overrides (PORT=10000)
+└── .env.example                     # Documented template configuration
 ```
 
 ---
 
 ## 4. Pages & Routes
 
-### Backend HTTP Routes (registered in `main.py`)
+### Backend HTTP & WebSocket Routes (registered in `api/routes.py` & `main.py`)
 
-| Method | Path | Handler | Auth Required |
-|---|---|---|---|
-| POST | `/api/login` | `LoginHandler` | No |
-| POST | `/api/logout` | `LogoutHandler` | No |
-| GET | `/api/me` | `MeHandler` | Yes |
-| GET | `/api/positions` | `PositionsHandler` | Yes |
-| POST | `/api/positions/exit` | `PositionsExitHandler` | Yes |
-| GET | `/api/health/servers` | `ServersHealthHandler` | Yes |
-| GET | `/api/logs` | `LogsHandler` | Yes |
-| GET | `/api/positions/exited` | `ExitedPositionsHandler` | Yes |
-| GET | `/api/positions/exited/dates` | `ExitedDatesHandler` | Yes |
-| GET | `/` (catch-all) | Embedded file server -> `web/` directory | No |
+| Method | Path | Handler | Auth Required | Purpose |
+|---|---|---|---|---|
+| POST | `/api/login` | `login` | No | Authenticate user, issue JWT Bearer token |
+| POST | `/api/logout` | `logout` | Yes | Invalidate session |
+| GET | `/api/me` | `get_current_user` | Yes | Get active user profile & role |
+| GET | `/api/positions` | `get_positions` | Yes | HTTP snapshot of live open positions |
+| POST | `/api/positions/exit` | `exit_positions` | Yes | Execute emergency exit for given position IDs |
+| GET | `/api/positions/exited` | `get_exited_positions` | Yes | Query historical exits with pagination and date filter |
+| GET | `/api/exited/dates` | `get_exited_dates` | Yes | Get distinct dates containing exit records |
+| GET | `/api/health` | `get_health_status` | Yes | Server & external server health ping status |
+| GET | `/api/logs` | `get_logs` | Yes | Query in-memory ring buffer logs (`orders`, `auth`, `system`) |
+| GET | `/api/blocked-users` | `get_blocked_users` | Yes | List currently blocklisted accounts with reasons |
+| POST | `/api/blocked-users/retry` | `retry_blocked_user` | Yes | 1-Click re-fetch credentials from CSV and retry login |
+| GET | `/api/credentials` | `get_credentials` | Yes | List configured broker credentials |
+| POST | `/api/credentials/refresh`| `refresh_credentials` | Yes | Trigger manual credential sync & re-authentication |
+| GET | `/api/ws/positions` | `websocket_handler` | Yes | Real-time bidirectional WebSocket position stream |
+| GET | `/` (catch-all) | Static handler | No | Serves embedded or disk SPA assets (`index.html`, `app.jsx`, `style.css`) |
 
 ### Frontend Views (single-page, in `web/app.jsx`)
 
-The SPA has two states:
-1. **Login Screen** — shown when not authenticated (no valid session cookie)
-2. **Dashboard** — shown when authenticated
-
-The Dashboard has two tabs:
-- **Running** — live positions table, polling every 5s (market hours) or 15s (post-market)
-- **Executed** — historical exits from SQLite, filterable by date range/broker/client/trade type, exportable as CSV
+1. **Login Screen** — shown when unauthenticated (no valid JWT token).
+2. **Dashboard** — shown when authenticated:
+   - **Running Tab** — live positions table streamed in real-time over WebSocket, featuring multi-filter search (Broker, User, Trade type), bulk selection, "Close Selected" / "Close All" action buttons, and confirmation modals.
+   - **Executed Tab** — historical exits from SQLite, filterable by date range, broker, user, trade type, with pagination and client-side CSV export.
+   - **Notification Action Log Dropdown** — expandable widget in the header with 4 balanced tabs: **Orders**, **Auth**, **System**, and **Block list** (with 1-click sync & retry).
+   - **Server Health Pills** — real-time latency indicators for external Quantivo servers in the top navigation bar.
 
 ---
 
@@ -158,119 +159,118 @@ The Dashboard has two tabs:
 ### Backend Architecture
 
 ```
-main.py
-├── config.Load()                          -> loads .env / env vars
-├── persistence.InitDB()                   -> SQLite + migrations
-├── auth.HashPassword() / db.Exec()        -> ensures admin user exists
-├── credentials.InitializeCredentials()   -> validates/generates tokens at boot
-├── position.NewManager() -> asyncio.create_task(Start())   -> central position feed aggregator
-├── health.NewMonitor() -> asyncio.create_task(Start())     -> pings external servers
-├── position.NewMStockAdapter() -> asyncio.create_task(Start())    -> polls MStock every 5s
-├── position.NewAliceBlueAdapter() -> asyncio.create_task(Start()) -> polls AliceBlue every 5s
-├── position.NewFlattradeAdapter() -> asyncio.create_task(Start()) -> polls Flattrade every 5s
-├── execution.NewEngine()                  -> mass exit engine
-└── http.NewServeMux()                     -> routes all API + frontend
+main.py (aiohttp.web.Application)
+├── setup_logging()                         -> standardized IST formatter (YYYY-MM-DD HH:MM:SS.mmm)
+├── on_startup hook
+│   ├── init_db()                           -> aiosqlite pool + WAL mode + migrations
+│   ├── fetch_and_sync_credentials()        -> downloads 42+ accounts from remote CSV -> SQLite
+│   ├── init_email_session()                -> async SMTP session with connection semaphore
+│   ├── seed_admin_user()                   -> ensures default admin user exists
+│   ├── display_configured_credentials()    -> displays active credentials table in console
+│   ├── health_monitor.start()              -> periodic ping monitor (1 min interval)
+│   └── start_log_cleanup_loop(30 days)     -> daily background task cleaning old log files
+├── core_engine (CoreEngine)
+│   ├── Master Queue (500 capacity)         -> bounded task ingestion
+│   └── 50 persistent background workers    -> concurrent non-blocking order execution
+└── websocket_handler (/api/ws/positions)
+    └── chronos.polling_loop()              -> 1s continuous scan, concurrent broker poll, Redis diff, WS push
 ```
 
 ### Frontend React Components (in `web/app.jsx`)
 
 ```
-App                                 # Root: checks /api/me, renders Login or Dashboard
+App                                 # Root component: manages auth state & view routing
 ├── Login                           # Login form, POST /api/login
-└── Dashboard                       # Main view after auth
-    ├── ServerHealthMonitor         # Polls /api/health/servers every 5s, renders status pills in header
-    ├── ActionLogWidget             # Polls /api/logs every 3s, shows Orders/Auth/System tabs
-    └── (inline JSX)
-        ├── Toast notifications     # Ephemeral success/error/warning toasts (5s TTL)
-        ├── Confirmation Modal      # "Are you sure?" before any exit
-        ├── Top navigation header   # Brand title + ServerHealthMonitor + Bell + User avatar + Sign Out
-        ├── Running Tab             # Live positions table
-        │   ├── Filters bar         # Search, Broker, User, Trade type
-        │   ├── Action buttons      # "Close (N)" or "Close All", Cancel
-        │   ├── Pagination          # 50 per page
-        │   └── Positions table     # USERID, BROKER, INSTRUMENT, EXCHANGE, PRODUCT, BUY/SELL, QTY, ENTRY PRICE, PNL, LTP
-        └── Executed Tab            # Historical exits from DB
-            ├── Filters bar         # Search, From Date, To Date, Broker, User, Trade type, Refresh, Export CSV
-            ├── Pagination          # 50 per page
-            └── Executed table      # USERID, BROKER, INSTRUMENT, EXCHANGE, PRODUCT, BUY/SELL, QTY, ENTRY PRICE, EXIT PRICE, PNL, EXITED AT
+└── Dashboard                       # Main operations view
+    ├── Top Navigation Header       # Brand title + Connection status pill + ServerHealthMonitor + Bell + User avatar + Sign Out
+    │   ├── ServerHealthMonitor     # Polls /api/health every 5s, displays latency pills
+    │   └── ActionLogWidget         # 4-Tab Notification panel (Orders, Auth, System, Block list)
+    ├── Toast Notifications         # Ephemeral status messages (5s TTL)
+    ├── Confirmation Modal          # "Are you sure?" confirmation dialog before order execution
+    ├── Running Tab                 # Live positions table (WebSocket streamed)
+    │   ├── Filter Bar              # Search, Broker filter, User filter, Trade type
+    │   ├── Action Buttons          # "Close Selected (N)" / "Close All"
+    │   ├── Pagination Controls     # 50 rows per page
+    │   └── Positions Table         # USER, BROKER, INSTRUMENT, EXCHANGE, PRODUCT, SIDE, QTY, ENTRY, LTP, PNL
+    └── Executed Tab                # Historical exits from SQLite
+        ├── Filter Bar              # Date picker, Broker filter, User filter, Trade type, CSV Export
+        ├── Pagination Controls     # 50 rows per page
+        └── Executed Table          # USER, BROKER, INSTRUMENT, EXCHANGE, PRODUCT, SIDE, QTY, ENTRY, EXIT, PNL, EXITED AT
 ```
 
 ---
 
 ## 6. Features & Business Logic
 
-### 6.1 Credential Initialization (`credentials/`)
+### 6.1 Dynamic Credential Synchronization & Loading (`credentials/dynamic_loader.py`)
 
-At startup, `InitializeCredentials()` is called:
-1. Reads all credentials from the `credentials` SQLite table.
-2. Groups them by `(broker, client_id, static_ip)` key.
-3. For each group (max 4 credentials per client; otherwise flagged `max_credential_sets_exceeded`):
-   - **Phase 1**: Try existing `access_token` — call broker's position endpoint to validate.
-   - **Phase 2**: If no valid token, call `GenerateToken()` for each credential until one succeeds.
-4. Saves status (`active`, `failed`, `skipped`, `max_retries_exceeded`) back to DB.
+At startup, `fetch_and_sync_credentials()` is invoked:
+1. Fetches broker credentials CSV directly from remote storage (e.g. Dropbox URL configured in `settings.CREDENTIALS_CSV_URL` or fallback SQLite `data/drmt.db`).
+2. Dropbox URLs are auto-normalized (`dl=1`) for direct raw CSV streaming.
+3. Parses client credentials for all supported brokers: **MSTOCK**, **FLATTRADE**, **ALICE BLUE**, and **FYERS**.
+4. In-memory mappings (`_cid_to_name`, `_name_to_cids`, `_configured_cids`) are populated to bind client IDs to real trader names (e.g. `1905469 -> Dilip Kushwah`, `FZ48062 -> Manoj Flattrade`, `XR10079 -> Rukmani Fyers`).
+5. UPSERTs credentials into the SQLite `credentials` table preserving active tokens and status flags.
+6. Deduplication (`credentials/dedup.py`) groups credentials by `(broker, client_id, static_ip)` to prevent duplicate concurrent sessions.
 
-Status flow: `pending` -> `active` | `failed` | `skipped` | `max_retries_exceeded` | `max_credential_sets_exceeded`
+### 6.2 Chronos Polling Engine (`position/chronos.py`)
 
-### 6.2 Position Polling (`position/`)
+The **Chronos Engine** is an asynchronous, non-overlapping polling engine:
+- Initiated upon WebSocket connection from authenticated clients (`/api/ws/positions` or `/ws/positions`).
+- **Thundering-Herd Protection**: Applies random jitter (`0.0s – 1.0s`) on startup to prevent simultaneous broker hits.
+- **Immediate Cache Push**: Reads `positions:{user_id}` from Redis and pushes the existing snapshot immediately to the client to eliminate blank-screen flashing.
+- **Non-Overlapping Polling Loop**:
+  - Checks client heartbeat (`time.monotonic() - last_ping > 30.0s`); terminates zombie polling tasks if no ping received.
+  - Concurrently polls all active accounts using `asyncio.gather(*[_poll_target(c) for c in credentials], return_exceptions=True)`.
+  - Measures total batch duration in milliseconds (e.g., `Scanned 40 Targets in 512.4ms`).
+  - Formats clean terminal output per scanned target:
+    `⏳ [{symbol}] LTP: ₹{ltp} | Avg: ₹{avg_price} | Qty: {qty} | PnL: {pnl} ({pct}) ➔ {status}`
+  - If no positions exist, logs account status (`Standby` or `Blocked`).
+  - **Diff Before Push**: Compares new positions snapshot against `last_snapshot`. Sends WebSocket update and synchronizes Redis cache **only when changes occur**.
+  - Bounded 3.0s timeout on WebSocket send acts as a backpressure guard against slow clients.
+  - Sleeps exactly 1.0s at the end of each completed cycle (non-overlapping).
 
-Three polling adapters run concurrently in goroutines:
-- **MStockAdapter**: Polls `https://api.mstock.trade/openapi/typeb/portfolio/positions` every 5s via proxy.
-- **AliceBlueAdapter**: Polls `https://ant.aliceblueonline.com/open-api/od/v1/positions` every 5s directly.
-- **FlattradeAdapter**: POSTs to `https://emergeapi.flattrade.in/getPositonBook` every 5s via proxy.
+### 6.3 Transient Error Handling & Block List Protection (`position/chronos.py`, `position/blocklist.py`)
 
-All adapters:
-- Fetch all `active` credentials for their broker from DB.
-- For each credential, spawn a goroutine to fetch positions.
-- Push parsed `models.Position` structs into `posManager.Feed` channel.
-- On 401/403 responses, trigger `credentials.RefreshAccessToken()` asynchronously.
+- **Block List Quarantine**: Accounts with fatal auth errors (wrong password, bad TOTP, invalid API keys) are added to in-memory blocklist (`add_to_blocklist`), halting polling for that client to avoid broker account lockout.
+- **Transient Error Resilience**: Network timeouts and HTTP gateway errors (`500`, `502 Bad Gateway`, `503`, `504 Gateway Timeout`, `Connection reset`, `Connection refused`, `IA500`, `Internal Server Error`) are explicitly detected as transient. They **never** trigger blocklist quarantine; Chronos logs a warning, maintains state, and retries on the next cycle.
+- **30-Second Error Throttling**: Repeated errors for the same client ID are throttled (`_POLL_ERROR_THROTTLE_SEC = 30.0`), preventing terminal spam while connectivity issues persist. When connection recovers, logs `✅ Connection restored`.
 
-**FlattradeWSAdapter** (`position/flattrade_ws.py`) exists but is **NOT wired** in `main.py`. The HTTP polling adapter is used instead.
+### 6.4 Exit Execution & Square-Off (`execution/engine.py`)
 
-### 6.3 Position Manager (`position/manager.py`)
+`execute_exit_order(pos, cred)` executes market order square-offs:
+- Throttled by `core_engine.acquire_exit_semaphore()` (default concurrency: 20 simultaneous exit orders).
+- Dispatches to broker-specific adapters:
+  - **MStock** (`execution/mstock.py`): Calls `POST https://api.mstock.trade/openapi/typeb/orders/regular` with `Authorization: Bearer <token>`, `X-PrivateKey`, and `X-Mirae-Version: 1`. Inverts transaction side (`BUY -> SELL`, `SELL -> BUY`) with `prctyp="MKT"`.
+  - **Alice Blue** (`execution/aliceblue.py`): Calls `POST https://antdrn.aliceblueonline.com/omk/od-rest/orders/web/execute` with session token.
+  - **Flattrade** (`execution/flattrade.py`): Calls `POST https://emergeapi.flattrade.in/placeOrder` with `jKey` and `prctyp="MKT"`.
+  - **Fyers** (`execution/fyers.py`): Calls `POST https://api-t1.fyers.in/api/v3/positions` / orders with app auth header.
+- Mass exit (`mass_exit`) resolves credentials per position and executes concurrent exits across all targets, tracking results and failures.
 
-- Receives from `Feed` channel (buffered 1000).
-- Stores positions in `map[string]models.Position` keyed by `"{Broker}:{ClientID}:{Symbol}"`.
-- Quantity == 0 -> position is deleted (closed position).
-- Thread-safe via `sync.RWMutex`.
-- Returns sorted snapshot via `GetAll()`.
+### 6.5 Exit History Recording & Export (`api/routes.py`)
 
-### 6.4 Exit Execution (`execution/engine.py`)
+- On successful position exit, records transaction in SQLite `exited_positions` table:
+  - `position_id`, `broker`, `client_id`, `symbol`, `token`, `exchange`, `product_type`, `order_type`, `transaction_type`, `quantity`, `avg_price`, `exit_price`, `pnl`, `exited_at`.
+- Frontend Executed tab loads historical records via `GET /api/exited?date=YYYY-MM-DD`.
+- Available exit dates list served via `GET /api/exited/dates`.
+- `GET /api/exited/export?date=YYYY-MM-DD` streams full CSV export with Content-Disposition attachment header.
 
-`ExecuteExit(pos)` dispatches broker-specific market order:
-- **Flattrade**: `POST https://emergeapi.flattrade.in/placeOrder` — uses `jkey` (access token) in JSON payload, `prctyp=MKT`.
-- **MStock**: `POST https://api.mstock.trade/openapi/typeb/orders/regular` — uses `Authorization: Bearer <token>` + `X-PrivateKey`. Requires instrument lookup from in-memory cache (`LoadMStockInstruments()`).
-- **AliceBlue**: `POST https://antdrn.aliceblueonline.com/omk/od-rest/orders/web/execute` — uses `Authorization: Bearer <token>`.
+### 6.6 Token Lifecycle & Auto-Refresh (`position/chronos.py`, `credentials/`)
 
-On 401/session errors, triggers async `RefreshAccessToken()` for that credential.
+- On `PermissionError` (HTTP 401/403 or token expiration during broker poll), `refresh_token_with_backoff(cred)` is triggered automatically.
+- Re-authenticates via broker-specific login routines (`login_mstock`, `login_flattrade`, `login_aliceblue`, `login_fyers`) using TOTP generation (`pyotp`) and crypto helpers (`pycryptodome`).
+- Successfully acquired tokens update SQLite `credentials` table and clear error states.
+- If re-authentication fails with fatal error, account is moved to Block List.
+- Manual bulk refresh is exposed via `POST /api/credentials/refresh` to force credential reloads without restarting the server.
 
-Note: `executeAliceBlueAPI()` (using `a3.aliceblueonline.com`) is dead code — `executeAliceBlueWeb()` is the active implementation.
+### 6.7 WebSocket Streaming & Client State (`api/ws.py`)
 
-### 6.5 Exit History Recording (`api/exit.py`)
-
-On successful exit only:
-- Inserts a row into `exited_positions` table with position details.
-- `exit_price` = LTP (or `avg_price` if LTP is 0).
-- `exited_at = datetime('now', 'localtime')`.
-
-### 6.6 Token Refresh (`credentials/refresh.py`)
-
-`RefreshAccessToken(db, cred, proxyURL)`:
-- Up to 3 retries with exponential backoff (2s, 4s).
-- On success: updates `access_token`, `access_token_created_at`, `status='active'`, clears `last_error` in DB.
-- On all failures: updates `status='failed'`, stores `last_error`.
-
-### 6.7 Polling Behavior (Frontend)
-
-The frontend intelligently throttles polling:
-
-| Condition | Polling interval |
-|---|---|
-| Tab hidden | Paused |
-| Market closed (weekend or outside 08:50-23:55 IST) | Paused |
-| Post-market (16:00-23:55 IST), Running tab | 15s |
-| Active market hours, Running tab | 5s |
-| Executed tab | 30s |
-| `TEST_MODE_FORCE_POLL = true` (hardcoded flag in Dashboard) | Always 5s |
+- Endpoint: `/api/ws/positions` (and `/ws/positions`).
+- Requires valid session token via `Authorization: Bearer <token>` or session query parameter.
+- Supports both text (`{"type": "ping"}`) and binary frames.
+- Pushes JSON message schemas:
+  - `{"type": "status", "connected": true}` on initial handshake.
+  - `{"type": "positions", "data": [...]}` when position diffs occur.
+- Automatically cleans up and shuts down user polling task when client disconnects or times out.
 
 ---
 
@@ -279,82 +279,109 @@ The frontend intelligently throttles polling:
 ### Startup Flow
 
 ```
-main.py starts
- |
- +-- config.Load()         -> reads .env / environment variables
- +-- persistence.InitDB()  -> opens data/drmt.db, runs SQL migrations
- +-- create admin user     -> INSERT INTO users IF count=0
- +-- credentials.InitializeCredentials()
- |    +-- reads credentials from DB -> validates/generates tokens -> saves back
- +-- position.NewManager() -> goroutine (listens on Feed channel)
- +-- health.NewMonitor()   -> goroutine (pings every 1 min)
- +-- MStockAdapter         -> goroutine (polls every 5s -> writes to Feed)
- +-- AliceBlueAdapter      -> goroutine (polls every 5s -> writes to Feed)
- +-- FlattradeAdapter      -> goroutine (polls every 5s -> writes to Feed)
- +-- execution.NewEngine() -> loads MStock instruments cache (goroutine)
- +-- http.ListenAndServe(":3100", mux)
+main.py
+ │
+ ├── DRMTLogFormatter setup (IST millisecond timestamps, 8-char alignment)
+ ├── Persistence: init_db() -> SQLite WAL mode, foreign keys, migrations 001-004
+ ├── Dynamic Credentials Sync: fetch_and_sync_credentials()
+ │    ├── Remote CSV fetch & normalization (Dropbox dl=1)
+ │    ├── Client name mapping cache populated (_cid_to_name, _name_to_cids)
+ │    └── UPSERT active accounts into SQLite credentials table
+ ├── CoreEngine: core_engine.start()
+ │    ├── Instantiates worker queue (maxsize=500), semaphores (_exit_sem=20, _api_sem=10)
+ │    ├── Connects to Redis pool (redis://localhost:6379)
+ │    └── Spawns 50 background worker loops (_worker_loop)
+ ├── Background Log Retention: start_log_cleanup_loop (30-day purge)
+ └── aiohttp.web.Application starts on http://0.0.0.0:10000
 ```
 
-### Position Fetch Flow
+### Live Position Streaming Flow
 
 ```
-Browser -> GET /api/positions -> PositionsHandler -> posManager.GetAll() -> JSON response
+Browser Client
+ │
+ ├── 1. Connects to WebSocket: /api/ws/positions
+ ├── 2. Auth verified (session token -> users table)
+ ├── 3. WS handshake: {"type": "status", "connected": true}
+ ├── 4. Redis Cache Hit: Immediate push of last known positions snapshot (prevents blank screen)
+ ├── 5. CoreEngine spawns Chronos polling loop:
+ │       │
+ │       ├─► asyncio.gather(*[poll(cred) for cred in active_credentials])
+ │       │     ├── MStock: GET /openapi/typeb/portfolio/positions (via RESTProxyTransport)
+ │       │     ├── Flattrade: POST /getPositonBook (via RESTProxyTransport)
+ │       │     ├── Alice Blue: GET /open-api/od/v1/positions (direct)
+ │       │     └── Fyers: GET /api/v3/positions (direct)
+ │       │
+ │       ├─► Diff Check: new_positions != last_snapshot?
+ │       │     ├── YES ─► Push {"type": "positions", "data": [...]} via WS
+ │       │     │       ─► Cache new snapshot in Redis key "positions:{user_id}"
+ │       │     └── NO  ─► Skip push (bandwidth & render savings)
+ │       │
+ │       ├─► Heartbeat check: client sent ping within 30s? (break if zombie)
+ │       └─► Non-overlapping asyncio.sleep(1.0)
+ └── 6. Disconnect ─► Loop terminates, task cleaned up, engine.remove_user()
 ```
 
-### Exit Flow
+### Order Execution Flow (Mass Exit / Square-Off)
 
 ```
-Browser -> POST /api/positions/exit { position_ids: [...] }
-         -> PositionsExitHandler
-         -> for each id: posManager.GetByID(id)
-         -> goroutine: engine.ExecuteExit(pos)
-              -> switch pos.Broker:
-                   FLATTRADE  -> POST emergeapi.flattrade.in/placeOrder
-                   MSTOCK     -> POST api.mstock.trade/.../orders/regular
-                   ALICE BLUE -> POST antdrn.aliceblueonline.com/.../execute
-         -> on success: INSERT INTO exited_positions
-         -> wg.Wait() -> JSON response with per-position results
+Browser -> POST /api/exit { positions: [...] }
+          │
+          ├── require_auth(request) validates session
+          ├── Mass exit dispatched to execution.engine.mass_exit()
+          │     │
+          │     ├── For each target: acquire_exit_semaphore(concurrency=20)
+          │     ├── Dispatch broker adapter:
+          │     │     FLATTRADE  ─► POST emergeapi.flattrade.in/placeOrder
+          │     │     MSTOCK     ─► POST api.mstock.trade/openapi/typeb/orders/regular
+          │     │     ALICE BLUE ─► POST antdrn.aliceblueonline.com/omk/od-rest/orders/web/execute
+          │     │     FYERS      ─► POST api-t1.fyers.in/api/v3/positions
+          │     └── Record executed order into SQLite exited_positions table
+          │
+          └── Return JSON response: { success: true, count: N, results: [...] }
 ```
 
-### Login Flow
+### Authentication Flow
 
 ```
 Browser -> POST /api/login { username, password }
-         -> LoginHandler
-         -> SELECT user WHERE username=?
-         -> bcrypt.CompareHashAndPassword
-         -> auth.CreateSession() -> INSERT INTO sessions (token, user_id, expires_at)
-         -> Set-Cookie: drmt_session=<token>; HttpOnly; SameSite=Strict; Expires=24h
+          │
+          ├── SELECT * FROM users WHERE username = ?
+          ├── bcrypt.checkpw(password, password_hash)
+          ├── Generate 64-char hex session token
+          ├── INSERT INTO sessions (token, user_id, expires_at)
+          ├── INSERT INTO auth_audit_logs (user_id, username, action='LOGIN_SUCCESS', ip, ...)
+          └── Return JSON { success: true, token: "...", user: { id, username } }
 ```
 
 ---
 
-## 8. Authentication
+## 8. Authentication & Authorization
 
-- **Session-based**: HttpOnly cookie `drmt_session` containing a 64-character hex token.
-- **24-hour expiry** stored in SQLite `sessions` table.
-- `AuthMiddleware` validates the cookie on every protected route by querying `sessions JOIN users` checking `expires_at > now()`.
-- Invalid/expired sessions: cookie is cleared, 401 returned.
-- Default user on fresh DB: `admin / admin` (created at boot if `users` table is empty).
-- **WARNING**: Default credentials must be changed before production deployment.
+- **Session Tokens**: 64-character hexadecimal secure tokens stored in SQLite `sessions` table.
+- **Bearer Authentication & Cookies**: Supports `Authorization: Bearer <token>` header as well as `drmt_session` cookie for flexible API and WebSocket clients.
+- **Session Lifecycle**: 24-hour expiration (`expires_at`), verified on every authenticated request via `require_auth(request)`.
+- **Password Security**: Passwords hashed using `bcrypt` (`bcrypt.hashpw` / `bcrypt.checkpw`).
+- **Default Credentials**: Default user `admin` / `admin` initialized on blank database (MUST be changed in production).
+- **Audit Trail**: Every login attempt (`LOGIN_SUCCESS`, `LOGIN_FAILED`), logout, and session check is recorded in the SQLite `auth_audit_logs` table with client IP, user agent, action status, and timestamp.
 
 ---
 
 ## 9. UI/UX & Design System
 
-- **Dark theme** with a trading-terminal aesthetic.
-- Color scheme: dark background (#0D1117 / #111827 region), blue accents, green for BUY / PnL positive, red for SELL / PnL negative.
-- All CSS is in `web/style.css` (19KB, vanilla CSS, no framework).
-- Key CSS classes:
-  - `.app-layout`, `.top-nav`, `.main-content` — page skeleton
-  - `.health-pill`, `.health-dot`, `.status-up`, `.status-down` — server status indicators
-  - `.action-log-widget`, `.log-entry` — live log panel
-  - `.compact-table`, `.side-badge`, `.pnl-positive`, `.pnl-negative` — data table
-  - `.toast`, `.toast-success`, `.toast-error`, `.toast-warning` — notifications
-  - `.modal-overlay`, `.modal-content` — confirmation dialog
-  - `.btn-primary`, `.btn-close-action`, `.btn-cancel-action` — action buttons
-- `fetchWithTimeout()` utility: wraps `fetch()` with AbortController (default 30s timeout).
-- `useDebounce()` hook: 500ms debounce on search inputs.
+- **Trading Terminal Dark Theme**: High-contrast, low-latency UI (#0D1117 / #161B22) optimized for intensive intraday monitoring.
+- **Top Navigation Bar**:
+  - Live connection status indicators: WebSocket connection dot (green/red), server health indicator, test server status.
+  - Overall PnL summary widget (Total Realized / Unrealized PnL, Win/Loss count).
+  - Bulk actions: "Refresh Credentials" (manual sync) and user profile/logout controls.
+- **Tabs Interface**:
+  - **Running Tab**: WebSocket-streamed live positions table with real-time PnL color-coding, multi-select checkboxes, search bar, broker and user filters, and "Close Selected (N)" / "Close All" action triggers.
+  - **Executed Tab**: Historical closed positions table loaded from SQLite with date picker, pagination (50 rows/page), broker/user filters, and CSV export.
+- **Action Log Widget (Notification UI)**:
+  - Balanced 4-tab interface: **Orders**, **Auth**, **System**, and **Block list** (the redundant "Audit" tab has been cleanly removed).
+  - Displays streaming terminal entries and status summaries.
+  - Bounded in-memory log buffer (last 100 entries per service) loaded via `/api/logs?type=orders|auth|system|blocklist`.
+  - Copy and download action buttons for immediate log exports.
 
 ---
 
@@ -362,340 +389,356 @@ Browser -> POST /api/login { username, password }
 
 ### Broker APIs
 
-| Broker | Position Fetch | Order Placement | Auth Method |
+| Broker | Position Fetch Endpoint | Order Placement Endpoint | Auth Method |
 |---|---|---|---|
-| **MStock** | `GET api.mstock.trade/openapi/typeb/portfolio/positions` | `POST .../orders/regular` | `Bearer <jwtToken>` + `X-PrivateKey` |
-| **AliceBlue** | `GET ant.aliceblueonline.com/open-api/od/v1/positions` | `POST antdrn.aliceblueonline.com/omk/od-rest/orders/web/execute` | `Bearer <userSession>` |
-| **Flattrade** | `POST emergeapi.flattrade.in/getPositonBook` | `POST emergeapi.flattrade.in/placeOrder` | `jkey` in JSON payload |
+| **MStock** | `GET https://api.mstock.trade/openapi/typeb/portfolio/positions` | `POST https://api.mstock.trade/openapi/typeb/orders/regular` | `Bearer <jwtToken>` + `X-PrivateKey` + `X-Mirae-Version: 1` |
+| **Alice Blue** | `GET https://ant.aliceblueonline.com/open-api/od/v1/positions` | `POST https://antdrn.aliceblueonline.com/omk/od-rest/orders/web/execute` | `Bearer <userSession>` |
+| **Flattrade** | `POST https://emergeapi.flattrade.in/getPositonBook` | `POST https://emergeapi.flattrade.in/placeOrder` | `jKey` in JSON request body |
+| **Fyers** | `GET https://api-t1.fyers.in/api/v3/positions` | `POST https://api-t1.fyers.in/api/v3/positions` | `Bearer <app_id>:<access_token>` |
 
-### Proxy Server (Quantivo)
+### Quantivo REST Proxy Transport (`credentials/httpclient.py`)
 
-- `DefaultProxyURL = "https://demoapi.quantivo.in/proxy"`
-- A custom `RESTProxyTransport` in `httpclient.py` wraps all MStock and Flattrade requests.
-- The proxy is a REST API that forwards HTTP requests on behalf of the caller; supports `source_ip` for IP whitelisting.
-- AliceBlue uses direct HTTP (no proxy).
+- URL: `https://demoapi.quantivo.in/proxy` (configurable via `DRMT_PROXY_URL`).
+- Forwards HTTP requests with source IP whitelisting (`source_ip`) to satisfy broker IP lock requirements (e.g. MStock and Flattrade endpoints).
+- Unpacks target response envelopes, handles broker HTTP status codes, and converts 401/403 responses into `PermissionError` to trigger automatic token refresh.
 
-### Dropbox (BYPASSED)
+### Dynamic Credentials Remote Source (`credentials/dynamic_loader.py`)
 
-- `credentials/dropbox.py` — `DropboxClient` can download `plato_client_credentials.csv` from Dropbox.
-- **Currently bypassed**: `init.py` reads directly from SQLite DB instead.
-- Dead code in the active flow.
+- Configured via `CREDENTIALS_CSV_URL` in `settings.py` / `.env`.
+- Loads 40+ production broker credentials dynamically from remote CSV storage.
+- Auto-maps client accounts to human-readable names (`_cid_to_name`) for rich UI display and terminal logging.
 
-### MStock Instruments Cache
+### Automated Email Alerts (`utils/email.py`)
 
-- `execution/mstock_instruments.py` — `LoadMStockInstruments()` builds a `token -> {Name, ExchSeg}` map.
-- Required to resolve `pos.Token` -> correct `tradingsymbol` and `exchange` when placing MStock orders.
-- Loaded asynchronously on engine startup. If it fails, MStock exits will fail with "instrument not found in cache".
-
-### Health Check Servers
-
-Configured in `config/constants.py`:
-```go
-var ServersToCheck = map[string]string{
-    "test_server": "https://testpts.quantivo.in/api/health",
-    "demo_server": "https://demopts.quantivo.in/api/health",
-}
-```
-Pinged every 1 minute with a 2-second timeout. Results shown in the UI header.
+- Configured via SMTP (`EMAIL_HOST=smtp.office365.com`, `EMAIL_PORT=587`).
+- Sends instant background error notification emails (`send_error_email`) on critical exceptions and execution failures without blocking the main event loop.
 
 ---
 
 ## 11. Important Configurations
 
-### Environment Variables / `.env` file
+### Environment Variables & Settings (`settings.py` / `.env`)
 
-The app searches for `.env` in (in order):
-1. Same directory as the executable
-2. Parent directory of the executable
-3. `/opt/drmt/backend/.env`
-4. Current working directory
+DRMT V2 utilizes `pydantic-settings` to parse configuration from `.env` located in the application root directory.
 
-| Variable | Default | Purpose |
+| Setting | Default | Purpose |
 |---|---|---|
-| `DRMT_DROPBOX_APP_KEY` | `7yn83e37zk7108e` | Dropbox API key (bypassed) |
-| `DRMT_DROPBOX_APP_SECRET` | `yneynsmqfcsudzo` | Dropbox API secret (bypassed) |
-| `DRMT_DROPBOX_REFRESH_TOKEN` | (hardcoded long token) | Dropbox refresh token (bypassed) |
-| `DRMT_PROXY_URL` | `https://demoapi.quantivo.in/proxy` | Proxy server URL |
-| `DRMT_STATIC_IP` | `""` | Static IP for requests requiring IP whitelisting |
+| `PORT` | `10000` | Application HTTP and WebSocket listening port |
+| `DB_PATH` | `data/drmt.db` | Relative or absolute path to SQLite database file |
+| `DRMT_PROXY_URL` | `https://demoapi.quantivo.in/proxy` | Upstream REST proxy endpoint for IP-locked broker requests |
+| `WORKER_POOL_SIZE` | `50` | Number of background worker loops spawned by CoreEngine |
+| `API_CONCURRENCY` | `10` | Maximum outbound concurrent API requests via semaphore |
+| `DB_POOL_SIZE` | `5` | Persistent SQLite connection pool size (`aiosqlite`) |
+| `USER_RATE_LIMIT` | `10` | Requests per second per user IP |
+| `GLOBAL_RATE_LIMIT` | `50` | Global requests per second rate limit |
+| `REDIS_URL` | `redis://localhost:6379` | Redis server URL for instant snapshot caching and diffing |
+| `CREDENTIALS_CSV_URL` | `https://www.dropbox.com/.../plato_client_credentials.csv?dl=0` | Remote URL for dynamic broker credentials sync (42 accounts) |
+| `EMAIL_HOST` | `smtp.office365.com` | SMTP host for automated error alert emails |
+| `EMAIL_PORT` | `587` | SMTP port (STARTTLS) |
+| `EMAIL_USER` | `""` | SMTP sender username / address |
+| `EMAIL_PASS` | `""` | SMTP sender password or app password |
+| `EMAIL_TO` | `sahil@quantivo.in` | Target recipient address for critical error emails |
+| `EMAIL_FROM` | `noreply@drmt.app` | Sender display email |
 
-### Key Tunables (in `constants.py`)
+### Key System Tunables
 
-| Constant | Value | Meaning |
+| Constant | Value | Purpose |
 |---|---|---|
-| `MaxCredentialSetsPerClient` | 4 | Max credential entries per broker+client combo |
-| `MaxTokenGenRetries` | 3 | Token generation retries |
-| `HTTPTimeoutSeconds` | 20 | HTTP client timeout |
-| `HTTPMaxRetries` | 5 | Defined but NOT actively used in any retry loop |
-| Position polling interval | 5s | Hardcoded in each adapter constructor |
-| Health monitor interval | 1 min | Hardcoded in `monitor.py` |
-| Session TTL | 24h | Hardcoded in `auth.py` |
+| Chronos Sleep | `1.0s` | Non-overlapping pause between position polling sweeps |
+| WebSocket Heartbeat Timeout | `30.0s` | Maximum silence before a client task is pruned as a zombie |
+| Poll Error Log Throttle | `30.0s` | Minimum interval between identical console error logs per client |
+| Log Retention Period | `30 days` | Automatic purge threshold for rotating log files |
+| Exit Semaphore Concurrency | `20` | Bounded concurrent broker market order executions |
+| Outbound API Semaphore | `10` | Bounded concurrent external broker API calls |
+| Session Token Lifetime | `24 hours` | Expiration for web session authentication |
 
 ---
 
 ## 12. Database Schema
 
-**SQLite** file at `data/drmt.db` (WAL mode, foreign keys enabled).
+Managed asynchronously via `aiosqlite` with Write-Ahead Logging (`PRAGMA journal_mode=WAL;`) and foreign key enforcement (`PRAGMA foreign_keys=ON;`). Migrations are applied automatically on startup from `migrations/`.
 
 ### `users`
-| Column | Type | Notes |
+| Column | Type | Constraints / Description |
 |---|---|---|
-| id | INTEGER PK AUTOINCREMENT | |
-| username | TEXT UNIQUE NOT NULL | |
-| password_hash | TEXT NOT NULL | bcrypt |
-| created_at | DATETIME | |
+| `id` | INTEGER | PRIMARY KEY AUTOINCREMENT |
+| `username` | TEXT | UNIQUE NOT NULL |
+| `password_hash` | TEXT | NOT NULL (bcrypt hashed) |
+| `created_at` | DATETIME | DEFAULT `datetime('now', 'localtime')` |
 
 ### `sessions`
-| Column | Type | Notes |
+| Column | Type | Constraints / Description |
 |---|---|---|
-| token | TEXT PK | 64-char hex |
-| user_id | INTEGER | FK -> users.id |
-| expires_at | DATETIME | 24h from creation |
+| `token` | TEXT | PRIMARY KEY (64-character hexadecimal secure token) |
+| `user_id` | INTEGER | REFERENCES `users(id)` ON DELETE CASCADE |
+| `expires_at` | DATETIME | NOT NULL (24 hours from creation) |
 
 ### `credentials`
-| Column | Type | Notes |
+| Column | Type | Constraints / Description |
 |---|---|---|
-| id | INTEGER PK AUTOINCREMENT | |
-| broker | TEXT | "MSTOCK" / "ALICE BLUE" / "FLATTRADE" |
-| api_key | TEXT | Broker API key |
-| api_secret | TEXT | Broker API secret |
-| fingerprint | TEXT UNIQUE | Deduplication/upsert key |
-| client_id | TEXT | Broker client/user ID |
-| password | TEXT | **Plaintext** broker login password |
-| totp_secret | TEXT | TOTP secret for 2FA |
-| api_key_encrypted | TEXT | MStock-specific field |
-| app_code | TEXT | AliceBlue vendor app code |
-| access_token | TEXT | Active Session Cookie (HttpOnly)/session token |
-| access_token_created_at | DATETIME | |
-| user_id | INTEGER | Reference to Plato platform user |
-| static_ip | TEXT | IP to route via proxy |
-| status | TEXT | pending/active/failed/skipped/max_retries_exceeded/max_credential_sets_exceeded |
-| last_error | TEXT | Last error message |
-| retry_count | INTEGER | |
-| created_at | DATETIME | |
+| `id` | INTEGER | PRIMARY KEY AUTOINCREMENT |
+| `broker` | TEXT | `MSTOCK` \| `FLATTRADE` \| `ALICE BLUE` \| `FYERS` |
+| `api_key` | TEXT | Broker API key / vendor key |
+| `api_secret` | TEXT | Broker API secret / app secret |
+| `fingerprint` | TEXT | UNIQUE NOT NULL (Deduplication / UPSERT key) |
+| `client_id` | TEXT | Broker client trading ID |
+| `password` | TEXT | Broker login password (used for automated 2FA) |
+| `totp_secret` | TEXT | Base32 TOTP secret for 2FA generation |
+| `api_key_encrypted` | TEXT | Broker-specific encrypted API key (MStock) |
+| `app_code` | TEXT | Vendor / partner app code (Alice Blue) |
+| `token` / `access_token`| TEXT | Active session / JWT / jKey bearer token |
+| `token_updated_at` | DATETIME | Timestamp of last successful token generation |
+| `user_id` | INTEGER | Platform owner user ID |
+| `static_ip` | TEXT | Whitelisted egress IP routed via proxy |
+| `status` | TEXT | `working` \| `failed` \| `skipped` \| `max_retries_exceeded` |
+| `last_error` | TEXT | Sanitized error reason if authentication failed |
+| `retry_count` | INTEGER | Consecutive retry attempts |
+| `created_at` | DATETIME | Timestamp of initial insertion |
 
 ### `exited_positions`
-| Column | Type | Notes |
+| Column | Type | Constraints / Description |
 |---|---|---|
-| id | INTEGER PK AUTOINCREMENT | |
-| position_id | TEXT | Composite key from live position |
-| broker | TEXT | |
-| client_id | TEXT | |
-| symbol | TEXT | |
-| token | TEXT | Broker instrument token |
-| exchange | TEXT | NSE/BSE/NFO/BFO |
-| product_type | TEXT | INTRADAY/CARRYFORWARD/CNC/etc |
-| order_type | TEXT | |
-| transaction_type | TEXT | BUY/SELL |
-| quantity | INTEGER | |
-| avg_price | REAL | Entry price |
-| exit_price | REAL | LTP at time of exit |
-| pnl | REAL | |
-| exited_at | DATETIME | localtime |
+| `id` | INTEGER | PRIMARY KEY AUTOINCREMENT |
+| `position_id` | TEXT | Unique composite identifier of live position |
+| `broker` | TEXT | Broker name |
+| `client_id` | TEXT | Trading account client ID |
+| `symbol` | TEXT | Instrument trading symbol (e.g. `NIFTY24SEP25000CE`) |
+| `token` | TEXT | Exchange instrument token |
+| `exchange` | TEXT | `NSE` \| `NFO` \| `BSE` \| `BFO` \| `MCX` |
+| `product_type` | TEXT | `INTRADAY` \| `CARRYFORWARD` \| `CNC` \| `MIS` |
+| `order_type` | TEXT | `MKT` \| `LIMIT` |
+| `transaction_type` | TEXT | `BUY` \| `SELL` |
+| `quantity` | INTEGER | Position size squared off |
+| `avg_price` | REAL | Entry average trade price |
+| `exit_price` | REAL | Executed exit price (LTP at exit) |
+| `pnl` | REAL | Realized profit or loss |
+| `exited_at` | DATETIME | Local execution timestamp |
 
-**Also exists but NOT actively used**: `positions`, `exit_history`, `system_logs` (created by migration 001, no active code writes to them).
-
----
-
-## 13. Dependencies
-
-```
-github.com/google/uuid v1.6.0            -- order tags / unique IDs for orders
-github.com/gorilla/websocket v1.5.3      -- Flattrade WebSocket (reference, not used in production)
-github.com/jmoiron/sqlx v1.4.0           -- SQL query helpers
-github.com/mattn/go-sqlite3 v1.14.22     -- CGO SQLite (used in Dockerfile build stage)
-github.com/pquerna/otp v1.5.0            -- TOTP generation for broker 2FA
-golang.org/x/crypto v0.55.0             -- bcrypt for admin password hashing
-modernc.org/sqlite v1.56.0              -- Pure-Python SQLite (used at runtime; no CGO needed for local builds)
-```
-
----
-
-## 14. Logging System
-
-`logger/logger.py` provides named loggers:
-
-| Logger | Service Name | Used For |
+### `auth_audit_logs` (Migration `004_auth_audit_logs.sql`)
+| Column | Type | Constraints / Description |
 |---|---|---|
-| `logger.Auth` | `drmt.auth` | Credential init, token generation |
-| `logger.Exit` | `drmt.exit_order_flow` | Order placement, exit results |
-| `logger.Monitor` | `drmt.order_monitoring` | Position manager events |
-| `logger.System` | `drmt.system_startup` | Server boot, config |
-| `logger.Health` | `drmt.health_monitor` | Server health pings |
-
-Each logger:
-- Writes to `stdout` in Python-style format: `2026-01-01 12:00:00 | INFO     | file.py:123 | Message`
-- Writes to hourly rotating files at `data/logs/<service_name>/app_YYYY-MM-DD_HH.log` (errors -> `error_*.log`)
-- Keeps last 100 entries in an in-memory ring buffer (thread-safe via `sync.RWMutex`)
-
-The `/api/logs?type=orders|auth|system` API returns this in-memory buffer to the frontend's ActionLogWidget.
+| `id` | INTEGER | PRIMARY KEY AUTOINCREMENT |
+| `user_id` | INTEGER | Authenticated user ID (or NULL if failed) |
+| `username` | TEXT | NOT NULL (Attempted username) |
+| `action` | TEXT | `LOGIN_SUCCESS` \| `LOGIN_FAILED` \| `LOGOUT` \| `SESSION_CHECK` |
+| `status` | TEXT | `SUCCESS` \| `FAILED` |
+| `ip_address` | TEXT | Client remote IP address |
+| `user_agent` | TEXT | Client browser User-Agent header |
+| `details` | TEXT | Audit notes / reason |
+| `timestamp` | DATETIME | DEFAULT `datetime('now', 'localtime')` |
 
 ---
 
-## 15. Known Issues, TODOs & Incomplete Features
+## 13. Dependencies (`requirements.txt`)
 
-1. **`FlattradeWSAdapter` exists but is unused** — `main.py` uses `FlattradeAdapter` (HTTP polling). The WS adapter in `position/flattrade_ws.py` is functional but was replaced.
+Python 3.12 native asynchronous ecosystem:
 
-2. **`broker/` and `events/` are empty** — placeholder packages with no code.
-
-3. **Dropbox integration is bypassed** — `credentials/dropbox.py` + `credentials/parser.py` exist but `init.py` reads directly from SQLite. Dead code in the current flow.
-
-4. **`positions`, `exit_history`, `system_logs` tables are unused** — created by migration 001 but no active code writes to them.
-
-5. **Bell notification button is a placeholder** — the bell icon in the header has no functionality.
-
-6. **"Pending Exit" tab is commented out** — exists in `app.jsx` JSX comments (lines 798-803) but is disabled.
-
-7. **LTP (Last Traded Price) is always 0** — position adapters do not fetch real-time LTP. The Running tab column always shows 0. The exit handler falls back to `avg_price` when LTP=0.
-
-8. **`executeAliceBlueAPI()` in `engine.py` is dead code** — `executeAliceBlueWeb()` is the active implementation (lines 400-489 are unused).
-
-9. **`HTTPMaxRetries = 5` and `HTTPRetryBaseDelayMs = 1000` are defined but never used** — no retry loop uses these constants.
-
-10. **Test dummy positions** in `position/mstock.py` (lines 122-165) are commented out but still present.
-
-11. **`TEST_MODE_FORCE_POLL = false`** hardcoded flag in `app.jsx` Dashboard — set to `true` to bypass market hours check during development.
-
-12. **MStock instruments cache failure** — if `LoadMStockInstruments()` fails at startup, all MStock exits will fail with "instrument not found in cache". No retry/fallback exists.
-
-13. **Export CSV button is empty** — the export button in Executed tab (app.jsx line 1099-1106) has no visible label text; it's an invisible but clickable button.
-
-14. **No multi-user support** — only one admin user. The `users` table supports it structurally, but the UI assumes a single admin.
+```text
+aiohttp==3.9.5           # Asynchronous HTTP server and client framework
+aiosqlite==0.20.0        # Async SQLite driver with persistent connection pooling
+pydantic==2.7.1          # Data modeling, schema serialization, and validation
+pydantic-settings==2.2.1 # Strongly typed .env and environment variable loader
+pycryptodome==3.20.0     # Cryptographic routines (AES, RSA, hashing for broker auth)
+pyotp==2.9.0             # Time-based One-Time Password (TOTP) generator for 2FA
+bcrypt==4.1.3            # Password hashing and verification
+redis==5.0.4             # Async Redis client for caching and diff-before-push
+aiofiles==23.2.1         # Non-blocking async file I/O for rotating log files
+python-dotenv==1.0.1     # Environment variable loading
+pyinstaller              # Build dependency: Standalone executable compilation
+```
 
 ---
 
-## 16. Critical Files and How Everything Is Connected
+## 14. Logging System & Terminal Standard (`logger/logger.py`)
+
+### Standard Terminal Formatter (`DRMTLogFormatter`)
+
+Terminal stdout logs adhere strictly to the standardized format:
+```text
+YYYY-MM-DD HH:MM:SS.mmm | LEVEL<8 | filename.py:lineno | message
+```
+Example:
+```text
+2026-09-28 09:31:24.479 | INFO     | main.py:70 | Starting DRMT V2...
+```
+
+- **IST Timezone (`Asia/Kolkata`)**: Applied universally across terminal and disk logs.
+- **Zero-Leakage Credential Sanitization (`sanitize_log_message`)**: Automatically masks passwords, TOTP secrets, API keys, private keys, bearer tokens, JWT signatures, and Flattrade `jKey`/`susertoken` before output.
+- **Clean Error Formatting (`clean_error_message`)**:
+  - Strips multiline HTML error pages (e.g. Cloudflare / nginx 502 Bad Gateway) into concise single-line messages (`HTTP 502 (Bad Gateway)`).
+  - Removes raw transport URLs and internal proxy artifacts.
+  - Normalizes aiohttp error formats and unpacks Python broker dictionaries.
+  - Collapses whitespace and newlines for clean, readable terminal logs.
+
+### Seven Named Service Loggers
+
+| Service Logger | Module Tag | Responsibility |
+|---|---|---|
+| `logger_auth` | `DRMT.Auth` | Multi-broker login, token refresh, 2FA generation |
+| `logger_audit` | `DRMT.Audit` | User authentication events, session lifecycle, IP audit trail |
+| `logger_api` | `DRMT.Api` | Incoming HTTP REST endpoints and WebSocket handshakes |
+| `logger_exit` | `DRMT.Exit` | Order placement, mass exit square-off, broker execution responses |
+| `logger_monitor` | `DRMT.Monitor` | Position tracking, quantity updates, order status |
+| `logger_system` | `DRMT.SCM` | Startup sequence, background workers, Chronos scanning cycles |
+| `logger_health` | `DRMT.Health` | Upstream service health checks and server connectivity |
+
+### Rotating Disk Storage & 30-Day Automated Retention
+
+- **Daily Rotation**:
+  - Information / Warnings: `data/logs/<service>/app_YYYY-MM-DD.log`
+  - Errors: `data/logs/<service>/error_YYYY-MM-DD.log`
+- **In-Memory Ring Buffer**: Each service logger retains the last 100 entries in memory (`_history`), served to the frontend via `/api/logs?type=orders|auth|system|blocklist`.
+- **Automated Retention Purge**: `start_log_cleanup_loop` runs once at boot and every 24 hours thereafter to delete any log files older than 30 days based on both filename date and filesystem modification timestamp (`mtime`).
+- **Instant Email Alerts**: Calling `logger.error(...)` automatically fires a background task (`send_error_email`) via SMTP without blocking the main event loop.
+
+---
+
+## 15. Standalone Packaging & Build Process
+
+DRMT V2 provides automated scripts to package the entire Python runtime, dependencies, frontend assets, and database migrations into a standalone executable.
+
+### PyInstaller Build Specification (`drmt.spec`)
+
+- Bundles all source modules, static assets (`web/`), and database schema files (`migrations/`).
+- Embeds required shared libraries and dynamic modules.
+- Generates a self-contained deployment directory at `dist/drmt/`.
+
+### Automated Build Scripts
+
+- **Linux Build (`build_exe.sh`)**:
+  ```bash
+  ./build_exe.sh
+  ```
+  1. Installs build dependencies from `requirements.txt` and `pyinstaller`.
+  2. Executes PyInstaller against `drmt.spec`.
+  3. Prepares deployment directory structure (`dist/drmt/static`, `dist/drmt/data/logs`).
+  4. Copies initial database (`data/drmt.db`) and `.env` template.
+  5. Generates executable launcher script `dist/drmt/run.sh`.
+- **Windows Build (`build_exe.bat`)**:
+  Performs identical build steps on Windows environments, generating `dist/drmt/drmt.exe`.
+- **Portable Launcher (`run.sh`)**:
+  Starts the compiled standalone binary with correct relative paths on port 10000.
+
+---
+
+## 16. Systemd Daemon & Production Deployment
+
+In production environments, DRMT V2 runs as a managed `systemd` daemon:
+
+### Service File (`/etc/systemd/system/drmt.service`)
+
+```ini
+[Unit]
+Description=DRMT V2 Trading Terminal Service
+After=network.target redis-server.service
+
+[Service]
+Type=simple
+User=sahil
+WorkingDirectory=/opt/drmt/drmt
+Environment="PORT=10000"
+EnvironmentFile=/opt/drmt/drmt/.env
+ExecStart=/opt/drmt/drmt/venv/bin/python3 main.py
+Restart=always
+RestartSec=5s
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Operational Commands
+
+```bash
+# Check service status
+sudo systemctl status drmt.service
+
+# Restart service after deployment
+sudo systemctl restart drmt.service
+
+# Stream live production logs
+sudo journalctl -u drmt.service -f
+```
+
+- **Test Server Deployment**: Running at `http://192.168.1.7:10000`.
+
+---
+
+## 17. Critical Files and Architectural Map
 
 ```
-embed.py
-  +-- embeds web/* and migrations/* into the binary at compile time
+main.py
+  ├── setup_logging() (DRMTLogFormatter on stdout)
+  ├── init_db() (aiosqlite WAL migrations 001-004)
+  ├── fetch_and_sync_credentials() (Dynamic remote CSV loader)
+  ├── core_engine.start() (Worker pool, Redis cache, exit semaphores)
+  ├── start_log_cleanup_loop() (30-day log file retention daemon)
+  └── aiohttp.web.run_app(app, port=10000)
 
-main.py/main.py
-  +-- wires all packages together
-  +-- registers all HTTP routes on mux
+settings.py
+  └── Pydantic Settings reading .env (PORT=10000, DB_PATH, REDIS_URL, etc.)
 
-models/models.py
-  +-- shared data types used by ALL packages
+core/engine.py
+  ├── CoreEngine singleton
+  ├── _worker_queue (asyncio.Queue maxsize=500)
+  ├── _exit_sem (asyncio.Semaphore(20))
+  ├── _api_sem (asyncio.Semaphore(10))
+  ├── redis_pool (redis.asyncio connection)
+  └── spawn_user_poll() / remove_user()
 
-config/config.py + constants.py
-  +-- read by ALL packages for URLs, limits, broker names
-
-persistence/db.py
-  +-- called once at boot; *sqlx.DB passed to api/, credentials/, execution/, position/
-
-auth/auth.py
-  +-- called by api/handlers.py (login/logout) and api/middleware.py (validate)
+database/db.py
+  ├── DatabasePool (persistent connection manager with semaphore)
+  ├── init_db() (runs migrations 001, 002, 003, 004_auth_audit_logs)
+  └── get_db() (async context manager for SQLite queries)
 
 credentials/
-  +-- init.py -> dedup.py -> [aliceblue|flattrade|mstock].py -> GenerateToken()
-  +-- refresh.py -> called by ALL position adapters and engine on auth errors
-  +-- httpclient.py -> RESTProxyTransport used by credential generators + engine + MStock/Flattrade adapters
+  ├── dynamic_loader.py (Remote Dropbox CSV sync, user name caching)
+  ├── dedup.py (Fingerprint grouping by broker + client_id + static_ip)
+  ├── httpclient.py (RESTProxyTransport forwarding via Quantivo proxy)
+  └── [mstock|flattrade|aliceblue|fyers].py (Broker login & TOTP auth routines)
 
 position/
-  +-- manager.py -> central data store; passed to api/handlers.py and api/exit.py
-  +-- [mstock|aliceblue|flattrade].py -> push positions to manager.Feed
-  +-- adapter.py -> BrokerAdapter interface (all three implement it)
+  ├── chronos.py (Chronos polling loop, Redis diffing, 30s error throttling)
+  ├── adapters.py (Broker position fetch dispatchers)
+  └── blocklist.py (Quarantined account tracking to prevent broker lockout)
 
-execution/engine.py
-  +-- reads credentials from DB per position
-  +-- uses httpclient.py for proxy routing
-  +-- called by api/exit.py
+execution/
+  ├── engine.py (Mass exit orchestrator with semaphore concurrency control)
+  └── [mstock|flattrade|aliceblue|fyers].py (Broker market order execution)
+
+api/
+  ├── routes.py (REST handlers: /api/exit, /api/exited, /api/credentials/refresh, etc.)
+  ├── auth.py (Login, logout, session check, bcrypt verification, audit trail)
+  ├── ws.py (WebSocket handler: /api/ws/positions with instant Redis cache push)
+  └── middleware.py (Authentication and request rate limiting middleware)
 
 logger/logger.py
-  +-- global instances: Auth, Exit, Monitor, System, Health
-  +-- read by api/logs.py for /api/logs endpoint
+  ├── DRMTLogFormatter (Standard IST millisecond terminal formatter)
+  ├── ServiceLogger (Bounded ring buffer, daily files, auto error email)
+  ├── clean_error_message() (HTML stripper, single-line error formatting)
+  └── sanitize_log_message() (Credential and secret pattern masker)
 
-web/app.jsx
-  +-- talks ONLY to /api/* endpoints
-  +-- no direct broker access from browser
+utils/
+  ├── user_mapping.py (Client ID to human trader name resolution)
+  ├── email.py (Asynchronous SMTP error alert notifications)
+  └── paths.py (Bundle and application directory resolution)
+
+web/
+  ├── index.html (SPA entrypoint)
+  ├── app.jsx (React dashboard, 4-tab Action Log widget, running & executed tables)
+  └── style.css (Dark trading terminal design system)
 ```
 
 ---
 
-## 17. How to Run and Safely Modify
+## 18. Security & Production Hardening
 
-### Running Locally (Development)
-
-```bash
-cd /opt/plato/plato/drmt_v2
-
-# Option 1: Run pre-built binary directly
-./drmt
-
-# Option 2: Build and run from source
-./drmt_server
-
-# Option 3: Docker
-docker-compose up --build
-```
-
-Server starts on **port 8000**. Visit `http://localhost:3100`. Default credentials: `admin / admin`.
-
-### Building for Production
-
-```bash
-# Linux
-
-# Windows cross-compile
-```
-
-The Dockerfile uses CGO (`github.com/mattn/go-sqlite3`) for the build stage. For local builds without Docker, no CGO is needed — `modernc.org/sqlite` (pure Python) is used at runtime.
-
-### Adding a New Broker
-
-1. Add broker name constant to `config/constants.py`.
-2. Add API URL constants to `constants.py`.
-3. Create `credentials/<broker>.py` implementing `TokenGenerator` interface (`GenerateToken`, `ValidateToken`, `BrokerName`).
-4. Register the generator in `credentials/init.py` -> `NewInitializer()`.
-5. Create `position/<broker>.py` with a polling adapter implementing `BrokerAdapter` interface.
-6. Wire the adapter in `main.py/main.py`.
-7. Add exit logic to `execution/engine.py` -> `ExecuteExit()` switch case.
-
-### Adding a New API Endpoint
-
-1. Create handler function in `api/` (new file or extend existing).
-2. Register the route in `main.py/main.py` with `mux.HandleFunc(...)`.
-3. Wrap with `api.AuthMiddleware(db, handler)` if authentication is required.
-
-### Modifying the Frontend
-
-1. Edit `web/app.jsx` directly — no build step needed.
-2. Bump the version query param in `web/index.html` (e.g., `app.jsx?v=14`) to bust browser cache.
-3. The Python binary embeds the `web/` directory at compile time — rebuild the binary to pick up frontend changes.
-
-### Adding Credentials
-
-Insert directly into the SQLite database (`data/drmt.db`):
-
-```sql
-INSERT INTO credentials (
-    broker, api_key, api_secret, fingerprint, client_id,
-    password, totp_secret, app_code, user_id, static_ip, status
-) VALUES (
-    'MSTOCK', '<api_key>', '<api_secret>', '<unique_fingerprint>', '<client_id>',
-    '<password>', '<totp_secret>', '', 1, '', 'pending'
-);
-```
-
-The `fingerprint` must be unique (used as the upsert key). Restart DRMT to initialize the new credential.
-
-### Logs
-
-- Console: `stdout` (see `server.log` for recent runs)
-- Files: `data/logs/<service>/app_YYYY-MM-DD_HH.log`
-- In-browser: ActionLogWidget shows last 100 entries from each logger category
-
----
-
-## 18. Security Notes
-
-- Broker passwords are stored **in plaintext** in the SQLite `credentials` table. Known limitation.
-- The default admin password is `admin` — **change it** via direct DB update before any real deployment:
-  ```sql
-  UPDATE users SET password_hash = '<bcrypt_hash>' WHERE username = 'admin';
-  ```
-- The `drmt_session` cookie is `HttpOnly` + `SameSite=Strict` — protected against XSS/CSRF.
-- The Dropbox tokens in `config.py` are hardcoded defaults — rotate and store in `.env` instead.
-- Broker `api_secret` and `totp_secret` are stored unencrypted in SQLite.
+- **Filesystem Permissions**: SQLite database (`data/drmt.db`) and `.env` contain active broker credentials and API secrets; restrict access (`chmod 600 data/drmt.db .env`).
+- **Terminal & Disk Log Sanitization**: All loggers apply `sanitize_log_message` before output, guaranteeing passwords, TOTP keys, Bearer tokens, and broker secrets are never exposed in terminal streams or log files.
+- **Audit Trails**: Every authentication event is committed to `auth_audit_logs` with client IP address, timestamp, and result status.
+- **Outbound Execution Throttling**: Exit orders are capped at 20 concurrent network operations (`_exit_sem`) to avoid broker rate-limiting bans or proxy connection drops.
+- **Account Quarantine (Block List)**: Accounts with invalid credentials are automatically placed in an in-memory blocklist to prevent repeated failed login attempts from triggering broker account lockout.
+- **Default Administrative Credentials**: The default `admin` / `admin` user initialized on blank databases must be updated immediately upon deployment.
 
 ---
 
@@ -781,6 +824,95 @@ This section documents the chronological history of identified issues, root caus
   - Documented non-breaking concurrent execution architecture (`asyncio.gather(*tasks)`) and semaphore protection (`acquire_api_semaphore`) ready for deployment.
 * **Current Behavior:** System behavior, exact delays, and concurrency bottlenecks fully mapped and verified without disruption to live trading execution.
 * **Status:** Verified & Documented.
+
+---
+
+### Issue 7: Standalone PyInstaller Executable Compilation & Packaging
+* **Date/Time:** 2026-10-02 16:45:00 IST
+* **Bug in Previous System:** Deploying DRMT on clean Linux servers or Windows client workstations required manual installation of Python 3.12, system build dependencies, virtual environments, and PIP packages. Any system dependency mismatch or missing C-extensions caused runtime startup failures.
+* **Root Cause:** Absence of a self-contained single-package binary distribution pipeline for deployment environments lacking managed Python toolchains.
+* **Fix Implemented in Current System:**
+  - Configured `drmt.spec` PyInstaller specification bundling backend application code, embedded static web UI (`web/`), dynamic libraries, and schema migration scripts (`migrations/`).
+  - Authored automated one-click build scripts:
+    - `build_exe.sh` for Linux server packaging.
+    - `build_exe.bat` for Windows client compilation.
+  - Implemented portable launcher `run.sh` in the distribution output (`dist/drmt/`), auto-scaffolding log directories (`dist/drmt/data/logs`) and copying local runtime files (`data/drmt.db`, `.env`).
+* **Current Behavior:** Compiles a standalone deployment package into `dist/drmt/` that executes out-of-the-box on target hosts without external Python installations or environment configuration.
+* **Status:** Resolved.
+
+---
+
+### Issue 8: Production Test Server Deployment on Port 10000 & Systemd Service Management
+* **Date/Time:** 2026-10-03 11:30:00 IST
+* **Bug in Previous System:** The server defaulted to port 8000 or port 3100, which conflicted with other services on the host (`192.168.1.7`). The server ran as a foreground terminal script without automatic crash recovery, background daemonization, or system reboot persistence.
+* **Root Cause:** Hardcoded legacy ports across configuration templates and lack of a registered systemd service unit.
+* **Fix Implemented in Current System:**
+  - Updated `settings.py` default listening port to `PORT = 10000`.
+  - Configured test server environment `.env` to bind on `0.0.0.0:10000`.
+  - Authored and enabled `/etc/systemd/system/drmt.service` with `User=sahil`, `Restart=always`, `RestartSec=5s`, and `LimitNOFILE=65536`.
+  - Integrated `systemctl` operational controls (`status`, `restart`) and systemd journal log streaming.
+* **Current Behavior:** System operates as a resilient, self-healing background daemon on `http://192.168.1.7:10000` with 100% uptime and automatic restart upon crash or server reboot.
+* **Status:** Resolved.
+
+---
+
+### Issue 9: Broker HTTP 502/504 Bad Gateway & False Blocklist Quarantine
+* **Date/Time:** 2026-10-03 18:15:20 IST
+* **Bug in Previous System:** Intermittent network glitches or upstream broker / proxy server hiccups (HTTP 502 Bad Gateway, HTTP 504 Gateway Timeout, socket timeouts) caused healthy broker trading accounts to be falsely classified as authentication-failed and permanently locked into the Block List.
+* **Root Cause:** In `position/chronos.py`, the exception handler in `refresh_token_with_backoff` caught all generic exceptions and immediately dispatched `add_to_blocklist(...)`, failing to distinguish between permanent credential rejections (invalid password/TOTP) and transient network/gateway timeouts.
+* **Fix Implemented in Current System:**
+  - Introduced explicit transient error classification detecting HTTP status codes `500`, `502`, `503`, `504`, `IA500`, `Internal Server Error`, `Bad Gateway`, `Gateway Timeout`, socket resets, connection refusals, and `asyncio.TimeoutError`.
+  - For transient errors: Skips blocklist quarantine, logs a warning (`⚠️ Transient network error ... skipping blocklist`), and keeps the account active for retry on the subsequent polling cycle.
+  - Accounts are only quarantined into the Block List when an unrecoverable broker auth rejection occurs.
+* **Current Behavior:** Network blips, gateway timeouts, and proxy 502/504 hiccups no longer block accounts; accounts continue polling smoothly as soon as upstream connectivity returns.
+* **Status:** Resolved.
+
+---
+
+### Issue 10: Standardized Terminal Log Formatting (`DRMTLogFormatter`) & Signal-to-Noise Ratio
+* **Date/Time:** 2026-10-03 20:45:10 IST
+* **Bug in Previous System:** Terminal output was inconsistent across modules, mixing raw URLs, unaligned log level strings, and redundant internal proxy traces that overwhelmed operator visibility.
+* **Root Cause:** Loggers used differing formats without a unified stream formatter, and routine wire-level HTTP traces (`DRMT.Api`, `DRMT.Audit`) logged directly to standard output.
+* **Fix Implemented in Current System:**
+  - Implemented `DRMTLogFormatter` strictly adhering to the standard specification:
+    `YYYY-MM-DD HH:MM:SS.mmm | LEVEL<8 | filename.py:lineno | message`
+  - Enforced Indian Standard Time (`Asia/Kolkata`) universally across all formatters.
+  - Redirected routine API request traces and audit pings exclusively to rotating daily files (`data/logs/api/`, `data/logs/audit/`), keeping standard output dedicated to high-signal core engine operations, scanning summaries, order flow, and error alerts.
+* **Current Behavior:** Clean, beautifully formatted, millisecond-precise terminal output that matches production terminal standards and provides clear operational visibility.
+* **Status:** Resolved.
+
+---
+
+### Issue 11: Error Terminal Log Standardization (`clean_error_message`), HTML Stripping & 30s Error Throttling
+* **Date/Time:** 2026-10-04 14:10:35 IST
+* **Bug in Previous System:** Upstream HTTP 502/504 errors returned verbose multiline HTML error pages (e.g., Cloudflare/nginx error pages) or deeply nested raw Python dictionaries that polluted terminal stdout with hundreds of lines every second. Repeating failures flooded the screen on every 1-second Chronos cycle.
+* **Root Cause:** Error messages were written directly to logs without sanitization, normalization, or interval throttling for persistent broker outages.
+* **Fix Implemented in Current System:**
+  - Developed `clean_error_message(msg)` in `logger/logger.py`:
+    1. Strips all HTML tags (`<[^>]+>`) and collapses whitespace into single-line summaries (`HTTP 502 (Bad Gateway)`).
+    2. Strips internal proxy URLs and debug artifacts (`url=URL(...)`).
+    3. Normalizes aiohttp error formats and unpacks Python broker dictionaries (`{'message': '...'}`).
+    4. Deduplicates repeated error prefixes.
+  - Implemented `_POLL_ERROR_THROTTLE_SEC = 30.0` in `position/chronos.py`:
+    - Tracks consecutive identical errors per `client_id`.
+    - Logs the initial error once, then suppresses identical repetitions for 30 seconds.
+    - When connectivity recovers, logs `✅ Connection restored for <broker>:<client_id>`.
+* **Current Behavior:** Error messages are rendered as clean, single-line text in console and log files. Persistent outages remain quiet without flooding, restoring immediately with confirmation logs once connectivity resumes.
+* **Status:** Resolved.
+
+---
+
+### Issue 12: Action Log UI "Audit" Tab Removal & 4-Tab Balanced Layout
+* **Date/Time:** 2026-10-04 22:30:00 IST
+* **Bug in Previous System:** The Notification UI Action Log widget included an "Audit" tab that created visual noise and duplicated system logs.
+* **Root Cause:** Legacy tab configuration in `web/app.jsx` retained an Audit navigation tab and associated active state styling.
+* **Fix Implemented in Current System:**
+  - Removed the "Audit" tab element from `web/app.jsx`.
+  - Removed the active/selected styling associated with the Audit tab.
+  - Rebalanced the layout and spacing across the remaining four tabs: **Orders**, **Auth**, **System**, and **Block list**.
+  - Retained complete backend audit logging in `auth_audit_logs` without impacting data collection.
+* **Current Behavior:** Clean, balanced 4-tab Action Log interface displaying Orders, Auth, System, and Block list with full UI symmetry and no redundant views.
+* **Status:** Resolved.
 
 ---
 

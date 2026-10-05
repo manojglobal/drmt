@@ -1,8 +1,16 @@
-import os
-import csv
-import json
+"""
+utils/user_mapping.py — User and Client ID Mapping.
+Provides user display names and client ID mapping sourced dynamically from the remote feed.
+"""
+
 import logging
 from typing import Dict, List, Set
+
+from credentials.dynamic_loader import (
+    get_dynamic_configured_cids,
+    get_dynamic_username,
+    get_dynamic_cids_for_user,
+)
 
 logger = logging.getLogger("DRMT.UserMapping")
 
@@ -10,90 +18,36 @@ DEFAULT_CLIENT_NAMES: Dict[str, str] = {
     "P645M1": "Manoj mStock Demo",
     "P645M2": "Jagdeesh Sawant",
     "P645M6": "Rinku Singh",
+    "FZ48062": "Rinku Singh",
 }
 
-_cid_to_name: Dict[str, str] = dict(DEFAULT_CLIENT_NAMES)
-_name_to_cids: Dict[str, List[str]] = {}
-for cid, name in DEFAULT_CLIENT_NAMES.items():
-    _name_to_cids.setdefault(name, []).append(cid)
-_configured_cids: Set[str] = set(DEFAULT_CLIENT_NAMES.keys())
-_last_mtime: float = 0.0
+_fallback_configured_cids: Set[str] = set(DEFAULT_CLIENT_NAMES.keys())
 
-def _get_csv_path() -> str:
-    from utils.paths import get_app_dir
-    base_dir = get_app_dir()
-    for fname in ("plato_client_credentials_flattrade.csv", "plato_client_credentials.csv"):
-        candidate = os.path.join(base_dir, "static", fname)
-        if os.path.exists(candidate):
-            return candidate
-    return os.path.join(base_dir, "static", "plato_client_credentials_flattrade.csv")
-
-def _reload_if_needed() -> None:
-    global _cid_to_name, _name_to_cids, _configured_cids, _last_mtime
-    csv_path = _get_csv_path()
-    if not os.path.exists(csv_path):
-        return
-
-    try:
-        mtime = os.path.getmtime(csv_path)
-        if mtime == _last_mtime and _cid_to_name:
-            return
-
-        cid_map: Dict[str, str] = dict(DEFAULT_CLIENT_NAMES)
-        name_map: Dict[str, List[str]] = {}
-        configured_set: Set[str] = set()
-        for cid, name in DEFAULT_CLIENT_NAMES.items():
-            name_map.setdefault(name, []).append(cid)
-
-        with open(csv_path, mode="r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if not row.get("id") or not row.get("broker_creds"):
-                    continue
-                first = (row.get("first_name") or "").strip()
-                last = (row.get("last_name") or "").strip()
-                full_name = f"{first} {last}".strip() if last else first
-
-                try:
-                    creds_json = json.loads(row.get("broker_creds") or "{}")
-                    cid = creds_json.get("client_id")
-                    if cid:
-                        configured_set.add(cid)
-                        if full_name:
-                            cid_map[cid] = full_name
-                            name_map.setdefault(full_name, []).append(cid)
-
-                    uid = str(row.get("user_id") or "").strip()
-                    if uid and full_name:
-                        cid_map[uid] = full_name
-                except Exception:
-                    pass
-
-        _cid_to_name = cid_map
-        _name_to_cids = name_map
-        if configured_set:
-            _configured_cids = set(DEFAULT_CLIENT_NAMES.keys()) | configured_set
-        _last_mtime = mtime
-    except Exception as e:
-        logger.error(f"Failed to load credentials CSV mapping: {e}")
 
 def get_configured_client_ids() -> Set[str]:
-    """Returns the set of client_ids actually configured in the static CSV."""
-    _reload_if_needed()
-    return set(_configured_cids)
+    """Returns the set of active client IDs configured via dynamic remote feed or database."""
+    dynamic_cids = get_dynamic_configured_cids()
+    if dynamic_cids:
+        return dynamic_cids
+    return set(_fallback_configured_cids)
+
 
 def get_client_username(client_id: str) -> str:
-    """Returns the full username for a given client_id, falling back to client_id if not mapped."""
+    """Returns the full display name for a given client_id, falling back to client_id if not mapped."""
     if not client_id:
         return ""
-    _reload_if_needed()
-    return _cid_to_name.get(str(client_id), str(client_id))
+    dyn_name = get_dynamic_username(client_id)
+    if dyn_name and dyn_name != client_id:
+        return dyn_name
+    return DEFAULT_CLIENT_NAMES.get(str(client_id), str(client_id))
+
 
 def get_client_ids_for_user(query_val: str) -> List[str]:
     """Returns all client_ids associated with a username or client_id."""
     if not query_val:
         return []
-    _reload_if_needed()
-    if query_val in _name_to_cids:
-        return _name_to_cids[query_val]
-    return [query_val]
+    dyn_cids = get_dynamic_cids_for_user(query_val)
+    if dyn_cids and dyn_cids != [query_val]:
+        return dyn_cids
+    matched = [cid for cid, name in DEFAULT_CLIENT_NAMES.items() if name == query_val]
+    return matched if matched else [query_val]

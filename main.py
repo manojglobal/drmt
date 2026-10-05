@@ -8,16 +8,12 @@ from core.engine import core_engine
 from database.db import init_db, get_db
 from api import auth_routes, api_routes, websocket_handler, rate_limit_middleware
 from health.monitor import health_monitor
-from logger.logger import logger_system, start_log_cleanup_loop
+from logger.logger import logger_system, start_log_cleanup_loop, setup_logging
 from credentials.crypto import hash_password
 from utils.email import init_email_session, close_email_session
 from utils.user_mapping import get_client_username, get_configured_client_ids
 
-logging.basicConfig(
-    level=logging.INFO, 
-    format="%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%H:%M:%S"
-)
+setup_logging()
 
 logger = logging.getLogger("DRMT.System")
 
@@ -65,6 +61,44 @@ async def display_configured_credentials():
     else:
         await logger_system.info("⚠️  No active broker credentials configured.")
 
+async def authenticate_configured_credentials():
+    """Authenticates configured broker accounts on startup."""
+    from position.chronos import refresh_token_with_backoff
+    from models.schemas import Credential
+    configured_cids = get_configured_client_ids()
+    async with get_db() as db:
+        db.row_factory = None
+        query = """
+            SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at
+            FROM credentials 
+            WHERE status = 'working' 
+              AND UPPER(broker) != 'FAKE' 
+              AND client_id IS NOT NULL 
+              AND TRIM(client_id) != ''
+            ORDER BY broker, client_id
+        """
+        async with db.execute(query) as cursor:
+            rows = await cursor.fetchall()
+            
+    filtered = [r for r in rows if not configured_cids or r[2] in configured_cids]
+    if not filtered:
+        return
+        
+    await logger_system.info(f"🔄 Authenticating {len(filtered)} configured account(s) on startup...")
+    for r in filtered:
+        broker_upper = str(r[1] or "").strip().upper()
+        # Authenticate supported brokers
+        if broker_upper in ("MSTOCK", "FLATTRADE", "ALICE BLUE", "ALICEBLUE", "FYERS"):
+            cred = Credential(
+                id=r[0], broker=r[1], client_id=r[2], api_key=r[3] or "", api_secret=r[4] or "",
+                totp_secret=r[5] or "", password=r[6] or "", static_ip=r[7] or "",
+                fingerprint=r[8], status=r[9], token=r[10] or "", token_updated_at=r[11]
+            )
+            try:
+                await refresh_token_with_backoff(cred)
+            except Exception as auth_err:
+                logger.error(f"Startup auth error for {cred.broker}:{cred.client_id}: {auth_err}")
+
 async def on_startup(app: web.Application):
     """Application startup sequence."""
     await logger_system.info("Starting DRMT V2...")
@@ -75,19 +109,23 @@ async def on_startup(app: web.Application):
     # 2. Initialize DB Pool & Migrations
     await init_db()
     
-    # 3. Initialize Email Session
+    # 3. Dynamic Credentials Fetch & SQLite Sync from Remote URL
+    from credentials.dynamic_loader import fetch_and_sync_credentials
+    await fetch_and_sync_credentials()
+    
+    # 4. Initialize Email Session
     await init_email_session()
     
-    # 4. Seed Admin User
+    # 5. Seed Admin User
     await seed_admin_user()
     
-    # 5. Display Configured Credentials
+    # 6. Display Configured Credentials
     await display_configured_credentials()
     
-    # 6. Start Health Monitor
+    # 8. Start Health Monitor
     await health_monitor.start()
     
-    # 7. Start Daily Log Retention Cleanup (30 days)
+    # 9. Start Daily Log Retention Cleanup (30 days)
     asyncio.create_task(start_log_cleanup_loop(retention_days=30), name="log_retention_cleanup")
     
     await logger_system.info("Application startup complete.")
@@ -135,4 +173,4 @@ if __name__ == "__main__":
     multiprocessing.freeze_support()
     app = create_app()
     # Disable aiohttp access logs to prevent terminal spam from constant UI polling
-    web.run_app(app, host="0.0.0.0", port=8000, access_log=None, print=logger.info)
+    web.run_app(app, host="0.0.0.0", port=settings.PORT, access_log=None, print=logger.info)

@@ -5,6 +5,7 @@ from utils.paths import get_app_dir
 _env_path = os.path.join(get_app_dir(), ".env")
 
 class Settings(BaseSettings):
+    PORT: int = 10000
     DB_PATH: str = "data/drmt.db"
     DRMT_PROXY_URL: str = "https://demoapi.quantivo.in/proxy"
     WORKER_POOL_SIZE: int = 50
@@ -24,6 +25,7 @@ class Settings(BaseSettings):
     
     CONFIG_ME_URL: str = "https://config.me/api/credentials"
     CONFIG_ME_API_KEY: str = ""
+    CREDENTIALS_CSV_URL: str = "https://www.dropbox.com/scl/fi/drfbpnmb2gqopsjtcd4s3/plato_client_credentials.csv?rlkey=27hqdj3ihpgxpffbifmqxzrlw&st=bsyy81s1&dl=0"
     
     model_config = SettingsConfigDict(env_file=_env_path, env_file_encoding="utf-8", extra="ignore")
 

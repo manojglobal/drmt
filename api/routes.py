@@ -210,40 +210,9 @@ async def get_exited_positions(request: web.Request):
 
 
 def get_credentials_from_static_csv(client_id: str):
-    """Parses static CSV on demand to extract updated credentials for a specific client_id."""
-    from utils.paths import get_app_dir
-    base_dir = get_app_dir()
-    csv_path = None
-    for fname in ("plato_client_credentials_flattrade.csv", "plato_client_credentials.csv"):
-        candidate = os.path.join(base_dir, "static", fname)
-        if os.path.exists(candidate):
-            csv_path = candidate
-            break
-    if not csv_path or not os.path.exists(csv_path):
-        return None
-    try:
-        with open(csv_path, mode="r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if not row.get("broker_creds"):
-                    continue
-                try:
-                    creds = json.loads(row.get("broker_creds") or "{}")
-                    if creds.get("client_id") == client_id:
-                        return {
-                            "client_id": client_id,
-                            "password": creds.get("password") or "",
-                            "api_key": creds.get("api_key") or creds.get("app_id") or "",
-                            "totp_secret": creds.get("totp_secret") or creds.get("totp_secret_key") or "",
-                            "static_ip": str(row.get("static_ip") or "").strip(),
-                            "broker": str(row.get("broker") or "MSTOCK").strip().upper(),
-                            "token": creds.get("access_token") or creds.get("token") or "",
-                        }
-                except Exception:
-                    continue
-    except Exception as e:
-        logger.error(f"Error reading static CSV for {client_id}: {e}")
-    return None
+    """Retrieves fresh dynamic credentials for a specific client_id (replaces legacy static CSV)."""
+    from credentials.dynamic_loader import get_dynamic_credentials
+    return get_dynamic_credentials(client_id)
 
 @routes.get('/api/logs')
 async def get_logs(request: web.Request):

@@ -27,8 +27,9 @@ async def rate_limit_middleware(request: web.Request, handler):
     try:
         response = await handler(request)
         elapsed_ms = (time.monotonic() - t0) * 1000
-        # Exclude static asset polls to keep log focused on operational APIs
-        if request.path.startswith("/api"):
+        # Routine UI polling paths excluded from operational logs unless error occurs
+        _POLL_PATHS = {"/api/health", "/api/logs", "/api/exited/dates", "/api/blocked-users", "/api/me"}
+        if request.path.startswith("/api") and (request.path not in _POLL_PATHS or response.status >= 400):
             await logger_api.info(
                 f"[HTTP] {request.method} {request.path} -> {response.status} ({elapsed_ms:.1f}ms) [{user_identifier}]"
             )
