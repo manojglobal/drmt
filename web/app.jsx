@@ -26,6 +26,21 @@ function useDebounce(value, delay) {
 }
 
 /* ═══════════════════════════════════════════
+   ACTION LOG CACHE & LOGOUT HELPERS
+   ═══════════════════════════════════════════ */
+const LOG_STORAGE_KEYS = ['orders', 'auth', 'system', 'blocked'];
+
+const clearActionLogsStorage = () => {
+    try {
+        LOG_STORAGE_KEYS.forEach(tab => localStorage.removeItem(`drmt_logs_${tab}`));
+        localStorage.removeItem('drmt_active_log_tab');
+        localStorage.removeItem('drmt_action_log_open');
+    } catch (e) {
+        console.warn('Failed to clear log storage', e);
+    }
+};
+
+/* ═══════════════════════════════════════════
    ROOT APP – auth gate
    ═══════════════════════════════════════════ */
 function App() {
@@ -52,7 +67,17 @@ function App() {
         );
     }
 
-    return user ? <Dashboard user={user} onLogout={() => setUser(null)} /> : <Login onLogin={setUser} />;
+    return user ? (
+        <Dashboard
+            user={user}
+            onLogout={() => {
+                clearActionLogsStorage();
+                setUser(null);
+            }}
+        />
+    ) : (
+        <Login onLogin={setUser} />
+    );
 }
 
 /* ═══════════════════════════════════════════
@@ -176,10 +201,63 @@ const ServerHealthMonitor = () => {
    ACTION LOG WIDGET  (fixed, hover-expand)
    ═══════════════════════════════════════════ */
 const ActionLogWidget = () => {
-    const [activeTab, setActiveTab] = React.useState('orders');
-    const [logs, setLogs] = React.useState([]);
+    const [activeTab, setActiveTab] = React.useState(() => {
+        try {
+            return localStorage.getItem('drmt_active_log_tab') || 'orders';
+        } catch {
+            return 'orders';
+        }
+    });
+    const [logs, setLogs] = React.useState(() => {
+        try {
+            const initialTab = localStorage.getItem('drmt_active_log_tab') || 'orders';
+            const cached = localStorage.getItem(`drmt_logs_${initialTab}`);
+            return cached ? JSON.parse(cached) : [];
+        } catch {
+            return [];
+        }
+    });
+    const [isOpen, setIsOpen] = React.useState(() => {
+        try {
+            return localStorage.getItem('drmt_action_log_open') === 'true';
+        } catch {
+            return false;
+        }
+    });
     const [retryingId, setRetryingId] = React.useState(null);
     const [actionFeedback, setActionFeedback] = React.useState(null);
+
+    const mergeAndSaveLogs = React.useCallback((incomingList, tab) => {
+        if (!Array.isArray(incomingList)) return;
+
+        if (tab === 'blocked') {
+            setLogs(incomingList);
+            try {
+                localStorage.setItem(`drmt_logs_${tab}`, JSON.stringify(incomingList));
+            } catch {}
+            return;
+        }
+
+        setLogs(prevLogs => {
+            const seen = new Set();
+            const merged = [];
+
+            for (const item of [...incomingList, ...prevLogs]) {
+                if (!item) continue;
+                const key = item.id != null ? String(item.id) : `${item.timestamp || ''}_${item.message || ''}`;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    merged.push(item);
+                }
+            }
+
+            const capped = merged.slice(0, 150);
+            try {
+                localStorage.setItem(`drmt_logs_${tab}`, JSON.stringify(capped));
+            } catch {}
+            return capped;
+        });
+    }, []);
 
     const fetchLogs = React.useCallback(() => {
         let url;
@@ -194,22 +272,46 @@ const ActionLogWidget = () => {
         })
             .then(res => res.json())
             .then(data => {
+                let incoming = [];
                 if (Array.isArray(data)) {
-                    setLogs(data);
+                    incoming = data;
                 } else if (data && Array.isArray(data.data)) {
-                    setLogs(data.data);
+                    incoming = data.data;
                 } else if (data && Array.isArray(data.users)) {
-                    setLogs(data.users);
+                    incoming = data.users;
                 }
+                mergeAndSaveLogs(incoming, activeTab);
             })
             .catch(() => { });
-    }, [activeTab]);
+    }, [activeTab, mergeAndSaveLogs]);
 
     React.useEffect(() => {
         fetchLogs();
         const interval = setInterval(fetchLogs, 3000);
         return () => clearInterval(interval);
     }, [fetchLogs]);
+
+    const handleTabChange = (tab) => {
+        setActiveTab(tab);
+        setActionFeedback(null);
+        try {
+            localStorage.setItem('drmt_active_log_tab', tab);
+            const cached = localStorage.getItem(`drmt_logs_${tab}`);
+            setLogs(cached ? JSON.parse(cached) : []);
+        } catch {
+            setLogs([]);
+        }
+    };
+
+    const toggleOpen = () => {
+        setIsOpen(prev => {
+            const next = !prev;
+            try {
+                localStorage.setItem('drmt_action_log_open', String(next));
+            } catch {}
+            return next;
+        });
+    };
 
     const handleRetryBlocked = async (clientId) => {
         if (!clientId || retryingId) return;
@@ -249,13 +351,11 @@ const ActionLogWidget = () => {
         return 'ℹ️';
     };
 
-    const [isOpen, setIsOpen] = React.useState(false);
-
     return (
         <div className="action-log-widget">
             <button
                 className={`action-log-toggle ${isOpen ? 'active' : ''}`}
-                onClick={() => setIsOpen(!isOpen)}
+                onClick={toggleOpen}
                 title="Notifications"
                 aria-label="Notifications"
             >
@@ -276,10 +376,10 @@ const ActionLogWidget = () => {
                         </div>
                     </div>
                     <div className="action-log-tabs">
-                        <button className={`action-log-tab ${activeTab === 'orders' ? 'active' : ''}`} onClick={() => { setActiveTab('orders'); setActionFeedback(null); }}>Orders</button>
-                        <button className={`action-log-tab ${activeTab === 'auth' ? 'active' : ''}`} onClick={() => { setActiveTab('auth'); setActionFeedback(null); }}>Auth</button>
-                        <button className={`action-log-tab ${activeTab === 'system' ? 'active' : ''}`} onClick={() => { setActiveTab('system'); setActionFeedback(null); }}>System</button>
-                        <button className={`action-log-tab ${activeTab === 'blocked' ? 'active' : ''}`} onClick={() => { setActiveTab('blocked'); setActionFeedback(null); }}>Block list</button>
+                        <button className={`action-log-tab ${activeTab === 'orders' ? 'active' : ''}`} onClick={() => handleTabChange('orders')}>Orders</button>
+                        <button className={`action-log-tab ${activeTab === 'auth' ? 'active' : ''}`} onClick={() => handleTabChange('auth')}>Auth</button>
+                        <button className={`action-log-tab ${activeTab === 'system' ? 'active' : ''}`} onClick={() => handleTabChange('system')}>System</button>
+                        <button className={`action-log-tab ${activeTab === 'blocked' ? 'active' : ''}`} onClick={() => handleTabChange('blocked')}>Block list</button>
                     </div>
                     <div className="action-log-content">
                         {activeTab === 'blocked' ? (
@@ -498,7 +598,12 @@ function Dashboard({ user, onLogout }) {
 
     /* ── Logout ── */
     const handleLogout = async () => {
-        await fetch('/api/logout', { method: 'POST' });
+        clearActionLogsStorage();
+        try {
+            await fetch('/api/logout', { method: 'POST' });
+        } catch (e) {
+            console.error("Logout error:", e);
+        }
         onLogout();
     };
 
