@@ -9,7 +9,7 @@ from core.engine import core_engine
 from position.manager import PositionManager
 from execution.mstock_instruments import ensure_mstock_instruments_cached
 from credentials.fyers import get_fyers_auth_header
-from logger.logger import logger_system
+from logger.logger import logger_system, logger_monitor
 
 logger = logging.getLogger("DRMT.SCM")
 
@@ -44,8 +44,7 @@ async def poll_mstock(cred: Credential) -> List[Position]:
             payload_str = json.dumps(data, default=str)
             if _last_raw_payloads.get(f"mstock:{cred.client_id}") != payload_str:
                 _last_raw_payloads[f"mstock:{cred.client_id}"] = payload_str
-                log_snippet = payload_str[:10000] + ("... [truncated]" if len(payload_str) > 10000 else "")
-                await logger_system.info(f"📥 [mStock Positions Payload] ({cred.client_id}): {log_snippet}")
+                await logger_monitor.info(f"📥 [mStock Positions Payload] ({cred.client_id}): {payload_str}")
         else:
             _last_raw_payloads.pop(f"mstock:{cred.client_id}", None)
 
@@ -159,8 +158,7 @@ async def poll_flattrade(cred: Credential) -> List[Position]:
             payload_str = json.dumps(raw_list, default=str)
             if _last_raw_payloads.get(f"flattrade:{cred.client_id}") != payload_str:
                 _last_raw_payloads[f"flattrade:{cred.client_id}"] = payload_str
-                log_snippet = payload_str[:10000] + ("... [truncated]" if len(payload_str) > 10000 else "")
-                await logger_system.info(f"📥 [Flattrade Positions Payload] ({cred.client_id}): {log_snippet}")
+                await logger_monitor.info(f"📥 [Flattrade Positions Payload] ({cred.client_id}): {payload_str}")
         else:
             _last_raw_payloads.pop(f"flattrade:{cred.client_id}", None)
             
@@ -207,8 +205,7 @@ async def poll_aliceblue(cred: Credential) -> List[Position]:
                 payload_str = json.dumps(result, default=str)
                 if _last_raw_payloads.get(f"aliceblue:{cred.client_id}") != payload_str:
                     _last_raw_payloads[f"aliceblue:{cred.client_id}"] = payload_str
-                    log_snippet = payload_str[:10000] + ("... [truncated]" if len(payload_str) > 10000 else "")
-                    await logger_system.info(f"📥 [AliceBlue Positions Payload] ({cred.client_id}): {log_snippet}")
+                    await logger_monitor.info(f"📥 [AliceBlue Positions Payload] ({cred.client_id}): {payload_str}")
             else:
                 _last_raw_payloads.pop(f"aliceblue:{cred.client_id}", None)
 
@@ -274,8 +271,7 @@ async def poll_fyers(cred: Credential) -> List[Position]:
             payload_str = json.dumps(raw_list, default=str)
             if _last_raw_payloads.get(f"fyers:{cred.client_id}") != payload_str:
                 _last_raw_payloads[f"fyers:{cred.client_id}"] = payload_str
-                log_snippet = payload_str[:10000] + ("... [truncated]" if len(payload_str) > 10000 else "")
-                await logger_system.info(f"📥 [Fyers Positions Payload] ({cred.client_id}): {log_snippet}")
+                await logger_monitor.info(f"📥 [Fyers Positions Payload] ({cred.client_id}): {payload_str}")
         else:
             _last_raw_payloads.pop(f"fyers:{cred.client_id}", None)
 

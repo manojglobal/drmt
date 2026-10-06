@@ -57,8 +57,10 @@ SENSITIVE_PATTERNS = [
     (re.compile(r'([\"\']?totp_secret(?:_key)?[\"\']?\s*[:=]\s*[\"\']?)([^\"\'\s,;}{]+)([\"\']?)', re.IGNORECASE), r'\g<1>***\g<3>'),
     # API keys & private keys
     (re.compile(r'([\"\']?(?:api_key|api_secret|app_code|X-PrivateKey|private_key)[\"\']?\s*[:=]\s*[\"\']?)([^\"\'\s,;}{]+)([\"\']?)', re.IGNORECASE), r'\g<1>***\g<3>'),
-    # Access tokens and tokens
-    (re.compile(r'([\"\']?(?:access_token|token)[\"\']?\s*[:=]\s*[\"\']?)([^\"\'\s,;}{]+)([\"\']?)', re.IGNORECASE), r'\g<1>***\g<3>'),
+    # Access tokens and session tokens (quoted and unquoted)
+    (re.compile(r'([\"\']?(?:access_token|auth_token|session_token)[\"\']?\s*[:=]\s*[\"\']?)([^\"\'\s,;}{]+)([\"\']?)', re.IGNORECASE), r'\g<1>***\g<3>'),
+    # General auth token: mask only if value contains letters & length >= 8 (avoids masking numerical instrument tokens like "token": "3787")
+    (re.compile(r'([\"\']?token[\"\']?\s*[:=]\s*[\"\']?)(?=[^\"\'\s,;}{]*[a-zA-Z])([^\"\'\s,;}{]{8,})([\"\']?)', re.IGNORECASE), r'\g<1>***\g<3>'),
     # Bearer tokens: mask inner characters
     (re.compile(r'(Bearer\s+)([A-Za-z0-9_\-\.]{6})([A-Za-z0-9_\-\.]+)([A-Za-z0-9_\-\.]{4})', re.IGNORECASE), r'\g<1>\g<2>***\g<4>'),
     # JWT tokens in general
@@ -86,6 +88,7 @@ def clean_error_message(msg: str) -> str:
       4. Cleans verbose Python dict syntax from broker responses.
       5. Deduplicates repeated error prefixes (e.g. 'Flattrade Auth Error: Flattrade Auth Error:').
       6. Flattens newlines and collapses whitespace to ensure strictly single-line log entries.
+      Note: Full Response and Positions Payload messages are protected from dict stripping.
     """
     if not isinstance(msg, str):
         msg = str(msg)
@@ -105,26 +108,29 @@ def clean_error_message(msg: str) -> str:
     msg = re.sub(r'(\d{3}),\s*message=[\'\"]([^\'\"]*)[\'\"]', r'HTTP \1 (\2)', msg)
 
     # 5. Clean python dict-like broker errors: {'status': ..., 'message': '...', 'errorcode': '...'}
-    def _clean_dict_match(m: re.Match) -> str:
-        content = m.group(0)
-        msg_match = re.search(r'[\'\"]message[\'\"]\s*:\s*[\'\"]([^\'\"]+)[\'\"]', content)
-        err_match = re.search(r'[\'\"]errorcode[\'\"]\s*:\s*[\'\"]([^\'\"]+)[\'\"]', content)
-        if msg_match:
-            err_text = msg_match.group(1).strip()
-            code_text = err_match.group(1).strip() if err_match else ''
-            if code_text and code_text.lower() != 'none':
-                return f"{err_text} ({code_text})"
-            return err_text
-        return content
+    # (Skip if the message is explicitly labeled with Full Response or Payload to preserve complete data)
+    if "Full Response:" not in msg and "Positions Payload:" not in msg:
+        def _clean_dict_match(m: re.Match) -> str:
+            content = m.group(0)
+            msg_match = re.search(r'[\'\"]message[\'\"]\s*:\s*[\'\"]([^\'\"]+)[\'\"]', content)
+            err_match = re.search(r'[\'\"]errorcode[\'\"]\s*:\s*[\'\"]([^\'\"]+)[\'\"]', content)
+            if msg_match:
+                err_text = msg_match.group(1).strip()
+                code_text = err_match.group(1).strip() if err_match else ''
+                if code_text and code_text.lower() != 'none':
+                    return f"{err_text} ({code_text})"
+                return err_text
+            return content
 
-    msg = re.sub(r'\{[^{}]*[\'\"]message[\'\"][^{}]*\}', _clean_dict_match, msg)
+        msg = re.sub(r'\{[^{}]*[\'\"]message[\'\"][^{}]*\}', _clean_dict_match, msg)
 
     # 6. Deduplicate repeated prefixes (e.g. 'Flattrade Auth Error: Flattrade Auth Error:')
     msg = re.sub(r'(\b[A-Za-z0-9_\s]+ Error:)\s+\1', r'\1', msg)
 
-    # 7. Strip trailing/redundant garbage like ', msg=None', ', data=None'
-    msg = re.sub(r',\s*(?:msg|data)=None', '', msg)
-    msg = re.sub(r'[\'\"]data[\'\"]:\s*None,?\s*', '', msg)
+    # 7. Strip trailing/redundant garbage like ', msg=None', ', data=None' (skip for full responses)
+    if "Full Response:" not in msg and "Positions Payload:" not in msg:
+        msg = re.sub(r',\s*(?:msg|data)=None', '', msg)
+        msg = re.sub(r'[\'\"]data[\'\"]:\s*None,?\s*', '', msg)
 
     # 8. Collapse whitespace
     msg = re.sub(r'\s{2,}', ' ', msg).strip()

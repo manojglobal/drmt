@@ -122,7 +122,7 @@ async def exit_flattrade(pos: Position, cred: Credential) -> bool:
                 except Exception as retry_err:
                     await logger_exit.error(f"Flattrade exit re-auth retry failed: {retry_err}")
 
-        await logger_exit.error(f"Flattrade exit failed for {pos.symbol}: {data}")
+        await logger_exit.error(f"Flattrade exit failed for {pos.symbol} ({cred.client_id}) | Full Response: {data_str}")
         return False
     except Exception as e:
         await logger_exit.error(f"Flattrade exit error for {pos.symbol}: {e}")

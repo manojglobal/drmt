@@ -97,10 +97,10 @@ async def exit_fyers(pos: Position, cred: Credential) -> bool:
                 return True
 
             msg = data_obj.get("message") or data_obj.get("errMsg") or "Unknown error"
-            await logger_exit.error(f"Fyers exit order rejected for {pos.symbol}: {msg} (code={code_val})")
+            await logger_exit.error(f"Fyers exit order rejected for {pos.symbol} ({cred.client_id}): {msg} (code={code_val}) | Full Response: {data_str}")
             return False
 
-        await logger_exit.error(f"Fyers exit failed for {pos.symbol}: unexpected response format {data}")
+        await logger_exit.error(f"Fyers exit failed for {pos.symbol} ({cred.client_id}): unexpected response format | Full Response: {data_str}")
         return False
 
     except Exception as e:

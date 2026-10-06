@@ -82,7 +82,7 @@ async def exit_mstock(pos: Position, cred: Credential) -> bool:
                 or (isinstance(data_val, dict) and "orderid" in data_val)
             ):
                 return True
-        await logger_exit.error(f"MStock exit failed for {pos.symbol}: {resp}")
+        await logger_exit.error(f"MStock exit failed for {pos.symbol} ({cred.client_id}) | Full Response: {resp_str}")
         return False
     except Exception as e:
         await logger_exit.error(f"MStock exit error for {pos.symbol}: {e}")

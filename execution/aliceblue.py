@@ -211,7 +211,7 @@ async def exit_aliceblue(pos: Position, cred: Credential) -> bool:
                 except Exception as retry_err:
                     await logger_exit.error(f"AliceBlue {flow_label.lower()} exit re-auth retry failed: {retry_err}")
 
-        await logger_exit.error(f"AliceBlue {flow_label.lower()} exit failed for {pos.symbol}: {status_msg}")
+        await logger_exit.error(f"AliceBlue {flow_label.lower()} exit failed for {pos.symbol} ({cred.client_id}) | Status: {status_msg} | Full Response: {data_str}")
         return False
     except Exception as e:
         await logger_exit.error(f"AliceBlue {flow_label.lower()} exit error for {pos.symbol}: {e}")

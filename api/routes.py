@@ -94,6 +94,11 @@ async def exit_positions(request: web.Request):
         fingerprint=r[8], status=r[9], token=r[10], token_updated_at=r[11]
     ) for r in rows if not configured_cids or r[2] in configured_cids]
     
+    symbol_list = [f"{p.broker}:{p.client_id}:{p.symbol}" for p in positions]
+    await logger_exit.info(
+        f"🚨 [EXIT TRIGGERED] user='{user.username}' (id={user.id}) | Total: {len(positions)} position(s) | Targets: {symbol_list}"
+    )
+
     success_count, results = await mass_exit(positions, credentials)
     
     # Write only successfully exited positions to SQLite
@@ -120,6 +125,11 @@ async def exit_positions(request: web.Request):
         }
         for r in results
     ]
+
+    await logger_exit.info(
+        f"🏁 [EXIT SUMMARY] user='{user.username}' (id={user.id}) | Exited: {success_count}/{len(positions)} | Detailed Results: {json.dumps(client_results, default=str)}"
+    )
+
     return web.json_response({
         "success": success_count > 0 or len(positions) == 0,
         "message": f"Exited {success_count}/{len(positions)} positions",

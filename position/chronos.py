@@ -8,7 +8,7 @@ from typing import Optional, Dict, Tuple
 from aiohttp import web
 from models.schemas import Credential
 from position.adapters import broker_poll
-from logger.logger import logger_system, logger_auth
+from logger.logger import logger_system, logger_auth, logger_monitor
 from credentials.mstock import login_mstock
 from credentials.flattrade import login_flattrade
 from credentials.aliceblue import login_aliceblue
@@ -189,6 +189,7 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                     )
                     await engine.redis_pool.set(redis_key, json.dumps(new_data))
                     await logger_system.info(f"⚡ [POSITION PUSH] Pushed {len(new_data)} position(s) to WebSocket and synced Redis cache")
+                    await logger_monitor.info(f"⚡ [POSITION PUSH] user={user_id} | Pushed {len(new_data)} position(s) to WebSocket: {json.dumps(new_data, default=str)}")
                     last_snapshot = new_data
                     
             except asyncio.TimeoutError:
