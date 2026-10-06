@@ -52,54 +52,61 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
 
     raw_csv_text = ""
     local_csv_path = None
+    use_dropbox = getattr(settings, "USE_DROPBOX_CREDENTIALS", False)
 
-    # Priority 1: Check configured local static CSV path
-    configured_path = getattr(settings, "CREDENTIALS_CSV_PATH", "static/plato_client_credentials.csv")
-    if configured_path:
-        candidate_paths = [
-            configured_path if os.path.isabs(configured_path) else os.path.join(get_app_dir(), configured_path),
-            os.path.join(os.getcwd(), configured_path),
-            os.path.join(get_app_dir(), "static", "plato_client_credentials.csv")
-        ]
-        for p in candidate_paths:
-            if os.path.isfile(p):
-                local_csv_path = p
-                break
+    # ── BRANCH 1: DROPBOX CREDENTIALS (when USE_DROPBOX_CREDENTIALS is True) ──
+    if use_dropbox:
+        target_url = _normalize_dropbox_url(
+            url or getattr(settings, "DROPBOX_CREDENTIALS_URL", "") or getattr(settings, "CREDENTIALS_CSV_URL", "")
+        )
+        if target_url:
+            logger.info(f"🌐 [Credentials Sync] Source: DROPBOX (URL: {target_url})")
+            try:
+                timeout = aiohttp.ClientTimeout(total=20)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(target_url, allow_redirects=True) as resp:
+                        if resp.status != 200:
+                            raise RuntimeError(f"HTTP {resp.status} while fetching Dropbox credentials CSV")
+                        raw_csv_text = await resp.text(encoding="utf-8")
+                logger.info(f"✅ Successfully downloaded credentials CSV from Dropbox ({len(raw_csv_text)} bytes)")
+            except Exception as fetch_err:
+                logger.error(f"❌ Failed to fetch credentials from Dropbox URL: {fetch_err}. Falling back to local static CSV.")
+                await logger_auth.warn(f"Failed to fetch credentials from Dropbox: {fetch_err}. Falling back to local static CSV.")
+                raw_csv_text = ""
+        else:
+            logger.warning("USE_DROPBOX_CREDENTIALS is True, but no DROPBOX_CREDENTIALS_URL configured. Falling back to local CSV.")
 
-    if local_csv_path:
-        logger.info(f"📄 Loading credentials from local static file: {local_csv_path}")
-        try:
-            with open(local_csv_path, "r", encoding="utf-8") as f:
-                raw_csv_text = f.read()
-        except Exception as file_err:
-            logger.error(f"❌ Failed to read local static credentials CSV: {file_err}")
-            await logger_auth.error(f"Failed to read local static credentials CSV: {file_err}. Falling back to SQLite cache.")
-            await _fallback_load_from_db()
-            return len(_configured_cids)
-    else:
-        # Priority 2: Remote URL fetch if configured
-        target_url = _normalize_dropbox_url(url or getattr(settings, "CREDENTIALS_CSV_URL", ""))
-        if not target_url:
-            logger.warning("No credentials CSV file or remote URL configured.")
-            await _fallback_load_from_db()
-            return len(_configured_cids)
+    # ── BRANCH 2: LOCAL CSV CREDENTIALS (when USE_DROPBOX_CREDENTIALS is False or Dropbox fetch failed) ──
+    if not raw_csv_text:
+        configured_path = getattr(settings, "CREDENTIALS_CSV_PATH", "static/plato_client_credentials.csv")
+        if configured_path:
+            candidate_paths = [
+                configured_path if os.path.isabs(configured_path) else os.path.join(get_app_dir(), configured_path),
+                os.path.join(os.getcwd(), configured_path),
+                os.path.join(get_app_dir(), "static", "plato_client_credentials.csv")
+            ]
+            for p in candidate_paths:
+                if os.path.isfile(p):
+                    local_csv_path = p
+                    break
 
-        logger.info(f"🌐 Fetching dynamic credentials from remote URL...")
-        try:
-            timeout = aiohttp.ClientTimeout(total=20)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(target_url, allow_redirects=True) as resp:
-                    if resp.status != 200:
-                        raise RuntimeError(f"HTTP {resp.status} while fetching credentials CSV")
-                    raw_csv_text = await resp.text(encoding="utf-8")
-        except Exception as fetch_err:
-            logger.error(f"❌ Failed to fetch credentials from remote URL: {fetch_err}")
-            await logger_auth.error(f"Failed to fetch dynamic credentials from URL: {fetch_err}. Falling back to SQLite cache.")
+        if local_csv_path:
+            logger.info(f"📄 [Credentials Sync] Source: LOCAL CSV ({local_csv_path})")
+            try:
+                with open(local_csv_path, "r", encoding="utf-8") as f:
+                    raw_csv_text = f.read()
+            except Exception as file_err:
+                logger.error(f"❌ Failed to read local static credentials CSV: {file_err}")
+                await logger_auth.error(f"Failed to read local static credentials CSV: {file_err}. Falling back to SQLite cache.")
+                await _fallback_load_from_db()
+                return len(_configured_cids)
+        else:
+            logger.warning("No credentials CSV file found. Falling back to SQLite cache.")
             await _fallback_load_from_db()
             return len(_configured_cids)
 
     if not raw_csv_text or not raw_csv_text.strip():
-        logger.warning("Credentials CSV is empty.")
+        logger.warning("Credentials CSV is empty. Falling back to SQLite cache.")
         await _fallback_load_from_db()
         return len(_configured_cids)
 
@@ -329,3 +336,17 @@ def get_dynamic_credentials(client_id: str) -> Optional[dict]:
             logger.debug(f"SQLite lookup failed for {cid_str}: {e}")
 
     return None
+
+
+def get_credential_source_info() -> dict:
+    """Returns the current credentials source status and configuration."""
+    use_dropbox = getattr(settings, "USE_DROPBOX_CREDENTIALS", False)
+    dropbox_url = getattr(settings, "DROPBOX_CREDENTIALS_URL", "") or getattr(settings, "CREDENTIALS_CSV_URL", "")
+    csv_path = getattr(settings, "CREDENTIALS_CSV_PATH", "static/plato_client_credentials.csv")
+    return {
+        "use_dropbox": bool(use_dropbox),
+        "active_source": "DROPBOX" if use_dropbox else "LOCAL_CSV",
+        "dropbox_url": dropbox_url,
+        "csv_path": csv_path,
+        "configured_accounts": len(_configured_cids)
+    }

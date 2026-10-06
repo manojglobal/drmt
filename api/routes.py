@@ -20,12 +20,59 @@ logger = logging.getLogger(__name__)
 
 routes = web.RouteTableDef()
 
+@routes.get('/api/credentials/source')
+async def get_credentials_source(request: web.Request):
+    """Returns the current credentials source (Dropbox vs. Local CSV)."""
+    await require_auth(request)
+    from credentials.dynamic_loader import get_credential_source_info
+    return web.json_response({"success": True, **get_credential_source_info()})
+
+
+@routes.post('/api/credentials/source')
+async def update_credentials_source(request: web.Request):
+    """
+    Switches credential source between Dropbox and Local CSV dynamically at runtime.
+    Body: {"use_dropbox": true/false, "dropbox_url": "https://..."}
+    """
+    await require_auth(request)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+
+    use_dropbox = data.get("use_dropbox")
+    dropbox_url = data.get("dropbox_url")
+
+    if use_dropbox is not None:
+        settings.USE_DROPBOX_CREDENTIALS = bool(use_dropbox)
+    if dropbox_url is not None:
+        settings.DROPBOX_CREDENTIALS_URL = str(dropbox_url).strip()
+
+    from credentials.dynamic_loader import fetch_and_sync_credentials, get_credential_source_info
+    synced_count = await fetch_and_sync_credentials()
+    source_info = get_credential_source_info()
+
+    return web.json_response({
+        "success": True,
+        "message": f"Credential source updated to {source_info['active_source']}. Synced {synced_count} accounts.",
+        **source_info
+    })
+
+
 @routes.post('/api/credentials/refresh')
 async def refresh_credentials(request: web.Request):
     """
-    Credential Refresh Button: Forces token refresh without server restart.
+    Credential Refresh Button: Syncs credentials from active source (Dropbox / CSV)
+    and forces token refresh without server restart.
     """
     user = await require_auth(request)
+
+    # 1. Re-sync fresh credentials from the active source (Dropbox or CSV)
+    try:
+        from credentials.dynamic_loader import fetch_and_sync_credentials
+        await fetch_and_sync_credentials()
+    except Exception as e:
+        logger.error(f"Error syncing credentials during refresh: {e}")
     
     success_count = 0
     async with get_db() as db:
