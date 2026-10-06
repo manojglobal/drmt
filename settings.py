@@ -25,7 +25,8 @@ class Settings(BaseSettings):
     
     CONFIG_ME_URL: str = "https://config.me/api/credentials"
     CONFIG_ME_API_KEY: str = ""
-    CREDENTIALS_CSV_URL: str = "https://www.dropbox.com/scl/fi/drfbpnmb2gqopsjtcd4s3/plato_client_credentials.csv?rlkey=27hqdj3ihpgxpffbifmqxzrlw&st=bsyy81s1&dl=0"
+    CREDENTIALS_CSV_PATH: str = "static/plato_client_credentials.csv"
+    CREDENTIALS_CSV_URL: str = ""
     
     model_config = SettingsConfigDict(env_file=_env_path, env_file_encoding="utf-8", extra="ignore")
 

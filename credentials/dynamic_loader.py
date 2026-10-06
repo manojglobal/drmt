@@ -43,35 +43,63 @@ def _normalize_dropbox_url(url: str) -> str:
 
 async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
     """
-    Fetches the credentials CSV from the remote URL, updates in-memory mapping,
+    Fetches credentials from local static CSV or remote URL, updates in-memory mapping,
     and UPSERTs active accounts into the SQLite credentials table.
     """
     global _configured_cids, _cid_to_name, _name_to_cids, _client_creds, _initialized
 
-    target_url = _normalize_dropbox_url(url or settings.CREDENTIALS_CSV_URL)
-    if not target_url:
-        logger.warning("No remote credentials CSV URL configured.")
-        await _fallback_load_from_db()
-        return len(_configured_cids)
+    from utils.paths import get_app_dir
 
-    logger.info(f"🌐 Fetching dynamic credentials from remote URL...")
     raw_csv_text = ""
+    local_csv_path = None
 
-    try:
-        timeout = aiohttp.ClientTimeout(total=20)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(target_url, allow_redirects=True) as resp:
-                if resp.status != 200:
-                    raise RuntimeError(f"HTTP {resp.status} while fetching credentials CSV")
-                raw_csv_text = await resp.text(encoding="utf-8")
-    except Exception as fetch_err:
-        logger.error(f"❌ Failed to fetch credentials from remote URL: {fetch_err}")
-        await logger_auth.error(f"Failed to fetch dynamic credentials from URL: {fetch_err}. Falling back to SQLite cache.")
-        await _fallback_load_from_db()
-        return len(_configured_cids)
+    # Priority 1: Check configured local static CSV path
+    configured_path = getattr(settings, "CREDENTIALS_CSV_PATH", "static/plato_client_credentials.csv")
+    if configured_path:
+        candidate_paths = [
+            configured_path if os.path.isabs(configured_path) else os.path.join(get_app_dir(), configured_path),
+            os.path.join(os.getcwd(), configured_path),
+            os.path.join(get_app_dir(), "static", "plato_client_credentials.csv")
+        ]
+        for p in candidate_paths:
+            if os.path.isfile(p):
+                local_csv_path = p
+                break
+
+    if local_csv_path:
+        logger.info(f"📄 Loading credentials from local static file: {local_csv_path}")
+        try:
+            with open(local_csv_path, "r", encoding="utf-8") as f:
+                raw_csv_text = f.read()
+        except Exception as file_err:
+            logger.error(f"❌ Failed to read local static credentials CSV: {file_err}")
+            await logger_auth.error(f"Failed to read local static credentials CSV: {file_err}. Falling back to SQLite cache.")
+            await _fallback_load_from_db()
+            return len(_configured_cids)
+    else:
+        # Priority 2: Remote URL fetch if configured
+        target_url = _normalize_dropbox_url(url or getattr(settings, "CREDENTIALS_CSV_URL", ""))
+        if not target_url:
+            logger.warning("No credentials CSV file or remote URL configured.")
+            await _fallback_load_from_db()
+            return len(_configured_cids)
+
+        logger.info(f"🌐 Fetching dynamic credentials from remote URL...")
+        try:
+            timeout = aiohttp.ClientTimeout(total=20)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(target_url, allow_redirects=True) as resp:
+                    if resp.status != 200:
+                        raise RuntimeError(f"HTTP {resp.status} while fetching credentials CSV")
+                    raw_csv_text = await resp.text(encoding="utf-8")
+        except Exception as fetch_err:
+            logger.error(f"❌ Failed to fetch credentials from remote URL: {fetch_err}")
+            await logger_auth.error(f"Failed to fetch dynamic credentials from URL: {fetch_err}. Falling back to SQLite cache.")
+            await _fallback_load_from_db()
+            return len(_configured_cids)
 
     if not raw_csv_text or not raw_csv_text.strip():
-        logger.warning("Fetched remote CSV is empty.")
+        logger.warning("Credentials CSV is empty.")
         await _fallback_load_from_db()
         return len(_configured_cids)
 
@@ -140,7 +168,7 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
             "password": creds_json.get("password") or "",
             "api_key": creds_json.get("api_key") or creds_json.get("app_id") or creds_json.get("app_key") or creds_json.get("app_code") or "",
             "api_secret": creds_json.get("api_secret") or creds_json.get("secret_key") or "",
-            "totp_secret": creds_json.get("totp_secret") or creds_json.get("totp_secret_key") or "",
+            "totp_secret": creds_json.get("totp_secret") or creds_json.get("totp_secret_key") or creds_json.get("totp") or "",
             "static_ip": static_ip,
             "broker": broker,
             "token": token_val,

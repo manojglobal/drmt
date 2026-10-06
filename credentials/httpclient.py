@@ -17,7 +17,7 @@ async def proxy_request(
     url: str,
     source_ip: str,
     headers: Optional[Dict] = None,
-    json_data: Optional[Dict] = None,
+    json_data: Optional[Any] = None,
     data: Optional[Any] = None
 ) -> Any:
     """Wraps aiohttp to send requests via the DRMT proxy.
@@ -33,7 +33,7 @@ async def _proxy_request_inner(
     url: str,
     source_ip: str,
     headers: Optional[Dict] = None,
-    json_data: Optional[Dict] = None,
+    json_data: Optional[Any] = None,
     data: Optional[Any] = None,
     _is_retry: bool = False,
 ) -> Any:
