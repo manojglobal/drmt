@@ -31,12 +31,8 @@ async def refresh_credentials(request: web.Request):
     async with get_db() as db:
         db.row_factory = None
         valid_filter = "status = 'working' AND UPPER(broker) != 'FAKE' AND client_id IS NOT NULL AND TRIM(client_id) != ''"
-        if user.username == 'admin':
-            async with db.execute(f"SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE {valid_filter}") as cursor:
-                rows = await cursor.fetchall()
-        else:
-            async with db.execute(f"SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE {valid_filter} AND user_id = ?", (user.id,)) as cursor:
-                rows = await cursor.fetchall()
+        async with db.execute(f"SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE {valid_filter}") as cursor:
+            rows = await cursor.fetchall()
             
     configured_cids = get_configured_client_ids()
     filtered_rows = [r for r in rows if not configured_cids or r[2] in configured_cids]
@@ -80,12 +76,8 @@ async def exit_positions(request: web.Request):
     async with get_db() as db:
         db.row_factory = None
         valid_filter = "status = 'working' AND UPPER(broker) != 'FAKE' AND client_id IS NOT NULL AND TRIM(client_id) != ''"
-        if user.username == 'admin':
-            async with db.execute(f"SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE {valid_filter}") as cursor:
-                rows = await cursor.fetchall()
-        else:
-            async with db.execute(f"SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE {valid_filter} AND user_id = ?", (user.id,)) as cursor:
-                rows = await cursor.fetchall()
+        async with db.execute(f"SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE {valid_filter}") as cursor:
+            rows = await cursor.fetchall()
             
     configured_cids = get_configured_client_ids()
     credentials = [Credential(
