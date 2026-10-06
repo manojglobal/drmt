@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     CONFIG_ME_API_KEY: str = ""
     CREDENTIALS_CSV_PATH: str = "static/plato_client_credentials.csv"
     CREDENTIALS_CSV_URL: str = ""
+    ALICE_BLUE_FLOW: str = "WEB"  # "WEB" (OMK Web Execution) or "SDK" (Open-API SDK Flow)
     
     model_config = SettingsConfigDict(env_file=_env_path, env_file_encoding="utf-8", extra="ignore")
 
