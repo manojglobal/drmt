@@ -531,7 +531,12 @@ const getDisplayUsername = (pos) => {
 const isIntradayProduct = (productType) => {
     if (!productType) return false;
     const pt = String(productType).toUpperCase().trim();
-    return pt === 'INTRADAY' || pt === 'MIS' || pt === 'BO' || pt === 'CO' || pt === 'I' || pt.includes('INTRADAY');
+    return pt === 'INTRADAY' || pt === 'MIS' || pt === 'BO' || pt === 'CO' || pt === 'I' || pt === 'NRML' || pt === 'NORMAL' || pt === 'CARRYFORWARD' || pt === 'MARGIN' || pt === 'M' || pt.includes('INTRADAY');
+};
+
+const getDisplayProduct = (productType) => {
+    if (!productType) return 'INTRADAY';
+    return isIntradayProduct(productType) ? 'INTRADAY' : String(productType).toUpperCase().trim();
 };
 
 function CustomFilterDropdown({ label, options, value, onChange, disabled }) {
@@ -1015,7 +1020,7 @@ function Dashboard({ user, onLogout }) {
                     pos.broker || "",
                     pos.symbol || "",
                     pos.exchange || "",
-                    pos.product_type || "",
+                    getDisplayProduct(pos.product_type),
                     side,
                     pos.quantity || 0,
                     (pos.avg_price || 0).toFixed(2),
@@ -1430,7 +1435,7 @@ function Dashboard({ user, onLogout }) {
                                                         <td>{pos.broker}</td>
                                                         <td className="font-semibold">{pos.symbol}</td>
                                                         <td>{pos.exchange}</td>
-                                                        <td>{pos.product_type}</td>
+                                                        <td>{getDisplayProduct(pos.product_type)}</td>
                                                         <td>
                                                             <span className={`side-badge ${side === 'BUY' ? 'side-buy' : 'side-sell'}`}>{side}</span>
                                                         </td>
@@ -1628,7 +1633,7 @@ function Dashboard({ user, onLogout }) {
                                                         <td>{pos.broker}</td>
                                                         <td className="font-semibold">{pos.symbol}</td>
                                                         <td>{pos.exchange}</td>
-                                                        <td>{pos.product_type}</td>
+                                                        <td>{getDisplayProduct(pos.product_type)}</td>
                                                         <td>
                                                             <span className={`side-badge ${side === 'BUY' ? 'side-buy' : 'side-sell'}`}>{side}</span>
                                                         </td>

@@ -33,7 +33,12 @@ def _build_web_payload(pos: Position) -> list:
     trans_type = "S" if pos.quantity > 0 else "B"
     qty = abs(pos.quantity)
     prod_upper = str(pos.product_type).upper()
-    prod = "MIS" if prod_upper in ("INTRADAY", "MIS", "I") else "CNC"
+    if prod_upper in ("INTRADAY", "MIS", "I"):
+        prod = "MIS"
+    elif prod_upper in ("CARRYFORWARD", "NRML", "NORMAL", "M"):
+        prod = "NRML"
+    else:
+        prod = "CNC"
     inst_id = str(pos.token)
 
     return [{

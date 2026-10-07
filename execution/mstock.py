@@ -15,7 +15,7 @@ async def exit_mstock(pos: Position, cred: Credential) -> bool:
     
     # MStock specific mappings
     prod_type = pos.product_type.upper()
-    if prod_type in ("NFO", "BFO", "NCR", "CARRYFORWARD"):
+    if prod_type in ("NFO", "BFO", "NCR", "CARRYFORWARD", "NRML"):
         prod_type = "CARRYFORWARD"
     elif prod_type in ("MIS", "INTRADAY"):
         prod_type = "INTRADAY"
