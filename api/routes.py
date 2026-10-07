@@ -353,7 +353,14 @@ async def retry_blocked_user(request: web.Request):
     client_id = str(client_id).strip()
     username = get_client_username(client_id)
     
-    # 1. Fetch fresh credentials from static CSV
+    # 0. Sync fresh credentials from remote source first so newest changes take effect
+    try:
+        from credentials.dynamic_loader import fetch_and_sync_credentials
+        await fetch_and_sync_credentials()
+    except Exception as e:
+        logger.warning(f"Could not refresh credentials before single retry: {e}")
+
+    # 1. Fetch fresh credentials from dynamic loader
     fresh_creds = get_credentials_from_static_csv(client_id)
     if not fresh_creds:
         return web.json_response({
@@ -431,4 +438,133 @@ async def retry_blocked_user(request: web.Request):
             "blocked": True,
             "error": reason
         })
+
+
+@routes.post('/api/blocked-users/sync-dropbox')
+async def sync_dropbox_blocked_users(request: web.Request):
+    """
+    Downloads the latest credentials directly from Dropbox (or active source),
+    synchronizes them to in-memory caches and SQLite, and automatically retries
+    authentication for all currently blocked accounts with the updated credentials.
+    Unblocks accounts that authenticate successfully and resumes live polling.
+    """
+    user = await require_auth(request)
+
+    # 1. Download and synchronize fresh credentials from Dropbox / remote source
+    synced_total = 0
+    try:
+        from credentials.dynamic_loader import fetch_and_sync_credentials
+        synced_total = await fetch_and_sync_credentials()
+        logger.info(f"🔄 [BLOCKLIST DROPBOX SYNC] Synced {synced_total} accounts from remote source for user={user.username}")
+    except Exception as e:
+        logger.error(f"❌ [BLOCKLIST DROPBOX SYNC] Failed to sync credentials from Dropbox: {e}")
+        return web.json_response({
+            "success": False,
+            "message": f"Failed to download credentials from Dropbox: {e}",
+            "synced_accounts": 0,
+            "unblocked": [],
+            "remaining_blocked": get_blocked_users()
+        }, status=500)
+
+    # 2. Retrieve all currently blocked accounts
+    blocked_list = get_blocked_users()
+    if not blocked_list:
+        return web.json_response({
+            "success": True,
+            "message": f"Successfully synced {synced_total} accounts from Dropbox. No blocked accounts found.",
+            "synced_accounts": synced_total,
+            "unblocked": [],
+            "remaining_blocked": []
+        })
+
+    # 3. Attempt re-authentication for each blocked user with fresh credentials
+    unblocked_names = []
+    still_blocked_names = []
+
+    for item in blocked_list:
+        client_id = item.get("client_id")
+        if not client_id:
+            continue
+        client_id = str(client_id).strip()
+        username = get_client_username(client_id)
+        fresh_creds = get_credentials_from_static_csv(client_id)
+        if not fresh_creds:
+            still_blocked_names.append(f"{username} ({client_id}): not found in Dropbox CSV")
+            continue
+
+        # Update SQLite credentials table with fresh values
+        async with get_db() as db:
+            if fresh_creds.get("token"):
+                await db.execute("""
+                    UPDATE credentials 
+                    SET password = ?, api_key = ?, totp_secret = ?, static_ip = ?, status = 'working', token = ?, token_updated_at = datetime('now', 'localtime')
+                    WHERE client_id = ?
+                """, (
+                    fresh_creds["password"],
+                    fresh_creds["api_key"],
+                    fresh_creds["totp_secret"],
+                    fresh_creds["static_ip"],
+                    fresh_creds["token"],
+                    client_id
+                ))
+            else:
+                await db.execute("""
+                    UPDATE credentials 
+                    SET password = ?, api_key = ?, totp_secret = ?, static_ip = ?, status = 'working'
+                    WHERE client_id = ?
+                """, (
+                    fresh_creds["password"],
+                    fresh_creds["api_key"],
+                    fresh_creds["totp_secret"],
+                    fresh_creds["static_ip"],
+                    client_id
+                ))
+            await db.commit()
+
+            # Load the updated record
+            db.row_factory = None
+            async with db.execute(
+                "SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE client_id = ?",
+                (client_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+
+        if not row:
+            still_blocked_names.append(f"{username} ({client_id}): missing in DB")
+            continue
+
+        cred = Credential(
+            id=row[0], broker=row[1], client_id=row[2], api_key=row[3], api_secret=row[4],
+            totp_secret=row[5], password=row[6], static_ip=row[7],
+            fingerprint=row[8], status=row[9], token=row[10], token_updated_at=row[11]
+        )
+
+        logger.info(f"🔄 [BLOCKLIST DROPBOX SYNC] Retrying {cred.broker}:{cred.client_id} ({username}) with fresh Dropbox credentials")
+        success = await refresh_token_with_backoff(cred)
+        if success:
+            unblocked_names.append(f"{username} ({client_id})")
+        else:
+            blocked_info = get_blocked_user(client_id)
+            err = blocked_info.get("reason", "Auth failed") if blocked_info else "Auth failed"
+            still_blocked_names.append(f"{username} ({client_id}): {err}")
+
+    # 4. Construct user message
+    unblocked_count = len(unblocked_names)
+    still_count = len(still_blocked_names)
+
+    if unblocked_count > 0 and still_count == 0:
+        summary_msg = f"Synced {synced_total} accounts from Dropbox. Successfully unblocked all {unblocked_count} account(s): {', '.join(unblocked_names)}."
+    elif unblocked_count > 0 and still_count > 0:
+        summary_msg = f"Synced {synced_total} accounts from Dropbox. Unblocked {unblocked_count} account(s) ({', '.join(unblocked_names)}). {still_count} account(s) still failing."
+    else:
+        summary_msg = f"Synced {synced_total} accounts from Dropbox. All {still_count} blocked account(s) failed authentication. Please verify credentials in Dropbox."
+
+    return web.json_response({
+        "success": True,
+        "message": summary_msg,
+        "synced_accounts": synced_total,
+        "unblocked": unblocked_names,
+        "still_blocked": still_blocked_names,
+        "remaining_blocked": get_blocked_users()
+    })
 

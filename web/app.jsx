@@ -226,6 +226,43 @@ const ActionLogWidget = () => {
     });
     const [retryingId, setRetryingId] = React.useState(null);
     const [actionFeedback, setActionFeedback] = React.useState(null);
+    const [isSyncingDropbox, setIsSyncingDropbox] = React.useState(false);
+
+    const handleSyncDropbox = async () => {
+        if (isSyncingDropbox) return;
+        setIsSyncingDropbox(true);
+        setActionFeedback(null);
+        try {
+            const res = await fetchWithTimeout('/api/blocked-users/sync-dropbox', {
+                method: 'POST',
+                timeout: 30000,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('drmt_token')}`
+                }
+            });
+            const data = await res.json();
+            if (data && data.success) {
+                const isAllClear = (data.unblocked && data.unblocked.length > 0) || (data.remaining_blocked && data.remaining_blocked.length === 0);
+                setActionFeedback({
+                    type: isAllClear ? 'success' : 'error',
+                    text: data.message || 'Dropbox credentials synced successfully'
+                });
+                if (Array.isArray(data.remaining_blocked)) {
+                    mergeAndSaveLogs(data.remaining_blocked, 'blocked');
+                } else {
+                    fetchLogs();
+                }
+            } else {
+                setActionFeedback({ type: 'error', text: data?.message || 'Failed to sync credentials from Dropbox' });
+                fetchLogs();
+            }
+        } catch (err) {
+            setActionFeedback({ type: 'error', text: 'Dropbox sync request timed out or failed' });
+        } finally {
+            setIsSyncingDropbox(false);
+        }
+    };
 
     const mergeAndSaveLogs = React.useCallback((incomingList, tab) => {
         if (!Array.isArray(incomingList)) return;
@@ -384,6 +421,21 @@ const ActionLogWidget = () => {
                     <div className="action-log-content">
                         {activeTab === 'blocked' ? (
                             <div className="blocked-users-list">
+                                <div className="blocked-list-toolbar">
+                                    <div className="blocked-list-title">
+                                        <span>Blocked Accounts</span>
+                                        <span className="blocked-count-pill">{logs.length}</span>
+                                    </div>
+                                    <button
+                                        className="btn-sync-dropbox"
+                                        disabled={isSyncingDropbox}
+                                        onClick={handleSyncDropbox}
+                                        title="Download latest credentials from Dropbox and retry all blocked users"
+                                    >
+                                        <span className={`sync-icon ${isSyncingDropbox ? 'spinning' : ''}`}>⟳</span>
+                                        {isSyncingDropbox ? 'Syncing...' : 'Sync from Dropbox'}
+                                    </button>
+                                </div>
                                 {actionFeedback && (
                                     <div className={`blocked-action-feedback ${actionFeedback.type}`}>
                                         {actionFeedback.text}
