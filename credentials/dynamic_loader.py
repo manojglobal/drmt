@@ -69,6 +69,15 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
                             raise RuntimeError(f"HTTP {resp.status} while fetching Dropbox credentials CSV")
                         raw_csv_text = await resp.text(encoding="utf-8")
                 logger.info(f"✅ Successfully downloaded credentials CSV from Dropbox ({len(raw_csv_text)} bytes)")
+                try:
+                    static_cache_path = getattr(settings, "CREDENTIALS_CSV_PATH", "static/plato_client_credentials.csv")
+                    if not os.path.isabs(static_cache_path):
+                        static_cache_path = os.path.join(get_app_dir(), static_cache_path)
+                    os.makedirs(os.path.dirname(static_cache_path), exist_ok=True)
+                    with open(static_cache_path, "w", encoding="utf-8") as f_cache:
+                        f_cache.write(raw_csv_text)
+                except Exception as cache_err:
+                    logger.debug(f"Could not cache Dropbox CSV to local file: {cache_err}")
             except Exception as fetch_err:
                 logger.error(f"❌ Failed to fetch credentials from Dropbox URL: {fetch_err}. Falling back to local static CSV.")
                 await logger_auth.warn(f"Failed to fetch credentials from Dropbox: {fetch_err}. Falling back to local static CSV.")
@@ -147,19 +156,45 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
         token_val = creds_json.get("access_token") or creds_json.get("token") or ""
         row_id = int(row.get("id") or 0)
 
-        # Name deduplication: prefer human names over generic labels (e.g. Demat, Virtual)
+        # Name deduplication: prefer human names over generic labels (e.g. Demat, Virtual, Recovery)
+        # When comparing two human names, prefer the newer record based on access_token_created_at or row_id
         is_generic_name = any(x in full_name.lower() for x in ("demat", "virtual", "recovery"))
         existing_name = new_cid_to_name.get(client_id, "")
         existing_is_generic = any(x in existing_name.lower() for x in ("demat", "virtual", "recovery"))
 
-        if not existing_name or (existing_is_generic and not is_generic_name):
+        should_update_name = False
+        if not existing_name:
+            should_update_name = True
+        elif existing_is_generic and not is_generic_name:
+            should_update_name = True
+        elif not is_generic_name and not existing_is_generic:
+            existing_cred = new_client_creds.get(client_id)
+            if existing_cred:
+                existing_time = existing_cred.get("token_created_at") or ""
+                existing_row_id = existing_cred.get("row_id") or 0
+                if token_created and existing_time:
+                    if token_created > existing_time:
+                        should_update_name = True
+                    elif token_created == existing_time and row_id >= existing_row_id:
+                        should_update_name = True
+                elif row_id >= existing_row_id:
+                    should_update_name = True
+            else:
+                should_update_name = True
+
+        if should_update_name:
+            if existing_name and existing_name in new_name_to_cids and client_id in new_name_to_cids[existing_name]:
+                new_name_to_cids[existing_name].remove(client_id)
+                if not new_name_to_cids[existing_name]:
+                    del new_name_to_cids[existing_name]
             new_cid_to_name[client_id] = full_name
-            new_name_to_cids.setdefault(full_name, []).append(client_id)
-        elif full_name and client_id not in new_name_to_cids.get(full_name, []):
+            if not is_generic_name:
+                new_name_to_cids.setdefault(full_name, []).append(client_id)
+        elif not is_generic_name and full_name and client_id not in new_name_to_cids.get(full_name, []):
             new_name_to_cids.setdefault(full_name, []).append(client_id)
 
         uid = str(row.get("user_id") or "").strip()
-        if uid and full_name:
+        if uid and full_name and not is_generic_name:
             new_cid_to_name[uid] = full_name
 
         # Credential deduplication: prefer row with newer access_token_created_at or higher row_id
@@ -181,10 +216,14 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
             "token": token_val,
             "token_created_at": token_created,
             "user_id": int(uid) if uid and uid.isdigit() else None,
-            "full_name": full_name,
+            "full_name": new_cid_to_name.get(client_id, full_name),
             "row_id": row_id,
         }
         new_client_creds[client_id] = cred_record
+
+    for cid, cred in new_client_creds.items():
+        if cid in new_cid_to_name:
+            cred["full_name"] = new_cid_to_name[cid]
 
     synced_records = list(new_client_creds.values())
 
@@ -267,6 +306,16 @@ async def _fallback_load_from_db():
                     "token": row[7] or "",
                     "user_id": row[8],
                 }
+
+        from utils.user_mapping import DEFAULT_CLIENT_NAMES
+        for cid, name in DEFAULT_CLIENT_NAMES.items():
+            if cid not in _cid_to_name:
+                _cid_to_name[cid] = name
+            if name not in _name_to_cids:
+                _name_to_cids[name] = []
+            if cid not in _name_to_cids[name]:
+                _name_to_cids[name].append(cid)
+
         _initialized = True
         logger.info(f"Loaded {len(_configured_cids)} credentials from SQLite fallback.")
     except Exception as e:

@@ -467,7 +467,8 @@ const ActionLogWidget = () => {
 const CLIENT_NAME_MAP = {
     'P645M1': 'Manoj mStock Demo',
     'P645M2': 'Jagdeesh Sawant',
-    'P645M6': 'Rinku Singh'
+    'P645M6': 'Rinku Singh',
+    'FZ48062': 'Rinku Singh'
 };
 
 const getDisplayUsername = (pos) => {

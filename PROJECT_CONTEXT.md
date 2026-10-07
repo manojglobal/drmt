@@ -208,7 +208,7 @@ At startup, `fetch_and_sync_credentials()` is invoked:
 1. Fetches broker credentials CSV directly from remote storage (e.g. Dropbox URL configured in `settings.CREDENTIALS_CSV_URL` or fallback SQLite `data/drmt.db`).
 2. Dropbox URLs are auto-normalized (`dl=1`) for direct raw CSV streaming.
 3. Parses client credentials for all supported brokers: **MSTOCK**, **FLATTRADE**, **ALICE BLUE**, and **FYERS**.
-4. In-memory mappings (`_cid_to_name`, `_name_to_cids`, `_configured_cids`) are populated to bind client IDs to real trader names (e.g. `1905469 -> Dilip Kushwah`, `FZ48062 -> Manoj Flattrade`, `XR10079 -> Rukmani Fyers`).
+4. In-memory mappings (`_cid_to_name`, `_name_to_cids`, `_configured_cids`) are populated to bind client IDs to real trader names (e.g. `1905469 -> Dilip Kushwah`, `FZ48062 -> Rinku Singh (Flattrade)`, `XR10079 -> Rukmani Fyers`).
 5. UPSERTs credentials into the SQLite `credentials` table preserving active tokens and status flags.
 6. Deduplication (`credentials/dedup.py`) groups credentials by `(broker, client_id, static_ip)` to prevent duplicate concurrent sessions.
 
