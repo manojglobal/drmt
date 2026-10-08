@@ -82,9 +82,15 @@ async def authenticate_configured_credentials():
             
     filtered = [r for r in rows if not configured_cids or r[2] in configured_cids]
     if not filtered:
-        return
+        return [], [], []
         
     await logger_system.info(f"🔄 Authenticating {len(filtered)} configured account(s) on startup...")
+    succeeded: list[str] = []
+    failed: list[tuple[str, str]] = []
+    auth_results: list[dict] = []
+    from credentials.dynamic_loader import get_client_email
+    from position.blocklist import get_blocked_user
+
     for r in filtered:
         broker_upper = str(r[1] or "").strip().upper()
         # Authenticate supported brokers
@@ -94,10 +100,42 @@ async def authenticate_configured_credentials():
                 totp_secret=r[5] or "", password=r[6] or "", static_ip=r[7] or "",
                 fingerprint=r[8], status=r[9], token=r[10] or "", token_updated_at=r[11]
             )
+            acc_label = f"{cred.broker}:{cred.client_id}"
+            user_email = get_client_email(cred.client_id)
             try:
-                await refresh_token_with_backoff(cred)
+                ok = await refresh_token_with_backoff(cred)
+                if ok:
+                    succeeded.append(acc_label)
+                    auth_results.append({
+                        "broker": cred.broker,
+                        "client_id": cred.client_id,
+                        "user_email": user_email,
+                        "refreshed": True,
+                        "reason": "",
+                    })
+                else:
+                    blocked_info = get_blocked_user(cred.client_id)
+                    reason_str = blocked_info.get("reason", "Failed") if blocked_info else "Failed"
+                    failed.append((acc_label, reason_str))
+                    auth_results.append({
+                        "broker": cred.broker,
+                        "client_id": cred.client_id,
+                        "user_email": user_email,
+                        "refreshed": False,
+                        "reason": reason_str,
+                    })
             except Exception as auth_err:
-                logger.error(f"Startup auth error for {cred.broker}:{cred.client_id}: {auth_err}")
+                reason_str = str(auth_err)
+                failed.append((acc_label, reason_str))
+                auth_results.append({
+                    "broker": cred.broker,
+                    "client_id": cred.client_id,
+                    "user_email": user_email,
+                    "refreshed": False,
+                    "reason": reason_str,
+                })
+                logger.error(f"Startup auth error for {acc_label}: {auth_err}")
+    return succeeded, failed, auth_results
 
 async def on_startup(app: web.Application):
     """Application startup sequence."""
@@ -128,6 +166,10 @@ async def on_startup(app: web.Application):
     # 9. Start Daily Log Retention Cleanup (30 days)
     asyncio.create_task(start_log_cleanup_loop(retention_days=30), name="log_retention_cleanup")
     
+    # 10. Start Daily Morning Credential Refresh Scheduler (09:10 AM IST)
+    from credentials.scheduler import start_daily_credential_scheduler
+    app["daily_scheduler_task"] = asyncio.create_task(start_daily_credential_scheduler(), name="daily_credential_scheduler")
+    
     await logger_system.info("Application startup complete.")
 
 async def on_cleanup(app: web.Application):
@@ -139,6 +181,10 @@ async def on_cleanup(app: web.Application):
     
     # 2. Close Email Session
     await close_email_session()
+    
+    # 3. Stop Daily Scheduler Task
+    if "daily_scheduler_task" in app and not app["daily_scheduler_task"].done():
+        app["daily_scheduler_task"].cancel()
     
     # DB Pool is managed by context managers, but we can assume safe closure as connections complete.
     await logger_system.info("Application shutdown complete.")

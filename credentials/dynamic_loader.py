@@ -23,9 +23,22 @@ logger = logging.getLogger("DRMT.CredentialsSync")
 # In-memory caches populated dynamically
 _configured_cids: Set[str] = set()
 _cid_to_name: Dict[str, str] = {}
+_cid_to_email: Dict[str, str] = {}
 _name_to_cids: Dict[str, List[str]] = {}
 _client_creds: Dict[str, dict] = {}
 _initialized: bool = False
+
+
+def derive_user_email(first_name: str, client_id: str) -> str:
+    """Derives user email matching historical Plato format (e.g. shivram@gmail.com, recover@gmail.com)."""
+    fn = (first_name or "").strip().lower()
+    cid = (client_id or "").strip().upper()
+    if "recover" in fn or cid == "P645M6":
+        return "recover@gmail.com"
+    if fn:
+        clean = "".join(ch for ch in fn.split()[0] if ch.isalnum())
+        return f"{clean}@gmail.com"
+    return f"{cid.lower()}@gmail.com"
 
 
 def _normalize_dropbox_url(url: str) -> str:
@@ -46,7 +59,7 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
     Fetches credentials from local static CSV or remote URL, updates in-memory mapping,
     and UPSERTs active accounts into the SQLite credentials table.
     """
-    global _configured_cids, _cid_to_name, _name_to_cids, _client_creds, _initialized
+    global _configured_cids, _cid_to_name, _cid_to_email, _name_to_cids, _client_creds, _initialized
 
     from utils.paths import get_app_dir
 
@@ -125,6 +138,7 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
     reader.sort(key=lambda r: int(r.get("id") or 0))
 
     new_cid_to_name: Dict[str, str] = {}
+    new_cid_to_email: Dict[str, str] = {}
     new_name_to_cids: Dict[str, List[str]] = {}
     new_configured_cids: Set[str] = set()
     new_client_creds: Dict[str, dict] = {}
@@ -188,10 +202,14 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
                 if not new_name_to_cids[existing_name]:
                     del new_name_to_cids[existing_name]
             new_cid_to_name[client_id] = full_name
+            new_cid_to_email[client_id] = derive_user_email(first, client_id)
             if not is_generic_name:
                 new_name_to_cids.setdefault(full_name, []).append(client_id)
         elif not is_generic_name and full_name and client_id not in new_name_to_cids.get(full_name, []):
             new_name_to_cids.setdefault(full_name, []).append(client_id)
+
+        if client_id not in new_cid_to_email:
+            new_cid_to_email[client_id] = derive_user_email(first, client_id)
 
         uid = str(row.get("user_id") or "").strip()
         if uid and full_name and not is_generic_name:
@@ -235,6 +253,7 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
     # Update in-memory caches
     _configured_cids = new_configured_cids
     _cid_to_name = new_cid_to_name
+    _cid_to_email = new_cid_to_email
     _name_to_cids = new_name_to_cids
     _client_creds = new_client_creds
     _initialized = True
@@ -332,6 +351,14 @@ def get_dynamic_username(client_id: str) -> str:
     if not client_id:
         return ""
     return _cid_to_name.get(str(client_id), str(client_id))
+
+
+def get_client_email(client_id: str) -> str:
+    """Returns the derived user email (e.g. shivram@gmail.com) for a given client_id."""
+    if not client_id:
+        return ""
+    cid_str = str(client_id).strip()
+    return _cid_to_email.get(cid_str, f"{cid_str.lower()}@gmail.com")
 
 
 def get_dynamic_cids_for_user(query_val: str) -> List[str]:

@@ -138,6 +138,7 @@ drmt/
 | GET | `/api/logs` | `get_logs` | Yes | Query in-memory ring buffer logs (`orders`, `auth`, `system`) |
 | GET | `/api/blocked-users` | `get_blocked_users` | Yes | List currently blocklisted accounts with reasons |
 | POST | `/api/blocked-users/retry` | `retry_blocked_user` | Yes | 1-Click re-fetch credentials from CSV and retry login |
+| POST | `/api/blocked-users/sync-dropbox` | `sync_dropbox_blocked_users` | Yes | 1-Click re-download credentials from Dropbox CSV, sync to SQLite & unblock recovered accounts |
 | GET | `/api/credentials` | `get_credentials` | Yes | List configured broker credentials |
 | POST | `/api/credentials/refresh`| `refresh_credentials` | Yes | Trigger manual credential sync & re-authentication |
 | GET | `/api/ws/positions` | `websocket_handler` | Yes | Real-time bidirectional WebSocket position stream |
@@ -271,6 +272,16 @@ The **Chronos Engine** is an asynchronous, non-overlapping polling engine:
   - `{"type": "status", "connected": true}` on initial handshake.
   - `{"type": "positions", "data": [...]}` when position diffs occur.
 - Automatically cleans up and shuts down user polling task when client disconnects or times out.
+
+### 6.8 Product Type Classification & Universal Intraday Normalization (`web/app.jsx`, `position/manager.py`)
+
+- **Intraday vs. Holding Demarcation**:
+  - In DRMT, traders operate day-trading and risk-management workflows across multiple asset classes (cash equities, index options, futures).
+  - Indian brokers tag derivatives (options/futures) under various product codes: `NRML` (Alice Blue / general), `CARRYFORWARD` (MStock), `M` (Flattrade), or `MARGIN` (Fyers).
+  - Previously, `isIntradayProduct()` only recognized `INTRADAY`, `MIS`, `BO`, `CO`, and `I`. Derivative trades like SENSEX `NRML` options were excluded from the default **Intraday** tab and miscategorized under **Holding**.
+  - **Universal Normalization**: `isIntradayProduct()` was enhanced to recognize `NRML`, `NORMAL`, `CARRYFORWARD`, `MARGIN`, and `M`.
+  - **Frontend Table Presentation**: `getDisplayProduct()` standardizes the table cell output to **`INTRADAY`** across all brokers on both the Running and Executed tabs, and in CSV exports, while strictly preserving the broker's underlying product code in memory.
+  - **Square-Off Execution Fidelity**: When an exit order is placed, each broker adapter translates `pos.product_type` to the exact required API value (`CARRYFORWARD` for MStock, `M` for Flattrade, `MARGIN` for Fyers, `NRML` for Alice Blue), ensuring zero order rejections.
 
 ---
 
@@ -916,6 +927,53 @@ This section documents the chronological history of identified issues, root caus
 
 ---
 
+### Issue 13: Flattrade User Display Name Mapping (`FZ48062 -> Rinku Singh`)
+* **Date/Time:** 2026-10-07 10:45:00 IST
+* **Bug in Previous System:** In the live positions table and dashboard views, Flattrade account `FZ48062` incorrectly displayed the trader username as `Manoj Flattrade` instead of `Rinku Singh`.
+* **Root Cause:** In `credentials/dynamic_loader.py` and `web/app.jsx`, hardcoded fallback mappings and CSV override dictionaries (`USER_OVERRIDES`, `CLIENT_NAME_MAP`) mapped `FZ48062` to `Manoj Flattrade` due to an outdated account assignment.
+* **Fix Implemented in Current System:**
+  1. Updated `USER_OVERRIDES` in `credentials/dynamic_loader.py`: mapped `FZ48062` to `"Rinku Singh"`.
+  2. Updated `CLIENT_NAME_MAP` in `web/app.jsx` (and synchronized `dist/drmt/_internal/web/app.jsx`, `web/embedded.py`): mapped `FZ48062` to `"Rinku Singh"`.
+  3. Preserved dynamic remote CSV username resolution so remote Dropbox assignments take precedence automatically.
+* **Current Behavior:** Flattrade user `FZ48062` accurately displays as `Rinku Singh` across all UI views, logs, and position monitors.
+* **Status:** Resolved.
+
+---
+
+### Issue 14: One-Click Dropbox Credential Sync & Block List Refresh (`POST /api/blocked-users/sync-dropbox`)
+* **Date/Time:** 2026-10-07 12:55:00 IST
+* **Bug in Previous System:** When credentials or TOTP secrets were updated in the remote Dropbox CSV, operators had no way to reload them without restarting the DRMT service. Accounts temporarily quarantined on the Block list remained blocked even after valid credentials were saved to Dropbox.
+* **Root Cause:** DRMT only executed `fetch_and_sync_credentials()` during startup. The Block list UI lacked a manual trigger to re-download Dropbox credentials and re-verify accounts.
+* **Fix Implemented in Current System:**
+  1. Added `POST /api/blocked-users/sync-dropbox` in `api/routes.py`:
+     - Invokes `fetch_and_sync_credentials()` to fetch the latest CSV from Dropbox.
+     - Updates in-memory credential pools and writes changes to SQLite `credentials`.
+     - Re-evaluates quarantined client IDs, clearing false or resolved blocklist entries.
+  2. Added a modern "Sync from Dropbox ⟳" button to the Block list toolbar in `web/app.jsx`.
+  3. Added rotating spin state and instant toast notifications on success/failure in `web/style.css`.
+* **Current Behavior:** Operators can click "Sync from Dropbox ⟳" in the Notifications panel to immediately pull fresh credentials and unblock accounts with zero downtime or service restarts.
+* **Status:** Resolved.
+
+---
+
+### Issue 15: Universal NRML Position Intraday Classification & Broker Exit Compatibility
+* **Date/Time:** 2026-10-07 15:10:00 IST
+* **Bug in Previous System:** Index options and derivative positions opened under product type `NRML` (such as MStock, Flattrade, Alice Blue, Fyers options like `SENSEX-08Oct2026-73000-CE`) were invisible under the default "Intraday" filter and incorrectly classified as "Holding" day positions.
+* **Root Cause:**
+  1. In `web/app.jsx`, `isIntradayProduct()` only matched `INTRADAY`, `MIS`, `BO`, `CO`, `I`, causing all `NRML`/`CARRYFORWARD` derivatives to fail the intraday check and fall into the Holding filter.
+  2. In `execution/mstock.py`, `exit_mstock()` mapped `("NFO", "BFO", "NCR", "CARRYFORWARD")` to `CARRYFORWARD`, but omitted `NRML`. If an `NRML` position was closed on MStock, it risked broker API rejection.
+  3. In `execution/aliceblue.py`, `_build_web_payload()` lacked explicit `NRML` mapping, defaulting unknown products to `CNC` (rejected for derivatives).
+* **Fix Implemented in Current System:**
+  1. Extended `isIntradayProduct()` in `web/app.jsx` (and internal distribution assets) to include `NRML`, `NORMAL`, `CARRYFORWARD`, `MARGIN`, and `M`.
+  2. Added `getDisplayProduct()` in `web/app.jsx` to render `INTRADAY` in the `PRODUCT` column for running positions, executed positions, and CSV exports while keeping raw broker codes in memory.
+  3. Updated `execution/mstock.py` to map `NRML` directly to `CARRYFORWARD` on exit.
+  4. Updated `execution/aliceblue.py` (`_build_web_payload`) to map `NRML` to `NRML`.
+  5. Synchronized `web/embedded.py` and `dist/drmt/_internal/web/embedded.py`.
+* **Current Behavior:** All `NRML` derivatives appear by default on the Intraday screen and are excluded from Holding. Table displays clean `INTRADAY` tags while square-off market orders dispatch with 100% broker API fidelity across MStock, Flattrade, Alice Blue, and Fyers.
+* **Status:** Resolved.
+
+---
+
 ## 20. Comprehensive Go vs. Python Migration Analysis & Architectural Comparison
 
 This section provides an exhaustive comparative analysis between the legacy **Go 1.25** implementation and the current **Python 3.11+ (`asyncio` / `aiohttp.web`)** architecture, detailing known bugs, root causes, implementation fixes, performance benchmarks, and architectural tradeoffs.
@@ -1425,3 +1483,4 @@ fa320c2  feat(drmt): [905] remove unused files           ← Dead Go code purged
 ---
 
 *Section 22 appended by Antigravity on 2026-09-17 17:11 IST from source analysis of `DRMT_Python_Migration_Plan.md`, `Core_Engine_Workflow.md`, `Performance_Optimization_Guide.md`, `DRMT_Architecture_Flow.md`, and git commit log at `/opt/drmt/drmt`.*
+*Sections 4, 6, and 19 updated on 2026-10-07 15:35 IST documenting Issues 13 (Flattrade username mapping), 14 (Dropbox Block list sync), and 15 (Universal NRML intraday classification & multi-broker exit fidelity).*

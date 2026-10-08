@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     PORT: int = 10000
     DB_PATH: str = "data/drmt.db"
     DRMT_PROXY_URL: str = "https://demoapi.quantivo.in/proxy"
+    ENVIRONMENT: str = "LOCAL"
+    DAILY_REFRESH_HOUR: int = 9
+    DAILY_REFRESH_MINUTE: int = 10
     WORKER_POOL_SIZE: int = 50
     API_CONCURRENCY: int = 10
     DB_POOL_SIZE: int = 5

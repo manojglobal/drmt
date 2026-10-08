@@ -58,7 +58,9 @@ def get_blocked_user(client_id: str) -> Optional[dict]:
     return _blocked_users.get(client_id)
 
 
-def clear_blocklist() -> None:
-    """Clears all entries from the Block List (primarily for testing/admin reset)."""
+def clear_blocklist() -> int:
+    """Clears all entries from the Block List (primarily for testing/admin reset / morning daily reset)."""
+    count = len(_blocked_users)
     _blocked_users.clear()
-    logger.info("🧹 [BLOCKLIST] Cleared all entries")
+    logger.info(f"🧹 [BLOCKLIST] Cleared all {count} entries")
+    return count

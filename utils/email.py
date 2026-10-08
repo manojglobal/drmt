@@ -21,18 +21,56 @@ async def init_email_session() -> None:
 async def close_email_session() -> None:
     pass
 
-def format_drmt_email(subject: str, raw_body: str) -> tuple[str, str]:
+def format_drmt_email(subject: str, raw_body: str, html_body: str | None = None) -> tuple[str, str]:
     """
-    Formats the email in a simple, clean structure without tables:
+    Formats the email in a clean structure:
       Hello,
 
-      {actual error message / details}
+      {actual content / table}
 
       With regards,
       Team Quantivo
     """
     body_text = raw_body.strip()
-    
+
+    # If explicit html_body is passed, use it directly for HTML view
+    if html_body:
+        plain_text = f"Hello,\n\n{body_text}\n\nWith regards,\nTeam Quantivo\n"
+        html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #222222; margin: 24px; max-width: 850px;">
+  <p style="margin: 0 0 16px 0;">Hello,</p>
+  <div style="margin: 0 0 20px 0; color: #111111;">
+    {html_body}
+  </div>
+  <p style="margin: 24px 0 0 0;">With regards,<br><strong>Team Quantivo</strong></p>
+</body>
+</html>
+"""
+        return plain_text, html_content
+
+    # If raw_body already contains an HTML table, wrap it cleanly
+    if "<table" in body_text.lower():
+        plain_text = f"Hello,\n\n{body_text}\n\nWith regards,\nTeam Quantivo\n"
+        html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #222222; margin: 24px; max-width: 850px;">
+  <p style="margin: 0 0 16px 0;">Hello,</p>
+  <div style="margin: 0 0 20px 0; color: #111111;">
+    {body_text}
+  </div>
+  <p style="margin: 24px 0 0 0;">With regards,<br><strong>Team Quantivo</strong></p>
+</body>
+</html>
+"""
+        return plain_text, html_content
+
     # Strip any existing greeting or sign-off to prevent duplication
     lines = [l.strip() for l in body_text.splitlines() if l.strip()]
     cleaned_lines = []
@@ -40,13 +78,13 @@ def format_drmt_email(subject: str, raw_body: str) -> tuple[str, str]:
         if l.lower() in ("hello,", "hello", "hi,", "hi", "with regards,", "with regards", "team quantivo"):
             continue
         cleaned_lines.append(l)
-    
+
     clean_body = "\n".join(cleaned_lines)
-    
-    # Plain text format strictly matching requirements
+
+    # Plain text format
     plain_text = f"Hello,\n\n{clean_body}\n\nWith regards,\nTeam Quantivo\n"
-    
-    # Simple, clean HTML without any tables
+
+    # Simple text lines with <br>
     html_lines = "<br>\n".join(cleaned_lines)
     html_content = f"""<!DOCTYPE html>
 <html>
@@ -81,12 +119,24 @@ def _send_email_sync(subject: str, plain_body: str, html_body: str, email_to: st
     finally:
         server.quit()
 
-async def send_error_email(subject: str, body: str) -> None:
+def _build_env_subject(subject: str) -> str:
+    env_str = getattr(settings, "ENVIRONMENT", "LOCAL").upper().strip()
+    tag = f"[{env_str}]"
+    if not subject.strip().startswith(tag):
+        return f"{tag} {subject.strip()}"
+    return subject.strip()
+
+async def send_email_notification(subject: str, body: str, html_body: str | None = None) -> None:
+    """Dispatches general alert / success email via SMTP with environment tagging."""
+    await send_error_email(subject, body, html_body=html_body)
+
+async def send_error_email(subject: str, body: str, html_body: str | None = None) -> None:
     """Dispatches simple, structured alert email via SMTP.
 
     Throttled: max 1 concurrent SMTP connection; duplicate subjects
     are suppressed for _EMAIL_DEDUP_SECONDS seconds.
     """
+    subject = _build_env_subject(subject)
     # Dedup: skip if same subject was sent recently
     now = time.monotonic()
     last_sent = _RECENT_SUBJECTS.get(subject, 0.0)
@@ -110,7 +160,7 @@ async def send_error_email(subject: str, body: str) -> None:
             logger.warning("Email notification failed: EMAIL_TO is not set in .env")
             return
 
-        plain_text, html_content = format_drmt_email(subject, body)
+        plain_text, html_content = format_drmt_email(subject, body, html_body=html_body)
 
         # Throttle: only 1 SMTP connection at a time
         async with _EMAIL_SEMAPHORE:
