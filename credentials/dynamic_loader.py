@@ -6,6 +6,7 @@ with the SQLite database.
 """
 
 import csv
+import hashlib
 import io
 import json
 import logging
@@ -370,48 +371,28 @@ def get_dynamic_cids_for_user(query_val: str) -> List[str]:
     return [query_val]
 
 
+def compute_credential_signature(cred: Optional[dict]) -> str:
+    """Computes a SHA-256 hash of sensitive auth fields to detect edits in Dropbox / static CSV."""
+    if not cred:
+        return ""
+    broker = str(cred.get("broker") or "").strip().upper()
+    client_id = str(cred.get("client_id") or "").strip().upper()
+    api_key = str(cred.get("api_key") or "").strip()
+    api_secret = str(cred.get("api_secret") or "").strip()
+    totp_secret = str(cred.get("totp_secret") or "").strip()
+    password = str(cred.get("password") or "").strip()
+    static_ip = str(cred.get("static_ip") or "").strip()
+    token = str(cred.get("token") or "").strip()
+    raw = f"{broker}:{client_id}:{api_key}:{api_secret}:{totp_secret}:{password}:{static_ip}:{token}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def get_dynamic_credentials(client_id: str) -> Optional[dict]:
-    """Retrieves fresh credential data for a given client_id from memory or SQLite fallback."""
+    """Retrieves fresh credential data for a given client_id directly from the source of truth cache (Dropbox or static CSV)."""
     if not client_id:
         return None
     cid_str = str(client_id).strip()
-    if cid_str in _client_creds:
-        return _client_creds[cid_str]
-
-    # SQLite fallback if in-memory cache hasn't been populated in this process
-    import sqlite3
-    from utils.paths import get_app_dir
-    db_path = os.path.join(get_app_dir(), settings.DB_PATH)
-    if os.path.exists(db_path):
-        try:
-            with sqlite3.connect(db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT client_id, password, api_key, api_secret, totp_secret, static_ip, broker, token, user_id
-                    FROM credentials
-                    WHERE client_id = ? AND status = 'working'
-                    LIMIT 1
-                """, (cid_str,))
-                row = cursor.fetchone()
-                if row:
-                    record = {
-                        "client_id": row[0],
-                        "password": row[1] or "",
-                        "api_key": row[2] or "",
-                        "api_secret": row[3] or "",
-                        "totp_secret": row[4] or "",
-                        "static_ip": row[5] or "",
-                        "broker": row[6] or "",
-                        "token": row[7] or "",
-                        "user_id": row[8],
-                    }
-                    _client_creds[cid_str] = record
-                    _configured_cids.add(cid_str)
-                    return record
-        except Exception as e:
-            logger.debug(f"SQLite lookup failed for {cid_str}: {e}")
-
-    return None
+    return _client_creds.get(cid_str)
 
 
 def get_credential_source_info() -> dict:

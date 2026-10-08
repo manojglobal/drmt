@@ -160,6 +160,11 @@ async def on_startup(app: web.Application):
     # 6. Display Configured Credentials
     await display_configured_credentials()
     
+    # 7. Initial One-Time Credential Verification & Authentication at Startup
+    await logger_system.info("🔐 Performing initial one-time credential check and authentication...")
+    succeeded, failed, auth_results = await authenticate_configured_credentials()
+    await logger_system.info(f"🔐 Initial startup check complete: {len(succeeded)} ready, {len(failed)} failed/blocked.")
+    
     # 8. Start Health Monitor
     await health_monitor.start()
     
@@ -169,6 +174,13 @@ async def on_startup(app: web.Application):
     # 10. Start Daily Morning Credential Refresh Scheduler (09:10 AM IST)
     from credentials.scheduler import start_daily_credential_scheduler
     app["daily_scheduler_task"] = asyncio.create_task(start_daily_credential_scheduler(), name="daily_credential_scheduler")
+    
+    # 11. Start Blocked Credentials Recheck Worker (1-2 minutes)
+    from credentials.watcher import start_blocked_credentials_watcher
+    app["blocked_watcher_task"] = asyncio.create_task(
+        start_blocked_credentials_watcher(interval_seconds=settings.BLOCKED_RECHECK_INTERVAL_SEC),
+        name="blocked_credentials_watcher"
+    )
     
     await logger_system.info("Application startup complete.")
 
@@ -185,6 +197,10 @@ async def on_cleanup(app: web.Application):
     # 3. Stop Daily Scheduler Task
     if "daily_scheduler_task" in app and not app["daily_scheduler_task"].done():
         app["daily_scheduler_task"].cancel()
+        
+    # 4. Stop Blocked Credentials Watcher Task
+    if "blocked_watcher_task" in app and not app["blocked_watcher_task"].done():
+        app["blocked_watcher_task"].cancel()
     
     # DB Pool is managed by context managers, but we can assume safe closure as connections complete.
     await logger_system.info("Application shutdown complete.")

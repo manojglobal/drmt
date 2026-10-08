@@ -74,25 +74,34 @@ async def refresh_credentials(request: web.Request):
     except Exception as e:
         logger.error(f"Error syncing credentials during refresh: {e}")
     
-    success_count = 0
-    async with get_db() as db:
-        db.row_factory = None
-        valid_filter = "status = 'working' AND UPPER(broker) != 'FAKE' AND client_id IS NOT NULL AND TRIM(client_id) != ''"
-        async with db.execute(f"SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE {valid_filter}") as cursor:
-            rows = await cursor.fetchall()
-            
-    configured_cids = get_configured_client_ids()
-    filtered_rows = [r for r in rows if not configured_cids or r[2] in configured_cids]
-    for row in filtered_rows:
-        cred = Credential(
-            id=row[0], broker=row[1], client_id=row[2], api_key=row[3], api_secret=row[4],
-            totp_secret=row[5], password=row[6], static_ip=row[7],
-            fingerprint=row[8], status=row[9], token=row[10], token_updated_at=row[11]
-        )
-        if await refresh_token_with_backoff(cred):
-            success_count += 1
-            
-    return web.json_response({"success": True, "refreshed": success_count, "total": len(filtered_rows)})
+    # 2. Authenticate configured broker credentials
+    from main import authenticate_configured_credentials
+    succeeded, failed, auth_results = await authenticate_configured_credentials()
+
+    # 3. Optional tabular email dispatch
+    if auth_results:
+        from credentials.scheduler import build_refresh_tables_html
+        from utils.email import send_email_notification, send_error_email
+        plain_table, html_table = build_refresh_tables_html(auth_results)
+        if failed:
+            asyncio.create_task(
+                send_error_email(f"Manual Credential Refresh Alert: {len(failed)} Failed", plain_table, html_body=html_table),
+                name="manual_refresh_alert"
+            )
+        elif succeeded:
+            asyncio.create_task(
+                send_email_notification(f"Manual Credential Refresh Successful: {len(succeeded)} Ready", plain_table, html_body=html_table),
+                name="manual_refresh_notice"
+            )
+
+    return web.json_response({
+        "success": True,
+        "message": f"Credential refresh complete: {len(succeeded)} succeeded, {len(failed)} failed.",
+        "refreshed": len(succeeded),
+        "failed": len(failed),
+        "total": len(auth_results),
+        "details": auth_results
+    })
 
 @routes.post('/api/exit')
 async def exit_positions(request: web.Request):

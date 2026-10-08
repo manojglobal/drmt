@@ -188,3 +188,53 @@ async def send_error_email(subject: str, body: str, html_body: str | None = None
 
     except Exception as e:
         logger.error(f"Email notification failed: {e}")
+
+
+async def send_auth_failed_email(broker: str, client_id: str, username: str, reason: str, user_email: str = "") -> None:
+    """Dispatches failure email when credentials fail authentication."""
+    subject = f"Authentication Failed: {broker}:{client_id}"
+    plain_body = (
+        f"Authentication failed for account {broker}:{client_id} ({username}).\n\n"
+        f"Reason: {reason}\n\n"
+        f"Please update the credentials in your Dropbox credentials CSV or static folder.\n"
+        f"The DRMT system will automatically detect the changes within 1–2 minutes and verify the account."
+    )
+    email_row = f"<tr><td style='padding: 6px 12px; font-weight: bold; background: #f5f5f5; border: 1px solid #ddd;'>User Email</td><td style='padding: 6px 12px; border: 1px solid #ddd;'>{user_email}</td></tr>" if user_email else ""
+    html_body = f"""
+    <div style="font-family: sans-serif; font-size: 14px; color: #222;">
+      <h3 style="color: #d32f2f; margin-top: 0;">❌ Authentication Failed</h3>
+      <table style="border-collapse: collapse; width: 100%; max-width: 600px; margin-bottom: 16px;">
+        <tr><td style="padding: 6px 12px; font-weight: bold; background: #f5f5f5; border: 1px solid #ddd; width: 140px;">Broker</td><td style="padding: 6px 12px; border: 1px solid #ddd;">{broker}</td></tr>
+        <tr><td style="padding: 6px 12px; font-weight: bold; background: #f5f5f5; border: 1px solid #ddd;">Client ID</td><td style="padding: 6px 12px; border: 1px solid #ddd;">{client_id}</td></tr>
+        <tr><td style="padding: 6px 12px; font-weight: bold; background: #f5f5f5; border: 1px solid #ddd;">Username</td><td style="padding: 6px 12px; border: 1px solid #ddd;">{username}</td></tr>
+        {email_row}
+        <tr><td style="padding: 6px 12px; font-weight: bold; background: #f5f5f5; border: 1px solid #ddd;">Failure Reason</td><td style="padding: 6px 12px; border: 1px solid #ddd; color: #d32f2f;">{reason}</td></tr>
+      </table>
+      <p style="color: #555;">Please update the credentials in your Dropbox credentials CSV or static folder. The DRMT background recheck worker will automatically detect changes within 1–2 minutes and verify the account.</p>
+    </div>
+    """
+    await send_error_email(subject, plain_body, html_body=html_body)
+
+
+async def send_credentials_restored_email(broker: str, client_id: str, username: str, user_email: str = "") -> None:
+    """Dispatches confirmation email when updated credentials are authenticated successfully."""
+    subject = f"Credentials Restored: {broker}:{client_id}"
+    plain_body = (
+        f"Credentials for account {broker}:{client_id} ({username}) have been verified successfully!\n\n"
+        f"The account has been removed from the Block list and live position scanning is now resumed."
+    )
+    email_row = f"<tr><td style='padding: 6px 12px; font-weight: bold; background: #f5f5f5; border: 1px solid #ddd;'>User Email</td><td style='padding: 6px 12px; border: 1px solid #ddd;'>{user_email}</td></tr>" if user_email else ""
+    html_body = f"""
+    <div style="font-family: sans-serif; font-size: 14px; color: #222;">
+      <h3 style="color: #2e7d32; margin-top: 0;">✅ Credentials Verified & Restored</h3>
+      <table style="border-collapse: collapse; width: 100%; max-width: 600px; margin-bottom: 16px;">
+        <tr><td style="padding: 6px 12px; font-weight: bold; background: #f5f5f5; border: 1px solid #ddd; width: 140px;">Broker</td><td style="padding: 6px 12px; border: 1px solid #ddd;">{broker}</td></tr>
+        <tr><td style="padding: 6px 12px; font-weight: bold; background: #f5f5f5; border: 1px solid #ddd;">Client ID</td><td style="padding: 6px 12px; border: 1px solid #ddd;">{client_id}</td></tr>
+        <tr><td style="padding: 6px 12px; font-weight: bold; background: #f5f5f5; border: 1px solid #ddd;">Username</td><td style="padding: 6px 12px; border: 1px solid #ddd;">{username}</td></tr>
+        {email_row}
+        <tr><td style="padding: 6px 12px; font-weight: bold; background: #f5f5f5; border: 1px solid #ddd;">Status</td><td style="padding: 6px 12px; border: 1px solid #ddd; color: #2e7d32; font-weight: bold;">Active / Working</td></tr>
+      </table>
+      <p style="color: #2e7d32; font-weight: bold;">Account unblocked. Live position scanning has resumed successfully.</p>
+    </div>
+    """
+    await send_email_notification(subject, plain_body, html_body=html_body)

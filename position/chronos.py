@@ -22,44 +22,82 @@ logger = logging.getLogger(__name__)
 _POLL_ERROR_THROTTLE_SEC = 30.0
 _last_poll_errors: Dict[str, Tuple[str, float]] = {}  # client_id -> (clean_err, timestamp)
 
+# In-flight concurrency lock per client_id to prevent simultaneous broker login attempts
+_AUTH_CLIENT_LOCKS: Dict[str, asyncio.Lock] = {}
+
+def _get_client_auth_lock(client_id: str) -> asyncio.Lock:
+    cid_str = str(client_id).strip()
+    if cid_str not in _AUTH_CLIENT_LOCKS:
+        _AUTH_CLIENT_LOCKS[cid_str] = asyncio.Lock()
+    return _AUTH_CLIENT_LOCKS[cid_str]
+
 async def refresh_token_with_backoff(cred: Credential) -> bool:
-    """Attempts single-attempt credential login. If it fails, adds user to blocklist with zero auto-retries."""
-    username = get_client_username(cred.client_id)
-    await logger_auth.info(f"🔄 Authenticating {cred.broker}:{cred.client_id} ({username})...")
-    try:
-        token = ""
-        if cred.broker.upper() == "MSTOCK":
-            token = await login_mstock(cred)
-        elif cred.broker.upper() == "FLATTRADE":
-            token = await login_flattrade(cred)
-        elif cred.broker.upper() in ("ALICE BLUE", "ALICEBLUE"):
-            token = await login_aliceblue(cred)
-        elif cred.broker.upper() == "FYERS":
-            token = await login_fyers(cred)
-        masked = f"{token[:10]}...{token[-10:]}" if token and len(token) > 20 else ("***" if token else "empty")
-        await logger_auth.info(f"✅ Authentication successful for {cred.broker}:{cred.client_id} ({username}) [token: {masked}]")
-        remove_from_blocklist(cred.client_id)
-        return True
-    except Exception as e:
-        err_msg = str(e)
-        # Transient network / gateway errors (500, 502, 503, 504, Timeout) should NOT trigger blocklist
-        is_transient = any(
-            code in err_msg
-            for code in ("500", "502", "503", "504", "Bad Gateway", "Gateway Timeout", "Timeout", "Connection reset", "Connection refused", "IA500", "Internal Server Error")
-        ) or isinstance(e, (asyncio.TimeoutError, ConnectionError))
+    """Attempts single-attempt credential login guarded by a per-client lock. If it fails, adds user to blocklist with zero auto-retries."""
+    lock = _get_client_auth_lock(cred.client_id)
+    if lock.locked():
+        await logger_auth.warn(f"⏳ Authentication already in progress for {cred.broker}:{cred.client_id}. Waiting for lock...")
 
-        if is_transient:
-            await logger_auth.warn(f"⚠️  Transient network error authenticating {cred.broker}:{cred.client_id} ({username}): {e} (skipping blocklist)")
+    async with lock:
+        username = get_client_username(cred.client_id)
+        await logger_auth.info(f"🔄 Authenticating {cred.broker}:{cred.client_id} ({username})...")
+        try:
+            token = ""
+            if cred.broker.upper() == "MSTOCK":
+                token = await login_mstock(cred)
+            elif cred.broker.upper() == "FLATTRADE":
+                token = await login_flattrade(cred)
+            elif cred.broker.upper() in ("ALICE BLUE", "ALICEBLUE"):
+                token = await login_aliceblue(cred)
+            elif cred.broker.upper() == "FYERS":
+                token = await login_fyers(cred)
+            masked = f"{token[:10]}...{token[-10:]}" if token and len(token) > 20 else ("***" if token else "empty")
+            await logger_auth.info(f"✅ Authentication successful for {cred.broker}:{cred.client_id} ({username}) [token: {masked}]")
+            remove_from_blocklist(cred.client_id)
+            return True
+        except Exception as e:
+            err_msg = str(e)
+            # Transient network / gateway errors (500, 502, 503, 504, Timeout) should NOT trigger blocklist
+            is_transient = any(
+                code in err_msg
+                for code in ("500", "502", "503", "504", "Bad Gateway", "Gateway Timeout", "Timeout", "Connection reset", "Connection refused", "IA500", "Internal Server Error")
+            ) or isinstance(e, (asyncio.TimeoutError, ConnectionError))
+
+            if is_transient:
+                await logger_auth.warn(f"⚠️  Transient network error authenticating {cred.broker}:{cred.client_id} ({username}): {e} (skipping blocklist)")
+                return False
+
+            await logger_auth.error(f"❌ Auth failed for {cred.broker}:{cred.client_id} ({username}): {e}")
+            sig = ""
+            try:
+                from credentials.dynamic_loader import compute_credential_signature, get_dynamic_credentials
+                fresh_d = get_dynamic_credentials(cred.client_id)
+                sig = compute_credential_signature(fresh_d or cred.dict())
+            except Exception:
+                pass
+            add_to_blocklist(
+                client_id=cred.client_id,
+                broker=cred.broker,
+                username=username,
+                reason=err_msg,
+                signature=sig
+            )
+            # Dispatch failure alert email
+            try:
+                from utils.email import send_auth_failed_email
+                from credentials.dynamic_loader import get_client_email
+                asyncio.create_task(
+                    send_auth_failed_email(
+                        broker=cred.broker,
+                        client_id=cred.client_id,
+                        username=username,
+                        reason=err_msg,
+                        user_email=get_client_email(cred.client_id)
+                    ),
+                    name=f"email_auth_failed_{cred.client_id}"
+                )
+            except Exception:
+                pass
             return False
-
-        await logger_auth.error(f"❌ Auth failed for {cred.broker}:{cred.client_id} ({username}): {e}")
-        add_to_blocklist(
-            client_id=cred.client_id,
-            broker=cred.broker,
-            username=username,
-            reason=err_msg
-        )
-        return False
 
 async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: list[Credential], engine) -> None:
     try:
@@ -108,29 +146,43 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                             await logger_system.info(f"✅ Connection restored for {c.broker}:{c.client_id}")
                         return res
                     except PermissionError:
-                        await logger_auth.warn(f"🔑 Auth token expired for {c.broker}:{c.client_id} ➔ Refreshing")
-                        success = await refresh_token_with_backoff(c)
-                        if success:
-                            try:
-                                res = await broker_poll(c)
-                                if c.client_id in _last_poll_errors:
-                                    _last_poll_errors.pop(c.client_id, None)
-                                    await logger_system.info(f"✅ Connection restored for {c.broker}:{c.client_id}")
-                                return res
-                            except Exception as e:
-                                now = time.monotonic()
-                                err_str = str(e)
-                                prev = _last_poll_errors.get(c.client_id)
-                                if not prev or prev[0] != err_str or (now - prev[1]) >= _POLL_ERROR_THROTTLE_SEC:
-                                    _last_poll_errors[c.client_id] = (err_str, now)
-                                    await logger_system.error(f"❌ Post-refresh poll failed for {c.broker}:{c.client_id} - {e}")
-                                return []
-                        else:
-                            if is_blocked(c.client_id):
-                                await logger_system.error(f"❌ Authentication failed for {c.broker}:{c.client_id}. Placed in Block List.")
-                            else:
-                                await logger_system.warn(f"⚠️  Temporary refresh failure for {c.broker}:{c.client_id} - will retry next cycle.")
-                            return []
+                        username = get_client_username(c.client_id)
+                        await logger_auth.warn(
+                            f"🔑 [CHRONOS] Session token expired/invalid for {c.broker}:{c.client_id} ({username}). "
+                            f"Quarantining account in Block list (on-demand auto-refresh is disabled)."
+                        )
+                        # 1. Immediately quarantine into Block list with signature so future scans skip it
+                        sig = ""
+                        try:
+                            from credentials.dynamic_loader import compute_credential_signature, get_dynamic_credentials
+                            fresh_d = get_dynamic_credentials(c.client_id)
+                            sig = compute_credential_signature(fresh_d or c.dict())
+                        except Exception:
+                            pass
+                        add_to_blocklist(
+                            client_id=c.client_id,
+                            broker=c.broker,
+                            username=username,
+                            reason="Session token expired (HTTP 401/403) — on-demand auto-refresh is disabled.",
+                            signature=sig
+                        )
+                        # 2. Dispatch alert email to operator asynchronously (non-blocking)
+                        from utils.email import send_error_email
+                        email_body = (
+                            f"Account {c.broker}:{c.client_id} ({username}) encountered an expired or invalid session token (HTTP 401/403) during live scanning.\n\n"
+                            f"On-demand auto-refresh is disabled during live scans to prevent broker account lockouts.\n"
+                            f"The account has been placed in the Block list and live scanning has paused for this account.\n\n"
+                            f"To restore authentication, please use the 'Refresh Token' feature on the dashboard or update credentials in the remote CSV."
+                        )
+                        asyncio.create_task(
+                            send_error_email(
+                                f"Session Token Expired: {c.broker}:{c.client_id}",
+                                email_body
+                            ),
+                            name=f"email_token_expired_{c.client_id}"
+                        )
+                        # 3. Return empty list so remaining accounts continue scanning immediately
+                        return []
                     except Exception as e:
                         err_str = str(e)
                         is_transient = any(

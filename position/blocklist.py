@@ -11,10 +11,11 @@ _IST = zoneinfo.ZoneInfo("Asia/Kolkata")
 _blocked_users: Dict[str, dict] = {}
 
 
-def add_to_blocklist(client_id: str, broker: str, username: str, reason: str) -> None:
-    """Adds or updates a credential in the Block List with failure details."""
+def add_to_blocklist(client_id: str, broker: str, username: str, reason: str, signature: Optional[str] = None) -> None:
+    """Adds or updates a credential in the Block List with failure details and credential signature."""
     now_ist = datetime.now(tz=_IST)
     timestamp = now_ist.strftime("%Y-%m-%d %H:%M:%S")
+    prev_sig = _blocked_users.get(client_id, {}).get("credential_signature", "")
     _blocked_users[client_id] = {
         "client_id": client_id,
         "broker": broker,
@@ -22,10 +23,24 @@ def add_to_blocklist(client_id: str, broker: str, username: str, reason: str) ->
         "reason": str(reason),
         "blocked_at": timestamp,
         "status": "blocked",
+        "credential_signature": signature or prev_sig,
     }
     logger.warning(
         f"⛔ [BLOCKLIST] Added {broker}:{client_id} ({username}) - Reason: {reason}"
     )
+
+
+def get_blocked_user_signature(client_id: str) -> Optional[str]:
+    """Returns the credential signature for a blocked user."""
+    return _blocked_users.get(client_id, {}).get("credential_signature")
+
+
+def update_blocked_user_signature(client_id: str, signature: str, reason: Optional[str] = None) -> None:
+    """Updates the credential signature and reason for an existing blocked user."""
+    if client_id in _blocked_users:
+        _blocked_users[client_id]["credential_signature"] = signature
+        if reason:
+            _blocked_users[client_id]["reason"] = str(reason)
 
 
 def remove_from_blocklist(client_id: str) -> bool:
