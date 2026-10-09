@@ -39,7 +39,6 @@ async def refresh_token_with_backoff(cred: Credential) -> bool:
 
     async with lock:
         username = get_client_username(cred.client_id)
-        await logger_auth.info(f"🔄 Authenticating {cred.broker}:{cred.client_id} ({username})...")
         try:
             token = ""
             if cred.broker.upper() == "MSTOCK":
@@ -50,8 +49,7 @@ async def refresh_token_with_backoff(cred: Credential) -> bool:
                 token = await login_aliceblue(cred)
             elif cred.broker.upper() == "FYERS":
                 token = await login_fyers(cred)
-            masked = f"{token[:10]}...{token[-10:]}" if token and len(token) > 20 else ("***" if token else "empty")
-            await logger_auth.info(f"✅ Authentication successful for {cred.broker}:{cred.client_id} ({username}) [token: {masked}]")
+            await logger_auth.info(f"✅ Authentication successful for {cred.broker}:{cred.client_id} ({username})")
             remove_from_blocklist(cred.client_id)
             return True
         except Exception as e:
@@ -232,9 +230,9 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                         pnl_pct = f"{(pos.pnl / (pos.avg_price * abs(pos.quantity))) * 100:+.2f}%" if (pos.avg_price and pos.quantity) else "+0.00%"
                         pnl_str = f"+₹{pos.pnl:.2f}" if pos.pnl >= 0 else f"-₹{abs(pos.pnl):.2f}"
                         status = "Standby" if pos.quantity == 0 else "Holding"
-                        await logger_system.info(
-                            f"  ⏳ [{pos.symbol}] LTP: ₹{pos.ltp:.2f} | Avg: ₹{pos.avg_price:.2f} | Qty: {pos.quantity} | PnL: {pnl_str} ({pnl_pct}) ➔ {status}"
-                        )
+                        pos_line = f"  ⏳ [{pos.symbol}] LTP: ₹{pos.ltp:.2f} | Avg: ₹{pos.avg_price:.2f} | Qty: {pos.quantity} | PnL: {pnl_str} ({pnl_pct}) ➔ {status}"
+                        await logger_system.info(pos_line)
+                        await logger_auth.info(pos_line)
                 else:
                     for cred in credentials:
                         if not cred.client_id or not cred.client_id.strip() or cred.broker.upper() == "FAKE":
@@ -244,7 +242,9 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                         if is_blocked(cred.client_id):
                             await logger_system.info(f"  ⛔ [{cred.broker}:{cred.client_id}{user_label}] Blocked (Check Block list in Terminal)")
                         else:
-                            await logger_system.info(f"  ⏳ [{cred.broker}:{cred.client_id}{user_label}] LTP: ₹0.00 | Positions: 0 | PnL: ₹0.00 ➔ Standby")
+                            standby_line = f"  ⏳ [{cred.broker}:{cred.client_id}{user_label}] LTP: ₹0.00 | Positions: 0 | PnL: ₹0.00 ➔ Standby"
+                            await logger_system.info(standby_line)
+                            await logger_auth.info(standby_line)
                 
                 new_data = [pos.model_dump() for pos in new_data_models]
                 

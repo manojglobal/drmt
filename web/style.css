@@ -519,9 +519,19 @@ body {
     color: var(--green);
     border-color: rgba(0, 212, 170, 0.3);
 }
+.nav-connection-pill.connected .live-dot,
+.live-dot.connected {
+    background: var(--success) !important;
+    box-shadow: 0 0 8px var(--success);
+}
 .nav-connection-pill.disconnected {
     color: var(--red);
     border-color: rgba(255, 71, 87, 0.3);
+}
+.nav-connection-pill.disconnected .live-dot,
+.live-dot.disconnected {
+    background: var(--danger) !important;
+    box-shadow: 0 0 8px var(--danger);
 }
 .nav-connection-pill .pill-text {
     white-space: pre-line;

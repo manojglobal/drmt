@@ -203,14 +203,16 @@ const ServerHealthMonitor = () => {
 const ActionLogWidget = () => {
     const [activeTab, setActiveTab] = React.useState(() => {
         try {
-            return localStorage.getItem('drmt_active_log_tab') || 'orders';
+            const saved = localStorage.getItem('drmt_active_log_tab');
+            return (saved === 'auth' || saved === 'blocked') ? saved : 'auth';
         } catch {
-            return 'orders';
+            return 'auth';
         }
     });
     const [logs, setLogs] = React.useState(() => {
         try {
-            const initialTab = localStorage.getItem('drmt_active_log_tab') || 'orders';
+            const saved = localStorage.getItem('drmt_active_log_tab');
+            const initialTab = (saved === 'auth' || saved === 'blocked') ? saved : 'auth';
             const cached = localStorage.getItem(`drmt_logs_${initialTab}`);
             return cached ? JSON.parse(cached) : [];
         } catch {
@@ -227,6 +229,7 @@ const ActionLogWidget = () => {
     const [retryingId, setRetryingId] = React.useState(null);
     const [actionFeedback, setActionFeedback] = React.useState(null);
     const [isSyncingDropbox, setIsSyncingDropbox] = React.useState(false);
+    const [syncAttempted, setSyncAttempted] = React.useState(false);
 
     const handleSyncDropbox = async () => {
         if (isSyncingDropbox) return;
@@ -242,22 +245,25 @@ const ActionLogWidget = () => {
                 }
             });
             const data = await res.json();
+            setSyncAttempted(true);
             if (data && data.success) {
                 const isAllClear = (data.unblocked && data.unblocked.length > 0) || (data.remaining_blocked && data.remaining_blocked.length === 0);
-                setActionFeedback({
-                    type: isAllClear ? 'success' : 'error',
-                    text: data.message || 'Dropbox credentials synced successfully'
-                });
+                if (isAllClear) {
+                    setActionFeedback({
+                        type: 'success',
+                        text: data.message || 'Dropbox credentials synced successfully'
+                    });
+                }
                 if (Array.isArray(data.remaining_blocked)) {
                     mergeAndSaveLogs(data.remaining_blocked, 'blocked');
                 } else {
                     fetchLogs();
                 }
             } else {
-                setActionFeedback({ type: 'error', text: data?.message || 'Failed to sync credentials from Dropbox' });
                 fetchLogs();
             }
         } catch (err) {
+            setSyncAttempted(true);
             setActionFeedback({ type: 'error', text: 'Dropbox sync request timed out or failed' });
         } finally {
             setIsSyncingDropbox(false);
@@ -269,6 +275,9 @@ const ActionLogWidget = () => {
 
         if (tab === 'blocked') {
             setLogs(incomingList);
+            if (incomingList.length === 0) {
+                setSyncAttempted(false);
+            }
             try {
                 localStorage.setItem(`drmt_logs_${tab}`, JSON.stringify(incomingList));
             } catch {}
@@ -281,6 +290,12 @@ const ActionLogWidget = () => {
 
             for (const item of [...incomingList, ...prevLogs]) {
                 if (!item) continue;
+                if (item.message && item.message.includes('🔄 Authenticating')) {
+                    continue;
+                }
+                if (item.message && item.message.includes('[token:')) {
+                    item.message = item.message.replace(/\s*\[token:\s*[^\]]*\]/g, '');
+                }
                 const key = item.id != null ? String(item.id) : `${item.timestamp || ''}_${item.message || ''}`;
                 if (!seen.has(key)) {
                     seen.add(key);
@@ -413,45 +428,60 @@ const ActionLogWidget = () => {
                         </div>
                     </div>
                     <div className="action-log-tabs">
-                        <button className={`action-log-tab ${activeTab === 'orders' ? 'active' : ''}`} onClick={() => handleTabChange('orders')}>Orders</button>
-                        <button className={`action-log-tab ${activeTab === 'auth' ? 'active' : ''}`} onClick={() => handleTabChange('auth')}>Auth</button>
-                        <button className={`action-log-tab ${activeTab === 'system' ? 'active' : ''}`} onClick={() => handleTabChange('system')}>System</button>
-                        <button className={`action-log-tab ${activeTab === 'blocked' ? 'active' : ''}`} onClick={() => handleTabChange('blocked')}>Block list</button>
+                        <button className={`action-log-tab ${activeTab === 'auth' ? 'active' : ''}`} onClick={() => handleTabChange('auth')}>Logs</button>
+                        <button className={`action-log-tab ${activeTab === 'blocked' ? 'active' : ''}`} onClick={() => handleTabChange('blocked')}>Failed Auth</button>
                     </div>
                     <div className="action-log-content">
                         {activeTab === 'blocked' ? (
                             <div className="blocked-users-list">
                                 <div className="blocked-list-toolbar">
                                     <div className="blocked-list-title">
-                                        <span>Blocked Accounts</span>
+                                        <span>Failed Account</span>
                                         <span className="blocked-count-pill">{logs.length}</span>
                                     </div>
-                                    <button
-                                        className="btn-sync-dropbox"
-                                        disabled={isSyncingDropbox}
-                                        onClick={handleSyncDropbox}
-                                        title="Download latest credentials from Dropbox and retry all blocked users"
-                                    >
-                                        <span className={`sync-icon ${isSyncingDropbox ? 'spinning' : ''}`}>⟳</span>
-                                        {isSyncingDropbox ? 'Syncing...' : 'Sync from Dropbox'}
-                                    </button>
+                                    {(!syncAttempted || logs.length === 0) ? (
+                                        <button
+                                            className="btn-sync-dropbox"
+                                            disabled={isSyncingDropbox}
+                                            onClick={handleSyncDropbox}
+                                            title="Download latest credentials and retry all failed accounts"
+                                        >
+                                            <span className={`sync-icon ${isSyncingDropbox ? 'spinning' : ''}`}>⟳</span>
+                                            {isSyncingDropbox ? 'Syncing...' : 'Sync Credentials'}
+                                        </button>
+                                    ) : null}
                                 </div>
-                                {actionFeedback && (
+                                {syncAttempted && logs.length > 0 && (
+                                    <div className="failed-credentials-alert" style={{
+                                        margin: '6px 0',
+                                        padding: '8px 10px',
+                                        background: 'rgba(239, 68, 68, 0.12)',
+                                        border: '1px solid rgba(239, 68, 68, 0.35)',
+                                        borderRadius: 'var(--radius-sm, 6px)',
+                                        color: 'var(--danger, #ef4444)',
+                                        fontSize: '11px',
+                                        fontWeight: '600',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '6px'
+                                    }}>
+                                        <span>⚠️ Your credentials are incorrect. Please check your credentials.</span>
+                                    </div>
+                                )}
+                                {actionFeedback && !syncAttempted && (
                                     <div className={`blocked-action-feedback ${actionFeedback.type}`}>
                                         {actionFeedback.text}
                                     </div>
                                 )}
                                 {logs.length === 0 ? (
                                     <div style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '11px' }}>
-                                        No blocked users
+                                        No failed users
                                     </div>
                                 ) : (
                                     logs.map((user, i) => (
                                         <div
                                             key={user.client_id || i}
                                             className="blocked-user-card"
-                                            onClick={() => handleRetryBlocked(user.client_id)}
-                                            title="Click to fetch updated credentials from static CSV and retry login"
                                         >
                                             <div className="blocked-user-card-header">
                                                 <div className="blocked-user-identity">
@@ -463,16 +493,6 @@ const ActionLogWidget = () => {
                                                         ({user.broker}:{user.client_id})
                                                     </span>
                                                 </div>
-                                                <button
-                                                    className="btn-retry-blocked"
-                                                    disabled={retryingId === user.client_id}
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        handleRetryBlocked(user.client_id);
-                                                    }}
-                                                >
-                                                    {retryingId === user.client_id ? 'Retrying...' : 'Sync & Retry ⟳'}
-                                                </button>
                                             </div>
                                             {user.reason && (
                                                 <div className="blocked-user-reason">
@@ -494,15 +514,20 @@ const ActionLogWidget = () => {
                                     No recent activity
                                 </div>
                             ) : (
-                                logs.map((log, i) => (
-                                    <div key={i} className="log-entry">
-                                        <div className="log-icon">{getLogIcon(log.level, log.message)}</div>
-                                        <div className="log-details">
-                                            <div className="log-message">{log.message}</div>
-                                            <div className="log-meta">{log.timestamp}</div>
-                                        </div>
-                                    </div>
-                                ))
+                                logs
+                                    .filter(log => !log.message || !log.message.includes('🔄 Authenticating'))
+                                    .map((log, i) => {
+                                        const cleanMsg = (log.message || '').replace(/\s*\[token:\s*[^\]]*\]/g, '');
+                                        return (
+                                            <div key={i} className="log-entry">
+                                                <div className="log-icon">{getLogIcon(log.level, cleanMsg)}</div>
+                                                <div className="log-details">
+                                                    <div className="log-message">{cleanMsg}</div>
+                                                    <div className="log-meta">{log.timestamp}</div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })
                             )
                         )}
                     </div>
@@ -1137,7 +1162,7 @@ function Dashboard({ user, onLogout }) {
                     </div>
 
                     <div className={`nav-connection-pill ${wsConnected ? 'connected' : 'disconnected'}`}>
-                        <span className="live-dot" />
+                        <span className={`live-dot ${wsConnected ? 'connected' : 'disconnected'}`} />
                         <span className="pill-text">{wsConnected ? 'Connected\n(Live)' : 'Disconnected\n(Lost)'}</span>
                     </div>
                 </div>
@@ -1157,7 +1182,7 @@ function Dashboard({ user, onLogout }) {
                                 addToast("Refresh failed", "error");
                             }
                         }}
-                    >Refresh</button>
+                    >Refresh Credentials</button>
 
                     <button
                         className="icon-btn"

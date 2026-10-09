@@ -281,6 +281,21 @@ async def get_logs(request: web.Request):
     if log_type in ('blocked', 'blocklist'):
         return web.json_response(get_blocked_users())
     
+    if log_type in ('auth', 'logs'):
+        auth_entries = logger_auth.get_history()
+        system_entries = [
+            e for e in logger_system.get_history()
+            if "⏳" in e.message or "POSITION" in e.message or "Holding" in e.message or "Standby" in e.message
+        ]
+        seen_ids = set()
+        combined = []
+        for e in auth_entries + system_entries:
+            if e.id not in seen_ids:
+                seen_ids.add(e.id)
+                combined.append(e)
+        combined.sort(key=lambda x: x.id, reverse=True)
+        return web.json_response([asdict(entry) for entry in combined[:150]])
+
     loggers = {
         'auth': logger_auth,
         'audit': logger_audit,
