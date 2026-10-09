@@ -1230,52 +1230,36 @@ function Dashboard({ user, onLogout }) {
                 MAIN CONTENT
                 ══════════════════════════════════ */}
             <main className="main-content">
-                {/* PNL SUMMARY SECTION (Visible in both tabs) */}
+                {/* LIVE METRICS STRIP (Visible in both tabs) */}
                 {(() => {
                     const totalPnl = positions.reduce((s, p) => s + (p.pnl || 0), 0);
                     const inProfit = positions.filter(p => (p.pnl || 0) > 0).length;
                     const inLoss = positions.filter(p => (p.pnl || 0) < 0).length;
+                    const totalAccounts = new Set(positions.map(p => p.client_id || getDisplayUsername(p)).filter(Boolean)).size;
                     const pnlCls = totalPnl > 0 ? 'positive' : (totalPnl < 0 ? 'negative' : 'neutral');
                     return (
-                        <div className="hero-section" style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-around',
-                            backgroundColor: 'var(--bg-panel)',
-                            border: '1px solid var(--border-color)',
-                            borderRadius: 'var(--radius-md, 8px)',
-                            padding: '8px 20px',
-                            fontSize: '13.5px',
-                            fontWeight: '600',
-                            flexWrap: 'wrap',
-                            gap: '12px'
-                        }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <span style={{ color: 'var(--text-secondary)' }}>Total P&L:</span>
-                                <span className={`tabular ${pnlCls}`} style={{
-                                    fontWeight: '700',
-                                    color: totalPnl > 0 ? 'var(--success, #22c55e)' : (totalPnl < 0 ? 'var(--danger, #ef4444)' : 'inherit')
-                                }}>
+                        <div className="metrics-strip-container">
+                            <div className="metric-strip-item">
+                                <span className="metric-strip-label">Total Account:</span>
+                                <span className="metric-strip-value neutral">{totalAccounts}</span>
+                            </div>
+                            <div className="metric-strip-item">
+                                <span className="metric-strip-label">Open Positions:</span>
+                                <span className="metric-strip-value neutral">{positions.length}</span>
+                            </div>
+                            <div className="metric-strip-item">
+                                <span className="metric-strip-label">Total P&L:</span>
+                                <span className={`metric-strip-value tabular ${pnlCls}`}>
                                     {totalPnl > 0 ? '+' : ''}{totalPnl.toFixed(2)}
                                 </span>
                             </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <span style={{ color: 'var(--text-secondary)' }}>Open Positions:</span>
-                                <span className="tabular neutral" style={{ fontWeight: '700', color: 'var(--text-primary, #fff)' }}>
-                                    {positions.length}
-                                </span>
+                            <div className="metric-strip-item">
+                                <span className="metric-strip-label">In Profit:</span>
+                                <span className="metric-strip-value tabular positive">{inProfit}</span>
                             </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <span style={{ color: 'var(--text-secondary)' }}>In Profit:</span>
-                                <span className="tabular positive" style={{ fontWeight: '700', color: 'var(--success, #22c55e)' }}>
-                                    {inProfit}
-                                </span>
-                            </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <span style={{ color: 'var(--text-secondary)' }}>In Loss:</span>
-                                <span className="tabular negative" style={{ fontWeight: '700', color: 'var(--danger, #ef4444)' }}>
-                                    {inLoss}
-                                </span>
+                            <div className="metric-strip-item">
+                                <span className="metric-strip-label">In Loss:</span>
+                                <span className="metric-strip-value tabular negative">{inLoss}</span>
                             </div>
                         </div>
                     );
