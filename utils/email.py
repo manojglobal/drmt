@@ -197,7 +197,7 @@ async def send_auth_failed_email(broker: str, client_id: str, username: str, rea
         f"Authentication failed for account {broker}:{client_id} ({username}).\n\n"
         f"Reason: {reason}\n\n"
         f"Please update the credentials in your Dropbox credentials CSV or static folder.\n"
-        f"The DRMT system will automatically detect the changes within 1–2 minutes and verify the account."
+        # f"The DRMT system will automatically detect the changes within 1–2 minutes and verify the account."
     )
     email_row = f"<tr><td style='padding: 6px 12px; font-weight: bold; background: #f5f5f5; border: 1px solid #ddd;'>User Email</td><td style='padding: 6px 12px; border: 1px solid #ddd;'>{user_email}</td></tr>" if user_email else ""
     html_body = f"""
@@ -210,7 +210,7 @@ async def send_auth_failed_email(broker: str, client_id: str, username: str, rea
         {email_row}
         <tr><td style="padding: 6px 12px; font-weight: bold; background: #f5f5f5; border: 1px solid #ddd;">Failure Reason</td><td style="padding: 6px 12px; border: 1px solid #ddd; color: #d32f2f;">{reason}</td></tr>
       </table>
-      <p style="color: #555;">Please update the credentials in your Dropbox credentials CSV or static folder. The DRMT background recheck worker will automatically detect changes within 1–2 minutes and verify the account.</p>
+
     </div>
     """
     await send_error_email(subject, plain_body, html_body=html_body)
