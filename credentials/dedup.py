@@ -43,3 +43,10 @@ async def save_working_credential(cred: Credential) -> None:
         await db.commit()
         logger.info(f"Saved working credential for {cred.broker}:{cred.client_id}")
 
+        # Keep in-memory cache synchronized with the latest runtime token
+        try:
+            from credentials.dynamic_loader import update_dynamic_credential_token
+            update_dynamic_credential_token(cred.client_id, cred.token)
+        except Exception:
+            pass
+

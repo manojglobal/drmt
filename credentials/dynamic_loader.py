@@ -395,6 +395,15 @@ def get_dynamic_credentials(client_id: str) -> Optional[dict]:
     return _client_creds.get(cid_str)
 
 
+def update_dynamic_credential_token(client_id: str, token: str) -> None:
+    """Updates the runtime session token for an active credential in memory."""
+    if not client_id or not token:
+        return
+    cid_str = str(client_id).strip()
+    if cid_str in _client_creds:
+        _client_creds[cid_str]["token"] = str(token).strip()
+
+
 def get_credential_source_info() -> dict:
     """Returns the current credentials source status and configuration."""
     use_dropbox = getattr(settings, "USE_DROPBOX_CREDENTIALS", False)

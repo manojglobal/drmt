@@ -107,6 +107,8 @@ async def run_blocked_credentials_check_iteration() -> int:
                 # ── SUCCESS ──
                 unblocked_count += 1
                 remove_from_blocklist(client_id)
+                if fresh_data and cred.token:
+                    fresh_data["token"] = cred.token
                 await logger_auth.info(f"✅ [CREDENTIALS WATCHER] Verification succeeded for {broker}:{client_id} ({username}). Account unblocked!")
                 
                 # Dispatch success email confirmation

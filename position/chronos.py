@@ -139,6 +139,22 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                         # User is in Block List - skip polling to prevent broker lockout
                         return []
 
+                    # Synchronize fresh token and auth parameters if updated in dynamic cache
+                    try:
+                        from credentials.dynamic_loader import get_dynamic_credentials
+                        fresh = get_dynamic_credentials(c.client_id)
+                        if fresh:
+                            if fresh.get("token") and fresh["token"] != c.token:
+                                c.token = fresh["token"]
+                            if fresh.get("api_key") and fresh["api_key"] != c.api_key:
+                                c.api_key = fresh["api_key"]
+                            if fresh.get("password") and fresh["password"] != c.password:
+                                c.password = fresh["password"]
+                            if fresh.get("totp_secret") and fresh["totp_secret"] != c.totp_secret:
+                                c.totp_secret = fresh["totp_secret"]
+                    except Exception:
+                        pass
+
                     try:
                         res = await broker_poll(c)
                         if c.client_id in _last_poll_errors:
