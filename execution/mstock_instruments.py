@@ -102,11 +102,29 @@ async def get_mstock_trading_symbol(symbol: str, token: str, exchange: str) -> O
             tsym = await redis.hget(REDIS_KEY_TOKEN_MAP, f"{exchange}:{token}")
             if tsym:
                 return tsym
+            # Fallback for BFO/NFO segments if exchange was passed as BSE/NSE
+            if exchange.upper() == "BSE":
+                tsym = await redis.hget(REDIS_KEY_TOKEN_MAP, f"BFO:{token}")
+                if tsym:
+                    return tsym
+            elif exchange.upper() == "NSE":
+                tsym = await redis.hget(REDIS_KEY_TOKEN_MAP, f"NFO:{token}")
+                if tsym:
+                    return tsym
 
         if symbol and exchange:
             tsym = await redis.hget(REDIS_KEY_SYMBOL_MAP, f"{exchange}:{symbol}")
             if tsym:
                 return tsym
+            # Fallback for BFO/NFO segments if exchange was passed as BSE/NSE
+            if exchange.upper() == "BSE":
+                tsym = await redis.hget(REDIS_KEY_SYMBOL_MAP, f"BFO:{symbol}")
+                if tsym:
+                    return tsym
+            elif exchange.upper() == "NSE":
+                tsym = await redis.hget(REDIS_KEY_SYMBOL_MAP, f"NFO:{symbol}")
+                if tsym:
+                    return tsym
     except Exception as e:
         logger.warning(f"Error reading MStock symbol mapping from Redis: {e}")
 

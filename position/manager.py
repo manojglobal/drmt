@@ -61,16 +61,32 @@ class PositionManager:
 
             payload_str = str(raw).upper()
 
-            # Rule: If payload contains BSE or BFO, display whichever is present.
-            # If neither is present, default to BSE (preserving other explicit exchanges like NSE/NFO/MCX).
+            # Detect derivative contracts (options / futures)
+            itype = str(raw.get("instrumenttype") or raw.get("instrument_type") or "").upper().strip()
+            opttype = str(raw.get("optiontype") or raw.get("option_type") or "").upper().strip()
+            sym_upper = symbol.upper()
+            is_derivative = (
+                itype in ("OPTIDX", "FUTIDX", "OPTSTK", "FUTSTK", "DERIVATIVES")
+                or opttype in ("CE", "PE")
+                or any(x in sym_upper for x in ("-CE", "-PE", " CE", " PE", " FUT", "-FUT"))
+            )
+
+            # Rule: Map BSE/NSE derivatives to their dedicated F&O exchange segments (BFO/NFO).
+            # If explicit BSE/NSE cash stock, preserve BSE/NSE.
             if "BFO" in raw_exch_upper or "'BFO'" in payload_str or '"BFO"' in payload_str:
+                exchange = "BFO"
+            elif ("BSE" in raw_exch_upper or "'BSE'" in payload_str or '"BSE"' in payload_str or "SENSEX" in sym_upper or "BANKEX" in sym_upper) and is_derivative:
                 exchange = "BFO"
             elif "BSE" in raw_exch_upper or "'BSE'" in payload_str or '"BSE"' in payload_str:
                 exchange = "BSE"
-            elif raw_exch_upper in ("NSE", "NFO", "MCX", "CDS", "BCD"):
+            elif "NFO" in raw_exch_upper or "'NFO'" in payload_str or '"NFO"' in payload_str:
+                exchange = "NFO"
+            elif raw_exch_upper == "NSE" and is_derivative:
+                exchange = "NFO"
+            elif raw_exch_upper in ("NSE", "MCX", "CDS", "BCD"):
                 exchange = raw_exch_upper
             else:
-                exchange = "BSE"
+                exchange = "BFO" if is_derivative else "BSE"
             product = (
                 raw.get("product")
                 or raw.get("product_type")

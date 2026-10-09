@@ -57,7 +57,13 @@ async def poll_mstock(cred: Credential) -> List[Position]:
         exchange_tokens = {}
         for p in positions:
             if p.token and p.exchange:
-                exchange_tokens.setdefault(p.exchange, []).append(str(p.token))
+                exch = str(p.exchange).upper().strip()
+                # Defensive check: ensure BSE derivatives use BFO, and NSE derivatives use NFO for quote lookup
+                if exch == "BSE" and any(x in p.symbol.upper() for x in ("-CE", "-PE", " CE", " PE", "SENSEX", "BANKEX")):
+                    exch = "BFO"
+                elif exch == "NSE" and any(x in p.symbol.upper() for x in ("-CE", "-PE", " CE", " PE", "NIFTY", "BANKNIFTY", "FINNIFTY")):
+                    exch = "NFO"
+                exchange_tokens.setdefault(exch, []).append(str(p.token))
 
         if exchange_tokens:
             try:
