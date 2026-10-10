@@ -232,7 +232,6 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                         status = "Standby" if pos.quantity == 0 else "Holding"
                         pos_line = f"  ⏳ [{pos.symbol}] LTP: ₹{pos.ltp:.2f} | Avg: ₹{pos.avg_price:.2f} | Qty: {pos.quantity} | PnL: {pnl_str} ({pnl_pct}) ➔ {status}"
                         await logger_system.info(pos_line)
-                        await logger_auth.info(pos_line)
                 else:
                     for cred in credentials:
                         if not cred.client_id or not cred.client_id.strip() or cred.broker.upper() == "FAKE":
@@ -244,7 +243,6 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                         else:
                             standby_line = f"  ⏳ [{cred.broker}:{cred.client_id}{user_label}] LTP: ₹0.00 | Positions: 0 | PnL: ₹0.00 ➔ Standby"
                             await logger_system.info(standby_line)
-                            await logger_auth.info(standby_line)
                 
                 new_data = [pos.model_dump() for pos in new_data_models]
                 

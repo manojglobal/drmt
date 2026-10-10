@@ -72,18 +72,9 @@ async def run_blocked_credentials_check_iteration() -> int:
 
         new_sig = compute_credential_signature(fresh_data)
 
-        # Case A: Credentials in Dropbox / static folder MATCH previous failed data (Unchanged)
-        if stored_sig and new_sig == stored_sig:
-            logger.info(
-                f"ℹ️ [CREDENTIALS WATCHER] Credentials for {broker}:{client_id} ({username}) "
-                f"match source of truth data (unchanged). Keeping in block list with 0 broker calls."
-            )
-            continue
-
-        # Case B: Credentials in Dropbox / static folder DO NOT MATCH (Operator modified credentials)
         logger.info(
-            f"🔄 [CREDENTIALS WATCHER] Detected updated credentials for {broker}:{client_id} ({username}) "
-            f"in source of truth. Attempting single verification..."
+            f"🔄 [CREDENTIALS WATCHER] Checking credentials for {broker}:{client_id} ({username}) "
+            f"against source of truth. Attempting verification..."
         )
 
         cred = Credential(

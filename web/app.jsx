@@ -226,58 +226,62 @@ const ActionLogWidget = () => {
             return false;
         }
     });
-    const [retryingId, setRetryingId] = React.useState(null);
     const [actionFeedback, setActionFeedback] = React.useState(null);
-    const [isSyncingDropbox, setIsSyncingDropbox] = React.useState(false);
-    const [syncAttempted, setSyncAttempted] = React.useState(false);
-
-    const handleSyncDropbox = async () => {
-        if (isSyncingDropbox) return;
-        setIsSyncingDropbox(true);
-        setActionFeedback(null);
+    const [countdown, setCountdown] = React.useState(90);
+    const [showCountdown, setShowCountdown] = React.useState(false);
+    const [refreshAttempts, setRefreshAttempts] = React.useState(() => {
         try {
-            const res = await fetchWithTimeout('/api/blocked-users/sync-dropbox', {
-                method: 'POST',
-                timeout: 30000,
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${localStorage.getItem('drmt_token')}`
-                }
-            });
-            const data = await res.json();
-            setSyncAttempted(true);
-            if (data && data.success) {
-                const isAllClear = (data.unblocked && data.unblocked.length > 0) || (data.remaining_blocked && data.remaining_blocked.length === 0);
-                if (isAllClear) {
-                    setActionFeedback({
-                        type: 'success',
-                        text: data.message || 'Dropbox credentials synced successfully'
-                    });
-                }
-                if (Array.isArray(data.remaining_blocked)) {
-                    mergeAndSaveLogs(data.remaining_blocked, 'blocked');
-                } else {
-                    fetchLogs();
-                }
-            } else {
-                fetchLogs();
-            }
-        } catch (err) {
-            setSyncAttempted(true);
-            setActionFeedback({ type: 'error', text: 'Dropbox sync request timed out or failed' });
-        } finally {
-            setIsSyncingDropbox(false);
+            const saved = sessionStorage.getItem('drmt_refresh_attempts');
+            return saved ? JSON.parse(saved) : {};
+        } catch {
+            return {};
         }
-    };
+    });
+    const [retryingIds, setRetryingIds] = React.useState({});
+
+    React.useEffect(() => {
+        try {
+            sessionStorage.setItem('drmt_refresh_attempts', JSON.stringify(refreshAttempts));
+        } catch {}
+    }, [refreshAttempts]);
+
+    React.useEffect(() => {
+        const handler = () => {
+            setShowCountdown(true);
+            setCountdown(90);
+        };
+        window.addEventListener('drmt_refresh_credentials_clicked', handler);
+        return () => window.removeEventListener('drmt_refresh_credentials_clicked', handler);
+    }, []);
+
+    React.useEffect(() => {
+        if (logs.length === 0 && showCountdown) {
+            setShowCountdown(false);
+        }
+    }, [logs.length, showCountdown]);
+
+    React.useEffect(() => {
+        if (logs.length > 0) {
+            const activeIds = new Set(logs.map(u => u.client_id));
+            setRefreshAttempts(prev => {
+                let changed = false;
+                const next = { ...prev };
+                for (const cid in next) {
+                    if (!activeIds.has(cid)) {
+                        delete next[cid];
+                        changed = true;
+                    }
+                }
+                return changed ? next : prev;
+            });
+        }
+    }, [logs]);
 
     const mergeAndSaveLogs = React.useCallback((incomingList, tab) => {
         if (!Array.isArray(incomingList)) return;
 
         if (tab === 'blocked') {
             setLogs(incomingList);
-            if (incomingList.length === 0) {
-                setSyncAttempted(false);
-            }
             try {
                 localStorage.setItem(`drmt_logs_${tab}`, JSON.stringify(incomingList));
             } catch {}
@@ -342,6 +346,83 @@ const ActionLogWidget = () => {
         const interval = setInterval(fetchLogs, 3000);
         return () => clearInterval(interval);
     }, [fetchLogs]);
+
+    React.useEffect(() => {
+        if (!showCountdown || (activeTab === 'blocked' && logs.length === 0)) {
+            setCountdown(90);
+            return;
+        }
+        const timer = setInterval(() => {
+            setCountdown(prev => {
+                if (prev <= 1) {
+                    fetchLogs();
+                    return 90;
+                }
+                return prev - 1;
+            });
+        }, 1000);
+        return () => clearInterval(timer);
+    }, [fetchLogs, activeTab, logs.length, showCountdown]);
+
+    const handleRefreshAccount = async (user) => {
+        const cid = user.client_id;
+        if (!cid || retryingIds[cid]) return;
+
+        setShowCountdown(true);
+        setCountdown(90);
+
+        setRetryingIds(prev => ({ ...prev, [cid]: true }));
+        setActionFeedback(null);
+
+        const startTime = Date.now();
+        try {
+            const res = await fetchWithTimeout('/api/blocked-users/retry', {
+                method: 'POST',
+                timeout: 30000,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('drmt_token')}`
+                },
+                body: JSON.stringify({ client_id: cid })
+            });
+            const data = await res.json();
+
+            // Ensure button feels disabled with minimum feedback duration (~500ms)
+            const elapsed = Date.now() - startTime;
+            if (elapsed < 500) {
+                await new Promise(r => setTimeout(r, 500 - elapsed));
+            }
+
+            if (data && data.success) {
+                setActionFeedback({ type: 'success', text: data.message || `Re-authenticated ${cid} successfully!` });
+                setRefreshAttempts(prev => {
+                    const next = { ...prev };
+                    delete next[cid];
+                    return next;
+                });
+                fetchLogs();
+            } else {
+                setRefreshAttempts(prev => ({
+                    ...prev,
+                    [cid]: (prev[cid] || 0) + 1
+                }));
+                setActionFeedback({ type: 'error', text: data?.message || `Failed to authenticate ${cid}` });
+                fetchLogs();
+            }
+        } catch (err) {
+            const elapsed = Date.now() - startTime;
+            if (elapsed < 500) {
+                await new Promise(r => setTimeout(r, 500 - elapsed));
+            }
+            setRefreshAttempts(prev => ({
+                ...prev,
+                [cid]: (prev[cid] || 0) + 1
+            }));
+            setActionFeedback({ type: 'error', text: 'Network request timed out or failed' });
+        } finally {
+            setRetryingIds(prev => ({ ...prev, [cid]: false }));
+        }
+    };
 
     const handleTabChange = (tab) => {
         setActiveTab(tab);
@@ -439,36 +520,13 @@ const ActionLogWidget = () => {
                                         <span>Failed Account</span>
                                         <span className="blocked-count-pill">{logs.length}</span>
                                     </div>
-                                    {(!syncAttempted || logs.length === 0) ? (
-                                        <button
-                                            className="btn-sync-dropbox"
-                                            disabled={isSyncingDropbox}
-                                            onClick={handleSyncDropbox}
-                                            title="Download latest credentials and retry all failed accounts"
-                                        >
-                                            <span className={`sync-icon ${isSyncingDropbox ? 'spinning' : ''}`}>⟳</span>
-                                            {isSyncingDropbox ? 'Syncing...' : 'Sync Credentials'}
-                                        </button>
-                                    ) : null}
+                                    {showCountdown && logs.length > 0 && (
+                                        <div className="auto-check-timer" title="Automatic retry loop checks credentials every 90 seconds">
+                                            ⏱️ Auto-check in: <strong>{countdown}s</strong>
+                                        </div>
+                                    )}
                                 </div>
-                                {syncAttempted && logs.length > 0 && (
-                                    <div className="failed-credentials-alert" style={{
-                                        margin: '6px 0',
-                                        padding: '8px 10px',
-                                        background: 'rgba(239, 68, 68, 0.12)',
-                                        border: '1px solid rgba(239, 68, 68, 0.35)',
-                                        borderRadius: 'var(--radius-sm, 6px)',
-                                        color: 'var(--danger, #ef4444)',
-                                        fontSize: '11px',
-                                        fontWeight: '600',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '6px'
-                                    }}>
-                                        <span>⚠️ Your credentials are incorrect. Please check your credentials.</span>
-                                    </div>
-                                )}
-                                {actionFeedback && !syncAttempted && (
+                                {actionFeedback && (
                                     <div className={`blocked-action-feedback ${actionFeedback.type}`}>
                                         {actionFeedback.text}
                                     </div>
@@ -478,34 +536,55 @@ const ActionLogWidget = () => {
                                         No failed users
                                     </div>
                                 ) : (
-                                    logs.map((user, i) => (
-                                        <div
-                                            key={user.client_id || i}
-                                            className="blocked-user-card"
-                                        >
-                                            <div className="blocked-user-card-header">
-                                                <div className="blocked-user-identity">
-                                                    <span className="blocked-user-badge">⛔</span>
-                                                    <span className="blocked-user-name">
-                                                        {user.username || user.client_id}
-                                                    </span>
-                                                    <span className="blocked-user-tag">
-                                                        ({user.broker}:{user.client_id})
-                                                    </span>
+                                    logs.map((user, i) => {
+                                        const cid = user.client_id;
+                                        const attempts = refreshAttempts[cid] || 0;
+                                        const isRetrying = !!retryingIds[cid];
+                                        const isLockedOut = attempts >= 2;
+
+                                        return (
+                                            <div
+                                                key={cid || i}
+                                                className="blocked-user-card"
+                                            >
+                                                <div className="blocked-user-card-header">
+                                                    <div className="blocked-user-identity">
+                                                        <span className="blocked-user-broker">{user.broker || 'BROKER'}</span>
+                                                        <span className="blocked-user-id">{cid}</span>
+                                                        {user.username && user.username !== cid && (
+                                                            <span className="blocked-user-name">
+                                                                ({user.username})
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    {!isLockedOut && (
+                                                        <button
+                                                            className="btn-refresh-account"
+                                                            disabled={isRetrying}
+                                                            onClick={(e) => {
+                                                                e.currentTarget.disabled = true;
+                                                                handleRefreshAccount(user);
+                                                            }}
+                                                            title={`Refresh credentials for ${cid}`}
+                                                        >
+                                                            <span className={`sync-icon ${isRetrying ? 'spinning' : ''}`}>⟳</span>
+                                                            {isRetrying ? 'Refreshing...' : 'Refresh Credentials'}
+                                                        </button>
+                                                    )}
                                                 </div>
+
+                                                {isLockedOut ? (
+                                                    <div className="blocked-user-status-msg credentials-incorrect-notice">
+                                                        <span>Incorrect credentials : please check your credentials</span>
+                                                    </div>
+                                                ) : (
+                                                    <div className="blocked-user-status-msg">
+                                                        Failed login, your credential is invailed
+                                                    </div>
+                                                )}
                                             </div>
-                                            {user.reason && (
-                                                <div className="blocked-user-reason">
-                                                    {user.reason}
-                                                </div>
-                                            )}
-                                            {user.blocked_at && (
-                                                <div className="blocked-user-time">
-                                                    Blocked at: {user.blocked_at}
-                                                </div>
-                                            )}
-                                        </div>
-                                    ))
+                                        );
+                                    })
                                 )}
                             </div>
                         ) : (
@@ -515,7 +594,13 @@ const ActionLogWidget = () => {
                                 </div>
                             ) : (
                                 logs
-                                    .filter(log => !log.message || !log.message.includes('🔄 Authenticating'))
+                                    .filter(log => {
+                                        if (!log || !log.message) return true;
+                                        const m = log.message;
+                                        if (m.includes('🔄 Authenticating')) return false;
+                                        if (m.includes('POSITION') || m.includes('LTP:') || m.includes('Standby') || m.includes('Holding')) return false;
+                                        return true;
+                                    })
                                     .map((log, i) => {
                                         const cleanMsg = (log.message || '').replace(/\s*\[token:\s*[^\]]*\]/g, '');
                                         return (
@@ -645,6 +730,7 @@ function Dashboard({ user, onLogout }) {
     const [isFetchingPositions, setIsFetchingPositions] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
     const [isLoggingOut, setIsLoggingOut] = useState(false);
+    const [isRefreshingCreds, setIsRefreshingCreds] = useState(false);
 
     /* ── Theme ── */
     const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
@@ -1173,16 +1259,22 @@ function Dashboard({ user, onLogout }) {
                     <button
                         className="btn-outline"
                         title="Refresh Credentials"
-                        onClick={async () => {
+                        disabled={isRefreshingCreds}
+                        onClick={async (e) => {
+                            e.currentTarget.disabled = true;
+                            setIsRefreshingCreds(true);
+                            window.dispatchEvent(new CustomEvent('drmt_refresh_credentials_clicked'));
                             try {
                                 const res = await fetchWithTimeout("/api/credentials/refresh", { method: "POST" });
                                 const data = await res.json();
                                 addToast(data.message || "Credentials Refreshed", "success");
                             } catch (e) {
                                 addToast("Refresh failed", "error");
+                            } finally {
+                                setIsRefreshingCreds(false);
                             }
                         }}
-                    >Refresh Credentials</button>
+                    >{isRefreshingCreds ? "Refreshing..." : "Refresh Credentials"}</button>
 
                     <button
                         className="icon-btn"

@@ -283,18 +283,11 @@ async def get_logs(request: web.Request):
     
     if log_type in ('auth', 'logs'):
         auth_entries = logger_auth.get_history()
-        system_entries = [
-            e for e in logger_system.get_history()
-            if "⏳" in e.message or "POSITION" in e.message or "Holding" in e.message or "Standby" in e.message
+        filtered = [
+            e for e in auth_entries
+            if not any(k in e.message for k in ("⏳", "POSITION", "Holding", "Standby", "LTP:"))
         ]
-        seen_ids = set()
-        combined = []
-        for e in auth_entries + system_entries:
-            if e.id not in seen_ids:
-                seen_ids.add(e.id)
-                combined.append(e)
-        combined.sort(key=lambda x: x.id, reverse=True)
-        return web.json_response([asdict(entry) for entry in combined[:150]])
+        return web.json_response([asdict(entry) for entry in filtered[:100]])
 
     loggers = {
         'auth': logger_auth,
