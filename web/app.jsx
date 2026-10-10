@@ -366,11 +366,13 @@ const ActionLogWidget = () => {
 
     const handleRefreshAccount = async (user) => {
         const cid = user.client_id;
-        if (!cid || retryingIds[cid]) return;
+        if (!cid || retryingIds[cid] || (refreshAttempts[cid] || 0) >= 1) return;
 
         setShowCountdown(true);
         setCountdown(90);
 
+        // Immediately mark as attempted so button hides instantly on click
+        setRefreshAttempts(prev => ({ ...prev, [cid]: 1 }));
         setRetryingIds(prev => ({ ...prev, [cid]: true }));
         setActionFeedback(null);
 
@@ -387,14 +389,13 @@ const ActionLogWidget = () => {
             });
             const data = await res.json();
 
-            // Ensure button feels disabled with minimum feedback duration (~500ms)
+            // Ensure smooth visual transition with minimum duration (~500ms)
             const elapsed = Date.now() - startTime;
             if (elapsed < 500) {
                 await new Promise(r => setTimeout(r, 500 - elapsed));
             }
 
             if (data && data.success) {
-                setActionFeedback({ type: 'success', text: data.message || `Re-authenticated ${cid} successfully!` });
                 setRefreshAttempts(prev => {
                     const next = { ...prev };
                     delete next[cid];
@@ -402,23 +403,10 @@ const ActionLogWidget = () => {
                 });
                 fetchLogs();
             } else {
-                setRefreshAttempts(prev => ({
-                    ...prev,
-                    [cid]: (prev[cid] || 0) + 1
-                }));
-                setActionFeedback({ type: 'error', text: data?.message || `Failed to authenticate ${cid}` });
                 fetchLogs();
             }
         } catch (err) {
-            const elapsed = Date.now() - startTime;
-            if (elapsed < 500) {
-                await new Promise(r => setTimeout(r, 500 - elapsed));
-            }
-            setRefreshAttempts(prev => ({
-                ...prev,
-                [cid]: (prev[cid] || 0) + 1
-            }));
-            setActionFeedback({ type: 'error', text: 'Network request timed out or failed' });
+            // Background retry loop continues
         } finally {
             setRetryingIds(prev => ({ ...prev, [cid]: false }));
         }
@@ -526,11 +514,6 @@ const ActionLogWidget = () => {
                                         </div>
                                     )}
                                 </div>
-                                {actionFeedback && (
-                                    <div className={`blocked-action-feedback ${actionFeedback.type}`}>
-                                        {actionFeedback.text}
-                                    </div>
-                                )}
                                 {logs.length === 0 ? (
                                     <div style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '11px' }}>
                                         No failed users
@@ -540,7 +523,7 @@ const ActionLogWidget = () => {
                                         const cid = user.client_id;
                                         const attempts = refreshAttempts[cid] || 0;
                                         const isRetrying = !!retryingIds[cid];
-                                        const isLockedOut = attempts >= 2;
+                                        const hasAttempted = attempts >= 1 || isRetrying;
 
                                         return (
                                             <div
@@ -557,7 +540,7 @@ const ActionLogWidget = () => {
                                                             </span>
                                                         )}
                                                     </div>
-                                                    {!isLockedOut && (
+                                                    {!hasAttempted ? (
                                                         <button
                                                             className="btn-refresh-account"
                                                             disabled={isRetrying}
@@ -568,20 +551,22 @@ const ActionLogWidget = () => {
                                                             title={`Refresh credentials for ${cid}`}
                                                         >
                                                             <span className={`sync-icon ${isRetrying ? 'spinning' : ''}`}>⟳</span>
-                                                            {isRetrying ? 'Refreshing...' : 'Refresh Credentials'}
+                                                            Refresh Credentials
                                                         </button>
+                                                    ) : (
+                                                        <div
+                                                            className="btn-refresh-account countdown-mode"
+                                                            title="Auto-checking credentials every 90 seconds"
+                                                        >
+                                                            <span className="countdown-clock-icon">⏱️</span>
+                                                            <span className="countdown-clock-text">{countdown}s</span>
+                                                        </div>
                                                     )}
                                                 </div>
 
-                                                {isLockedOut ? (
-                                                    <div className="blocked-user-status-msg credentials-incorrect-notice">
-                                                        <span>Incorrect credentials : please check your credentials</span>
-                                                    </div>
-                                                ) : (
-                                                    <div className="blocked-user-status-msg">
-                                                        Failed login, your credential is invailed
-                                                    </div>
-                                                )}
+                                                <div className="blocked-user-status-msg">
+                                                    Failed login: Please check your credentials.
+                                                </div>
                                             </div>
                                         );
                                     })
