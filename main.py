@@ -172,10 +172,16 @@ async def on_startup(app: web.Application):
     asyncio.create_task(start_log_cleanup_loop(retention_days=30), name="log_retention_cleanup")
     
     # 10. Start Daily Morning Credential Refresh Scheduler (09:10 AM IST)
-    from credentials.scheduler import start_daily_credential_scheduler
+    from credentials.scheduler import start_daily_credential_scheduler, start_market_close_report_scheduler
     app["daily_scheduler_task"] = asyncio.create_task(start_daily_credential_scheduler(), name="daily_credential_scheduler")
     
-    # 11. Start Blocked Credentials Recheck Worker (1-2 minutes)
+    # 11. Start Market-Close Email Report Scheduler (03:30 PM IST)
+    app["market_close_scheduler_task"] = asyncio.create_task(
+        start_market_close_report_scheduler(),
+        name="market_close_report_scheduler"
+    )
+    
+    # 12. Start Blocked Credentials Recheck Worker (1-2 minutes during market hours)
     from credentials.watcher import start_blocked_credentials_watcher
     app["blocked_watcher_task"] = asyncio.create_task(
         start_blocked_credentials_watcher(interval_seconds=settings.BLOCKED_RECHECK_INTERVAL_SEC),
@@ -197,8 +203,12 @@ async def on_cleanup(app: web.Application):
     # 3. Stop Daily Scheduler Task
     if "daily_scheduler_task" in app and not app["daily_scheduler_task"].done():
         app["daily_scheduler_task"].cancel()
+
+    # 4. Stop Market Close Scheduler Task
+    if "market_close_scheduler_task" in app and not app["market_close_scheduler_task"].done():
+        app["market_close_scheduler_task"].cancel()
         
-    # 4. Stop Blocked Credentials Watcher Task
+    # 5. Stop Blocked Credentials Watcher Task
     if "blocked_watcher_task" in app and not app["blocked_watcher_task"].done():
         app["blocked_watcher_task"].cancel()
     

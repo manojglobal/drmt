@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     DROPBOX_CREDENTIALS_URL: str = ""
     ALICE_BLUE_FLOW: str = "WEB"  # "WEB" (OMK Web Execution) or "SDK" (Open-API SDK Flow)
     BLOCKED_RECHECK_INTERVAL_SEC: int = 90  # 1.5 minutes interval for blocked credentials recovery
+    MARKET_OPEN_HOUR: int = 9
+    MARKET_OPEN_MINUTE: int = 15
+    MARKET_CLOSE_HOUR: int = 15
+    MARKET_CLOSE_MINUTE: int = 30
     
     model_config = SettingsConfigDict(env_file=_env_path, env_file_encoding="utf-8", extra="ignore")
 

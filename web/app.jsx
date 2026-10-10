@@ -237,13 +237,28 @@ const ActionLogWidget = () => {
             return {};
         }
     });
+    const [tokenRefreshAttempts, setTokenRefreshAttempts] = React.useState(() => {
+        try {
+            const saved = sessionStorage.getItem('drmt_token_refresh_attempts');
+            return saved ? JSON.parse(saved) : {};
+        } catch {
+            return {};
+        }
+    });
     const [retryingIds, setRetryingIds] = React.useState({});
+    const [retryingTokenIds, setRetryingTokenIds] = React.useState({});
 
     React.useEffect(() => {
         try {
             sessionStorage.setItem('drmt_refresh_attempts', JSON.stringify(refreshAttempts));
         } catch {}
     }, [refreshAttempts]);
+
+    React.useEffect(() => {
+        try {
+            sessionStorage.setItem('drmt_token_refresh_attempts', JSON.stringify(tokenRefreshAttempts));
+        } catch {}
+    }, [tokenRefreshAttempts]);
 
     React.useEffect(() => {
         const handler = () => {
@@ -264,6 +279,17 @@ const ActionLogWidget = () => {
         if (logs.length > 0) {
             const activeIds = new Set(logs.map(u => u.client_id));
             setRefreshAttempts(prev => {
+                let changed = false;
+                const next = { ...prev };
+                for (const cid in next) {
+                    if (!activeIds.has(cid)) {
+                        delete next[cid];
+                        changed = true;
+                    }
+                }
+                return changed ? next : prev;
+            });
+            setTokenRefreshAttempts(prev => {
                 let changed = false;
                 const next = { ...prev };
                 for (const cid in next) {
@@ -412,6 +438,57 @@ const ActionLogWidget = () => {
         }
     };
 
+    const handleRefreshToken = async (user) => {
+        const cid = user.client_id;
+        if (!cid || retryingTokenIds[cid] || (tokenRefreshAttempts[cid] || 0) >= 1) return;
+
+        setShowCountdown(true);
+        setCountdown(90);
+
+        setTokenRefreshAttempts(prev => ({ ...prev, [cid]: 1 }));
+        setRetryingTokenIds(prev => ({ ...prev, [cid]: true }));
+        setActionFeedback(null);
+
+        const startTime = Date.now();
+        try {
+            const res = await fetchWithTimeout('/api/blocked-users/refresh-token', {
+                method: 'POST',
+                timeout: 30000,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('drmt_token')}`
+                },
+                body: JSON.stringify({ client_id: cid })
+            });
+            const data = await res.json();
+
+            const elapsed = Date.now() - startTime;
+            if (elapsed < 500) {
+                await new Promise(r => setTimeout(r, 500 - elapsed));
+            }
+
+            if (data && data.success) {
+                setTokenRefreshAttempts(prev => {
+                    const next = { ...prev };
+                    delete next[cid];
+                    return next;
+                });
+                setRefreshAttempts(prev => {
+                    const next = { ...prev };
+                    delete next[cid];
+                    return next;
+                });
+                fetchLogs();
+            } else {
+                fetchLogs();
+            }
+        } catch (err) {
+            // Background retry loop continues
+        } finally {
+            setRetryingTokenIds(prev => ({ ...prev, [cid]: false }));
+        }
+    };
+
     const handleTabChange = (tab) => {
         setActiveTab(tab);
         setActionFeedback(null);
@@ -522,8 +599,11 @@ const ActionLogWidget = () => {
                                     logs.map((user, i) => {
                                         const cid = user.client_id;
                                         const attempts = refreshAttempts[cid] || 0;
+                                        const tokenAttempts = tokenRefreshAttempts[cid] || 0;
                                         const isRetrying = !!retryingIds[cid];
+                                        const isRetryingToken = !!retryingTokenIds[cid];
                                         const hasAttempted = attempts >= 1 || isRetrying;
+                                        const hasTokenAttempted = tokenAttempts >= 1 || isRetryingToken;
 
                                         return (
                                             <div
@@ -534,34 +614,54 @@ const ActionLogWidget = () => {
                                                     <div className="blocked-user-identity">
                                                         <span className="blocked-user-broker">{user.broker || 'BROKER'}</span>
                                                         <span className="blocked-user-id">{cid}</span>
-                                                        {user.username && user.username !== cid && (
-                                                            <span className="blocked-user-name">
-                                                                ({user.username})
-                                                            </span>
+                                                    </div>
+                                                    <div className="blocked-user-actions">
+                                                        {!hasAttempted ? (
+                                                            <button
+                                                                className="btn-refresh-account"
+                                                                disabled={isRetrying || isRetryingToken}
+                                                                onClick={(e) => {
+                                                                    e.currentTarget.disabled = true;
+                                                                    handleRefreshAccount(user);
+                                                                }}
+                                                                title={`Refresh credentials for ${cid}`}
+                                                            >
+                                                                <span className={`sync-icon ${isRetrying ? 'spinning' : ''}`}>⟳</span>
+                                                                Refresh Credentials
+                                                            </button>
+                                                        ) : (
+                                                            <div
+                                                                className="btn-refresh-account countdown-mode"
+                                                                title="Auto-checking credentials every 90 seconds"
+                                                            >
+                                                                <span className="countdown-clock-icon">⏱️</span>
+                                                                <span className="countdown-clock-text">{countdown}s</span>
+                                                            </div>
+                                                        )}
+
+                                                        {!hasTokenAttempted ? (
+                                                            <button
+                                                                className="btn-refresh-token"
+                                                                disabled={isRetryingToken || isRetrying}
+                                                                onClick={(e) => {
+                                                                    e.currentTarget.disabled = true;
+                                                                    handleRefreshToken(user);
+                                                                }}
+                                                                title={`Refresh access token using local database credentials for ${cid}`}
+                                                            >
+                                                                <span className={`sync-icon ${isRetryingToken ? 'spinning' : ''}`}>{isRetryingToken ? '⟳' : '🔑'}</span>
+                                                                Refresh Token
+                                                            </button>
+                                                        ) : (
+                                                            <div
+                                                                className="btn-refresh-token countdown-mode"
+                                                                title="Auto-checking credentials every 90 seconds"
+                                                            >
+                                                                <span className="countdown-clock-icon">⏱️</span>
+                                                                <span className="countdown-clock-text">{countdown}s</span>
+                                                            </div>
                                                         )}
                                                     </div>
-                                                    {!hasAttempted ? (
-                                                        <button
-                                                            className="btn-refresh-account"
-                                                            disabled={isRetrying}
-                                                            onClick={(e) => {
-                                                                e.currentTarget.disabled = true;
-                                                                handleRefreshAccount(user);
-                                                            }}
-                                                            title={`Refresh credentials for ${cid}`}
-                                                        >
-                                                            <span className={`sync-icon ${isRetrying ? 'spinning' : ''}`}>⟳</span>
-                                                            Refresh Credentials
-                                                        </button>
-                                                    ) : (
-                                                        <div
-                                                            className="btn-refresh-account countdown-mode"
-                                                            title="Auto-checking credentials every 90 seconds"
-                                                        >
-                                                            <span className="countdown-clock-icon">⏱️</span>
-                                                            <span className="countdown-clock-text">{countdown}s</span>
-                                                        </div>
-                                                    )}
                                                 </div>
 
                                                 <div className="blocked-user-status-msg">

@@ -10,9 +10,11 @@ Compares credentials of blocked accounts:
 """
 
 import asyncio
+from datetime import datetime, timezone, timedelta
 import logging
 from typing import Optional
 
+from settings import settings
 from models.schemas import Credential
 from position.blocklist import (
     get_blocked_users,
@@ -32,6 +34,72 @@ from utils.email import send_auth_failed_email, send_credentials_restored_email
 from logger.logger import logger_auth, logger_system
 
 logger = logging.getLogger("DRMT.CredentialsWatcher")
+
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def is_market_session_active(dt: Optional[datetime] = None) -> bool:
+    """
+    Returns True if the current or given time falls within the active market session:
+    Monday to Friday, between 09:15 AM IST and 03:30 PM (15:30) IST.
+    """
+    if dt is None:
+        dt = datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        dt_ist = dt.replace(tzinfo=_IST)
+    else:
+        dt_ist = dt.astimezone(_IST)
+
+    # Monday is 0, Sunday is 6. Weekends (Saturday=5, Sunday=6) are non-market days.
+    if dt_ist.weekday() >= 5:
+        return False
+
+    open_h = getattr(settings, "MARKET_OPEN_HOUR", 9)
+    open_m = getattr(settings, "MARKET_OPEN_MINUTE", 15)
+    close_h = getattr(settings, "MARKET_CLOSE_HOUR", 15)
+    close_m = getattr(settings, "MARKET_CLOSE_MINUTE", 30)
+
+    market_open = dt_ist.replace(hour=open_h, minute=open_m, second=0, microsecond=0)
+    market_close = dt_ist.replace(hour=close_h, minute=close_m, second=0, microsecond=0)
+
+    return market_open <= dt_ist < market_close
+
+
+def get_seconds_until_next_market_session(dt: Optional[datetime] = None) -> float:
+    """
+    Calculates seconds until the next market session opens (09:15 AM IST on the next trading weekday).
+    If currently before 09:15 AM IST on a weekday, returns seconds until 09:15 AM IST today.
+    If currently during market session, returns 0.0.
+    If currently after 03:30 PM (15:30) IST on a weekday or on a weekend, returns seconds until 09:15 AM IST next weekday.
+    """
+    if dt is None:
+        dt = datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        dt_ist = dt.replace(tzinfo=_IST)
+    else:
+        dt_ist = dt.astimezone(_IST)
+
+    open_h = getattr(settings, "MARKET_OPEN_HOUR", 9)
+    open_m = getattr(settings, "MARKET_OPEN_MINUTE", 15)
+    close_h = getattr(settings, "MARKET_CLOSE_HOUR", 15)
+    close_m = getattr(settings, "MARKET_CLOSE_MINUTE", 30)
+
+    today_open = dt_ist.replace(hour=open_h, minute=open_m, second=0, microsecond=0)
+    today_close = dt_ist.replace(hour=close_h, minute=close_m, second=0, microsecond=0)
+
+    if dt_ist.weekday() < 5 and today_open <= dt_ist < today_close:
+        return 0.0
+
+    if dt_ist.weekday() < 5 and dt_ist < today_open:
+        target = today_open
+    else:
+        target = today_open + timedelta(days=1)
+
+    while target.weekday() >= 5:
+        target += timedelta(days=1)
+
+    delta = (target - dt_ist).total_seconds()
+    return max(1.0, delta)
 
 
 async def run_blocked_credentials_check_iteration() -> int:
@@ -150,15 +218,33 @@ async def run_blocked_credentials_check_iteration() -> int:
 
 async def start_blocked_credentials_watcher(interval_seconds: int = 90) -> None:
     """
-    Background worker loop that automatically checks blocked accounts against the source of truth every 1–2 minutes.
+    Background worker loop that automatically checks blocked accounts against the source of truth every 90 seconds during market hours.
+    Automatically pauses after market hours and on weekends, resuming when the next market session opens (09:15 AM IST).
     """
     await logger_system.info(f"🚀 [CREDENTIALS WATCHER] Background recovery worker started (Interval: {interval_seconds}s).")
     while True:
         try:
+            if not is_market_session_active():
+                wait_sec = get_seconds_until_next_market_session()
+                now_ist = datetime.now(timezone.utc).astimezone(_IST)
+                resume_ist = now_ist + timedelta(seconds=wait_sec)
+                hours = int(wait_sec // 3600)
+                minutes = int((wait_sec % 3600) // 60)
+                await logger_system.info(
+                    f"⏸️ [CREDENTIALS WATCHER] Market session is closed. Pausing 90s checks for {hours}h {minutes}m. "
+                    f"Resuming at {resume_ist.strftime('%Y-%m-%d %H:%M:%S IST')}."
+                )
+                await asyncio.sleep(wait_sec)
+                await logger_system.info("▶️ [CREDENTIALS WATCHER] Market session opened! Resuming 90s checks.")
+                continue
+
             await asyncio.sleep(interval_seconds)
+            if not is_market_session_active():
+                continue
             await run_blocked_credentials_check_iteration()
         except asyncio.CancelledError:
             logger.info("🛑 [CREDENTIALS WATCHER] Recovery worker stopped.")
             break
         except Exception as e:
             logger.error(f"❌ [CREDENTIALS WATCHER] Unexpected error in watcher loop: {e}", exc_info=True)
+            await asyncio.sleep(30.0)

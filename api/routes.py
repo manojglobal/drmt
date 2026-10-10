@@ -1,3 +1,4 @@
+import asyncio
 import csv
 import json
 import logging
@@ -10,7 +11,7 @@ from models.schemas import Credential, Position
 from position.chronos import refresh_token_with_backoff
 from execution.engine import mass_exit
 from utils.user_mapping import get_client_username, get_client_ids_for_user, get_configured_client_ids
-from position.blocklist import get_blocked_users, get_blocked_user
+from position.blocklist import get_blocked_users, get_blocked_user, remove_from_blocklist
 from logger.logger import (
     logger_auth, logger_exit, logger_system, logger_monitor,
     logger_health, logger_audit, logger_api
@@ -584,4 +585,127 @@ async def sync_dropbox_blocked_users(request: web.Request):
         "still_blocked": still_blocked_names,
         "remaining_blocked": get_blocked_users()
     })
+
+
+@routes.post('/api/blocked-users/refresh-token')
+async def refresh_blocked_user_token(request: web.Request):
+    """
+    Refreshes the broker access token using locally stored database credentials.
+    Executes broker login routine and persists the resulting fresh token back to SQLite credentials table.
+    """
+    user = await require_auth(request)
+
+    client_id = None
+    try:
+        data = await request.json()
+        client_id = data.get("client_id")
+    except Exception:
+        pass
+    if not client_id:
+        client_id = request.query.get("client_id")
+
+    if not client_id:
+        return web.json_response({"success": False, "message": "Missing 'client_id' parameter."}, status=400)
+
+    client_id = str(client_id).strip()
+    username = get_client_username(client_id)
+
+    # 1. Fetch credentials directly from the local SQLite database
+    async with get_db() as db:
+        db.row_factory = None
+        async with db.execute(
+            """
+            SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at 
+            FROM credentials 
+            WHERE client_id = ?
+            """,
+            (client_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+
+    if not row:
+        return web.json_response({
+            "success": False,
+            "message": f"Credential record for {client_id} ({username}) not found in database.",
+            "blocked": True
+        }, status=404)
+
+    cred = Credential(
+        id=row[0], broker=row[1], client_id=row[2], api_key=row[3], api_secret=row[4],
+        totp_secret=row[5], password=row[6], static_ip=row[7],
+        fingerprint=row[8], status=row[9], token=row[10], token_updated_at=row[11]
+    )
+
+    logger.info(f"🔑 [TOKEN REFRESH] Attempting broker token refresh for {cred.broker}:{cred.client_id} ({username}) using local DB credentials")
+
+    # 2. Attempt login via existing local broker implementation
+    success = await refresh_token_with_backoff(cred)
+
+    if success:
+        # 3. Update the refreshed token in the DRMT SQLite database
+        async with get_db() as db:
+            await db.execute(
+                """
+                UPDATE credentials 
+                SET token = ?, token_updated_at = datetime('now', 'localtime'), status = 'working' 
+                WHERE client_id = ?
+                """,
+                (cred.token, client_id)
+            )
+            await db.commit()
+
+        # Also update in-memory dynamic credentials if present
+        from credentials.dynamic_loader import get_dynamic_credentials, get_client_email
+        dyn = get_dynamic_credentials(client_id)
+        if dyn and cred.token:
+            dyn["token"] = cred.token
+
+        remove_from_blocklist(client_id)
+
+        # Send restored email
+        from utils.email import send_credentials_restored_email
+        asyncio.create_task(
+            send_credentials_restored_email(
+                broker=cred.broker,
+                client_id=client_id,
+                username=username,
+                user_email=get_client_email(client_id)
+            ),
+            name=f"email_restored_{client_id}"
+        )
+
+        await logger_auth.info(f"✅ [TOKEN REFRESH] Token refreshed and saved to database for {cred.broker}:{client_id} ({username})")
+        return web.json_response({
+            "success": True,
+            "message": f"Successfully refreshed token for {username} ({client_id}). Token saved to database and live polling resumed.",
+            "blocked": False
+        })
+    else:
+        blocked_info = get_blocked_user(client_id)
+        reason = blocked_info.get("reason", "Token refresh failed") if blocked_info else "Token refresh failed"
+        await logger_auth.warn(f"❌ [TOKEN REFRESH] Token refresh failed for {cred.broker}:{client_id} ({username}): {reason}")
+        return web.json_response({
+            "success": False,
+            "message": f"Token refresh failed for {username} ({client_id}): {reason}",
+            "blocked": True,
+            "error": reason
+        })
+
+
+@routes.post('/api/reports/market-close')
+async def trigger_market_close_report(request: web.Request):
+    """Triggers the Market-Close email report on demand."""
+    await require_auth(request)
+    from credentials.scheduler import execute_market_close_email_report
+    try:
+        report_data = await execute_market_close_email_report()
+        return web.json_response({
+            "success": True,
+            "message": f"Market-close report sent successfully ({report_data.get('successful_count', 0)} successful, {report_data.get('failed_count', 0)} failed).",
+            "data": report_data
+        })
+    except Exception as e:
+        logger.error(f"❌ Error triggering market-close email report: {e}", exc_info=True)
+        return web.json_response({"success": False, "message": f"Failed to send market-close report: {e}"}, status=500)
+
 

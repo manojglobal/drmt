@@ -231,3 +231,252 @@ async def start_daily_credential_scheduler():
         except Exception as e:
             logger.error(f"❌ [SCHEDULER] Error in daily scheduler loop: {e}")
             await asyncio.sleep(60.0)  # Retry check after 1 minute if error occurs
+
+
+def _get_market_close_time() -> tuple[int, int]:
+    h = getattr(settings, "MARKET_CLOSE_HOUR", 15)
+    m = getattr(settings, "MARKET_CLOSE_MINUTE", 30)
+    return int(h), int(m)
+
+
+def get_seconds_until_next_market_close() -> float:
+    """Calculates seconds until the next 03:30 PM IST market close on a trading weekday."""
+    now_utc = datetime.now(timezone.utc)
+    now_ist = now_utc.astimezone(_IST)
+    th, tm = _get_market_close_time()
+
+    target_ist = now_ist.replace(hour=th, minute=tm, second=0, microsecond=0)
+    if now_ist >= target_ist:
+        target_ist += timedelta(days=1)
+
+    # Skip weekends (Saturday=5, Sunday=6)
+    while target_ist.weekday() >= 5:
+        target_ist += timedelta(days=1)
+
+    delta_seconds = (target_ist - now_ist).total_seconds()
+    return max(1.0, delta_seconds)
+
+
+def build_market_close_report_html(successful_accounts: list[dict], failed_accounts: list[dict]) -> tuple[str, str]:
+    """Builds distinct tabular report for successful and failed accounts at market close."""
+    import html
+    total_acc = len(successful_accounts) + len(failed_accounts)
+    now_ist_str = datetime.now(timezone.utc).astimezone(_IST).strftime("%Y-%m-%d %I:%M %p IST")
+
+    plain_parts = [
+        f"Market-Close Authentication & Credential Report ({now_ist_str})",
+        f"Total Configured: {total_acc} | Successful: {len(successful_accounts)} | Failed: {len(failed_accounts)}",
+        ""
+    ]
+
+    html_parts = [
+        f"""<div style="margin-bottom: 16px; border-bottom: 2px solid #e5e7eb; padding-bottom: 12px;">
+  <h2 style="margin: 0 0 6px 0; color: #111827; font-size: 18px; font-weight: 700;">📊 Market-Close Authentication & Credential Report</h2>
+  <div style="font-size: 13px; color: #6b7280;">Session closed at {now_ist_str}. Summary across all configured accounts:</div>
+  <div style="margin-top: 10px;">
+    <span style="display: inline-block; padding: 4px 10px; background: #f3f4f6; border-radius: 4px; font-size: 12px; font-weight: 600; color: #374151; margin-right: 8px;">Total: {total_acc}</span>
+    <span style="display: inline-block; padding: 4px 10px; background: #ecfdf5; border-radius: 4px; font-size: 12px; font-weight: 600; color: #059669; margin-right: 8px;">Successful: {len(successful_accounts)}</span>
+    <span style="display: inline-block; padding: 4px 10px; background: #fef2f2; border-radius: 4px; font-size: 12px; font-weight: 600; color: #dc2626;">Failed: {len(failed_accounts)}</span>
+  </div>
+</div>"""
+    ]
+
+    # ── Table 1: Successful Accounts ──
+    plain_parts.append("\n=== Successful Accounts ===")
+    plain_parts.append(f"{'Broker':<12} | {'Client ID':<12} | {'User Name':<22} | {'User Email':<28} | Status")
+    plain_parts.append("-" * 90)
+
+    html_parts.append(f"""<div style="margin-top: 20px; margin-bottom: 8px; font-size: 15px; font-weight: bold; color: #065f46;">
+  ✅ Successful Authentications ({len(successful_accounts)})
+</div>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border: 1px solid #d1d5db; font-size: 12.5px; margin-bottom: 20px;">
+  <thead>
+    <tr style="background-color: #f9fafb; text-align: left; color: #374151;">
+      <th style="padding: 8px; border: 1px solid #d1d5db;">Broker</th>
+      <th style="padding: 8px; border: 1px solid #d1d5db;">Client ID</th>
+      <th style="padding: 8px; border: 1px solid #d1d5db;">User Name</th>
+      <th style="padding: 8px; border: 1px solid #d1d5db;">User Email</th>
+      <th style="padding: 8px; border: 1px solid #d1d5db; text-align: center;">Status</th>
+      <th style="padding: 8px; border: 1px solid #d1d5db;">Last Updated</th>
+    </tr>
+  </thead>
+  <tbody>""")
+
+    if not successful_accounts:
+        html_parts.append('<tr><td colspan="6" style="padding: 12px; text-align: center; color: #6b7280;">No active successful accounts.</td></tr>')
+        plain_parts.append("No active successful accounts.")
+    else:
+        for acc in successful_accounts:
+            b = html.escape(str(acc.get("broker", "")))
+            cid = html.escape(str(acc.get("client_id", "")))
+            un = html.escape(str(acc.get("username", "")))
+            em = html.escape(str(acc.get("user_email", "")))
+            up = html.escape(str(acc.get("token_updated_at", "") or "Session Valid"))
+            plain_parts.append(f"{acc.get('broker',''):<12} | {acc.get('client_id',''):<12} | {acc.get('username',''):<22} | {acc.get('user_email',''):<28} | Active")
+            html_parts.append(f"""<tr>
+      <td style="padding: 7px 8px; border: 1px solid #d1d5db; font-weight: 600;">{b}</td>
+      <td style="padding: 7px 8px; border: 1px solid #d1d5db; font-family: monospace;">{cid}</td>
+      <td style="padding: 7px 8px; border: 1px solid #d1d5db;">{un}</td>
+      <td style="padding: 7px 8px; border: 1px solid #d1d5db;">{em}</td>
+      <td style="padding: 7px 8px; border: 1px solid #d1d5db; text-align: center; color: #059669; font-weight: 600;">✅ Active</td>
+      <td style="padding: 7px 8px; border: 1px solid #d1d5db; color: #6b7280; font-size: 11.5px;">{up}</td>
+    </tr>""")
+    html_parts.append("  </tbody>\n</table>")
+
+    # ── Table 2: Failed Accounts ──
+    plain_parts.append("\n=== Failed / Blocked Accounts ===")
+    plain_parts.append(f"{'Broker':<12} | {'Client ID':<12} | {'User Name':<22} | {'User Email':<28} | Reason")
+    plain_parts.append("-" * 90)
+
+    html_parts.append(f"""<div style="margin-top: 24px; margin-bottom: 8px; font-size: 15px; font-weight: bold; color: #991b1b;">
+  ❌ Failed / Blocked Authentications ({len(failed_accounts)})
+</div>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border: 1px solid #d1d5db; font-size: 12.5px; margin-bottom: 20px;">
+  <thead>
+    <tr style="background-color: #fef2f2; text-align: left; color: #991b1b;">
+      <th style="padding: 8px; border: 1px solid #d1d5db;">Broker</th>
+      <th style="padding: 8px; border: 1px solid #d1d5db;">Client ID</th>
+      <th style="padding: 8px; border: 1px solid #d1d5db;">User Name</th>
+      <th style="padding: 8px; border: 1px solid #d1d5db;">User Email</th>
+      <th style="padding: 8px; border: 1px solid #d1d5db; text-align: center;">Status</th>
+      <th style="padding: 8px; border: 1px solid #d1d5db;">Failure Reason</th>
+    </tr>
+  </thead>
+  <tbody>""")
+
+    if not failed_accounts:
+        html_parts.append('<tr><td colspan="6" style="padding: 12px; text-align: center; color: #059669; font-weight: 600;">🎉 All accounts authenticated successfully. Zero failures.</td></tr>')
+        plain_parts.append("All accounts authenticated successfully. Zero failures.")
+    else:
+        for acc in failed_accounts:
+            b = html.escape(str(acc.get("broker", "")))
+            cid = html.escape(str(acc.get("client_id", "")))
+            un = html.escape(str(acc.get("username", "")))
+            em = html.escape(str(acc.get("user_email", "")))
+            re = html.escape(str(acc.get("reason", "Authentication failed")))
+            plain_parts.append(f"{acc.get('broker',''):<12} | {acc.get('client_id',''):<12} | {acc.get('username',''):<22} | {acc.get('user_email',''):<28} | {acc.get('reason','')}")
+            html_parts.append(f"""<tr>
+      <td style="padding: 7px 8px; border: 1px solid #d1d5db; font-weight: 600;">{b}</td>
+      <td style="padding: 7px 8px; border: 1px solid #d1d5db; font-family: monospace;">{cid}</td>
+      <td style="padding: 7px 8px; border: 1px solid #d1d5db;">{un}</td>
+      <td style="padding: 7px 8px; border: 1px solid #d1d5db;">{em}</td>
+      <td style="padding: 7px 8px; border: 1px solid #d1d5db; text-align: center; color: #dc2626; font-weight: 600;">❌ Failed</td>
+      <td style="padding: 7px 8px; border: 1px solid #d1d5db; color: #b91c1c; font-size: 11.5px;">{re}</td>
+    </tr>""")
+    html_parts.append("  </tbody>\n</table>")
+
+    return "\n".join(plain_parts).strip(), "\n".join(html_parts).strip()
+
+
+async def execute_market_close_email_report() -> dict:
+    """Collects all configured user authentication states and sends the market-close report."""
+    from database.db import get_db
+    from position.blocklist import get_blocked_users, is_blocked
+    from utils.user_mapping import get_client_username
+    from credentials.dynamic_loader import get_client_email
+    from utils.email import send_email_notification, send_error_email
+
+    await logger_system.info("📊 [MARKET CLOSE] Generating end-of-day authentication & credential report...")
+
+    async with get_db() as db:
+        db.row_factory = None
+        query = """
+            SELECT broker, client_id, status, token, token_updated_at
+            FROM credentials
+            WHERE UPPER(broker) != 'FAKE'
+              AND client_id IS NOT NULL
+              AND TRIM(client_id) != ''
+            ORDER BY broker, client_id
+        """
+        async with db.execute(query) as cursor:
+            rows = await cursor.fetchall()
+
+    blocked_dict = {str(b.get("client_id", "")).strip(): b for b in get_blocked_users()}
+
+    successful_accounts = []
+    failed_accounts = []
+
+    for r in rows:
+        broker = r[0]
+        cid = str(r[1]).strip()
+        db_status = r[2]
+        token = r[3]
+        token_updated = r[4]
+        username = get_client_username(cid)
+        email = get_client_email(cid)
+
+        if is_blocked(cid):
+            reason = blocked_dict.get(cid, {}).get("reason", "Blocked / Authentication failed")
+            failed_accounts.append({
+                "broker": broker,
+                "client_id": cid,
+                "username": username,
+                "user_email": email,
+                "reason": reason
+            })
+        elif db_status == "working" and token:
+            successful_accounts.append({
+                "broker": broker,
+                "client_id": cid,
+                "username": username,
+                "user_email": email,
+                "token_updated_at": token_updated
+            })
+        else:
+            failed_accounts.append({
+                "broker": broker,
+                "client_id": cid,
+                "username": username,
+                "user_email": email,
+                "reason": f"Status '{db_status}' without active token"
+            })
+
+    plain_report, html_report = build_market_close_report_html(successful_accounts, failed_accounts)
+
+    th, tm = _get_market_close_time()
+    time_label = _format_target_time_str(th, tm)
+    subject = f"Market-Close Authentication Report: {len(successful_accounts)} Successful, {len(failed_accounts)} Failed ({time_label})"
+    try:
+        if failed_accounts:
+            await send_error_email(subject, plain_report, html_body=html_report)
+        else:
+            await send_email_notification(subject, plain_report, html_body=html_report)
+        await logger_system.info(f"📧 [MARKET CLOSE] Dispatched market-close report email ({len(successful_accounts)} successful, {len(failed_accounts)} failed).")
+    except Exception as e:
+        await logger_system.error(f"❌ [MARKET CLOSE] Failed sending report email: {e}")
+
+    return {
+        "successful_count": len(successful_accounts),
+        "failed_count": len(failed_accounts),
+        "total_count": len(successful_accounts) + len(failed_accounts),
+        "successful_accounts": successful_accounts,
+        "failed_accounts": failed_accounts
+    }
+
+
+async def start_market_close_report_scheduler():
+    """Background worker that sleeps until 03:30 PM (15:30 IST) every market trading day."""
+    th, tm = _get_market_close_time()
+    time_label = _format_target_time_str(th, tm)
+    await logger_system.info(f"⏰ [SCHEDULER] Market-Close Email Report Worker initialized ({time_label}).")
+    while True:
+        try:
+            wait_seconds = get_seconds_until_next_market_close()
+            now_ist = datetime.now(timezone.utc).astimezone(_IST)
+            next_run_ist = now_ist + timedelta(seconds=wait_seconds)
+            hours = int(wait_seconds // 3600)
+            minutes = int((wait_seconds % 3600) // 60)
+            logger.info(
+                f"⏰ [SCHEDULER] Next Market-Close report scheduled in {hours}h {minutes}m "
+                f"at {next_run_ist.strftime('%Y-%m-%d %H:%M:%S IST')}."
+            )
+            await asyncio.sleep(wait_seconds)
+            await execute_market_close_email_report()
+            await asyncio.sleep(60.0)  # Safety sleep to advance clock past target
+        except asyncio.CancelledError:
+            logger.info("🛑 [SCHEDULER] Market-close report worker stopped.")
+            break
+        except Exception as e:
+            logger.error(f"❌ [SCHEDULER] Error in market-close scheduler loop: {e}")
+            await asyncio.sleep(60.0)
+
