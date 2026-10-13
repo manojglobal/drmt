@@ -224,6 +224,14 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
                 # Keep existing record because it has a newer token
                 continue
 
+        # Preserve live in-memory session token if present; only fallback to CSV token
+        live_cred = _client_creds.get(client_id)
+        live_token = (live_cred.get("token") or "") if live_cred else ""
+        live_token_created = (live_cred.get("token_created_at") or "") if live_cred else ""
+
+        effective_token = live_token if live_token else token_val
+        effective_token_created = live_token_created if live_token else token_created
+
         cred_record = {
             "client_id": client_id,
             "password": creds_json.get("password") or "",
@@ -232,8 +240,8 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
             "totp_secret": creds_json.get("totp_secret") or creds_json.get("totp_secret_key") or creds_json.get("totp") or "",
             "static_ip": static_ip,
             "broker": broker,
-            "token": token_val,
-            "token_created_at": token_created,
+            "token": effective_token,
+            "token_created_at": effective_token_created,
             "user_id": int(uid) if uid and uid.isdigit() else None,
             "full_name": new_cid_to_name.get(client_id, full_name),
             "row_id": row_id,
@@ -270,8 +278,14 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working', ?, datetime('now', 'localtime'), ?)
                 ON CONFLICT(fingerprint) DO UPDATE SET
                     status = 'working',
-                    token = CASE WHEN excluded.token != '' THEN excluded.token ELSE credentials.token END,
-                    token_updated_at = CASE WHEN excluded.token != '' THEN datetime('now', 'localtime') ELSE credentials.token_updated_at END,
+                    token = CASE 
+                        WHEN credentials.token IS NOT NULL AND credentials.token != '' THEN credentials.token 
+                        ELSE excluded.token 
+                    END,
+                    token_updated_at = CASE 
+                        WHEN credentials.token IS NOT NULL AND credentials.token != '' THEN credentials.token_updated_at 
+                        ELSE excluded.token_updated_at 
+                    END,
                     api_key = excluded.api_key,
                     api_secret = excluded.api_secret,
                     totp_secret = excluded.totp_secret,
@@ -382,8 +396,7 @@ def compute_credential_signature(cred: Optional[dict]) -> str:
     totp_secret = str(cred.get("totp_secret") or "").strip()
     password = str(cred.get("password") or "").strip()
     static_ip = str(cred.get("static_ip") or "").strip()
-    token = str(cred.get("token") or "").strip()
-    raw = f"{broker}:{client_id}:{api_key}:{api_secret}:{totp_secret}:{password}:{static_ip}:{token}"
+    raw = f"{broker}:{client_id}:{api_key}:{api_secret}:{totp_secret}:{password}:{static_ip}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 

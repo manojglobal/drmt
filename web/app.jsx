@@ -198,6 +198,25 @@ const ServerHealthMonitor = () => {
 };
 
 /* ═══════════════════════════════════════════
+   CLIENT NAME MAPPING HELPERS
+   ═══════════════════════════════════════════ */
+const CLIENT_NAME_MAP = {
+    'P645M1': 'Manoj mStock Demo',
+    'P645M2': 'Jagdeesh Sawant',
+    'P645M6': 'Rinku Singh',
+    'FZ48062': 'Rinku Singh',
+    '2812175': 'Angand Singh',
+    '1905469': 'Dilip Kushwah',
+    '1923416': 'Rakesh Alice Demo',
+    '807663': 'Manoj Singh'
+};
+
+const getDisplayUsername = (pos) => {
+    if (!pos) return '';
+    return pos.username || CLIENT_NAME_MAP[pos.client_id] || pos.client_id || pos.user_id || '';
+};
+
+/* ═══════════════════════════════════════════
    ACTION LOG WIDGET  (fixed, hover-expand)
    ═══════════════════════════════════════════ */
 const ActionLogWidget = () => {
@@ -604,6 +623,9 @@ const ActionLogWidget = () => {
                                         const isRetryingToken = !!retryingTokenIds[cid];
                                         const hasAttempted = attempts >= 1 || isRetrying;
                                         const hasTokenAttempted = tokenAttempts >= 1 || isRetryingToken;
+                                        const displayName = (user.username && user.username !== cid)
+                                            ? user.username
+                                            : (getDisplayUsername(user) || cid);
 
                                         return (
                                             <div
@@ -613,7 +635,7 @@ const ActionLogWidget = () => {
                                                 <div className="blocked-user-card-header">
                                                     <div className="blocked-user-identity">
                                                         <span className="blocked-user-broker">{user.broker || 'BROKER'}</span>
-                                                        <span className="blocked-user-id">{cid}</span>
+                                                        <span className="blocked-user-id" title={`Client ID: ${cid}`}>{displayName}</span>
                                                     </div>
                                                     <div className="blocked-user-actions">
                                                         {!hasAttempted ? (
@@ -624,7 +646,7 @@ const ActionLogWidget = () => {
                                                                     e.currentTarget.disabled = true;
                                                                     handleRefreshAccount(user);
                                                                 }}
-                                                                title={`Refresh credentials for ${cid}`}
+                                                                title={`Refresh credentials for ${displayName} (${cid})`}
                                                             >
                                                                 <span className={`sync-icon ${isRetrying ? 'spinning' : ''}`}>⟳</span>
                                                                 Refresh Credentials
@@ -647,7 +669,7 @@ const ActionLogWidget = () => {
                                                                     e.currentTarget.disabled = true;
                                                                     handleRefreshToken(user);
                                                                 }}
-                                                                title={`Refresh access token using local database credentials for ${cid}`}
+                                                                title={`Refresh access token using local database credentials for ${displayName} (${cid})`}
                                                             >
                                                                 <span className={`sync-icon ${isRetryingToken ? 'spinning' : ''}`}>{isRetryingToken ? '⟳' : '🔑'}</span>
                                                                 Refresh Token
@@ -711,17 +733,6 @@ const ActionLogWidget = () => {
 /* ═══════════════════════════════════════════
    MAIN DASHBOARD
    ═══════════════════════════════════════════ */
-const CLIENT_NAME_MAP = {
-    'P645M1': 'Manoj mStock Demo',
-    'P645M2': 'Jagdeesh Sawant',
-    'P645M6': 'Rinku Singh',
-    'FZ48062': 'Rinku Singh'
-};
-
-const getDisplayUsername = (pos) => {
-    if (!pos) return '';
-    return pos.username || CLIENT_NAME_MAP[pos.client_id] || pos.client_id || pos.user_id || '';
-};
 
 const isIntradayProduct = (productType) => {
     if (!productType) return false;

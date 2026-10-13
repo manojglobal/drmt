@@ -139,6 +139,11 @@ async def run_blocked_credentials_check_iteration() -> int:
             continue
 
         new_sig = compute_credential_signature(fresh_data)
+        if stored_sig and new_sig == stored_sig:
+            logger.debug(
+                f"ℹ️ [CREDENTIALS WATCHER] Credentials unchanged for blocked account {broker}:{client_id} ({username}). Skipping verification."
+            )
+            continue
 
         logger.info(
             f"🔄 [CREDENTIALS WATCHER] Checking credentials for {broker}:{client_id} ({username}) "

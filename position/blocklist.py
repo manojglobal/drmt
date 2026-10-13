@@ -60,17 +60,35 @@ def is_blocked(client_id: str) -> bool:
 
 
 def get_blocked_users() -> List[dict]:
-    """Returns a list of all currently blocked credentials (newest first)."""
-    return sorted(
-        list(_blocked_users.values()),
-        key=lambda x: x.get("blocked_at", ""),
-        reverse=True,
-    )
+    """Returns a list of all currently blocked credentials (newest first), ensuring username is resolved."""
+    from utils.user_mapping import get_client_username
+    res = []
+    for item in sorted(list(_blocked_users.values()), key=lambda x: x.get("blocked_at", ""), reverse=True):
+        entry = dict(item)
+        cid = str(entry.get("client_id") or "")
+        current_user = entry.get("username") or ""
+        if not current_user or current_user == cid:
+            resolved = get_client_username(cid)
+            if resolved:
+                entry["username"] = resolved
+        res.append(entry)
+    return res
 
 
 def get_blocked_user(client_id: str) -> Optional[dict]:
-    """Returns details for a specific blocked credential if present."""
-    return _blocked_users.get(client_id)
+    """Returns details for a specific blocked credential if present, ensuring username is resolved."""
+    entry = _blocked_users.get(client_id)
+    if not entry:
+        return None
+    res = dict(entry)
+    cid = str(res.get("client_id") or "")
+    current_user = res.get("username") or ""
+    if not current_user or current_user == cid:
+        from utils.user_mapping import get_client_username
+        resolved = get_client_username(cid)
+        if resolved:
+            res["username"] = resolved
+    return res
 
 
 def clear_blocklist() -> int:

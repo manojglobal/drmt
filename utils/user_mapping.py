@@ -19,6 +19,10 @@ DEFAULT_CLIENT_NAMES: Dict[str, str] = {
     "P645M2": "Jagdeesh Sawant",
     "P645M6": "Rinku Singh",
     "FZ48062": "Rinku Singh",
+    "2812175": "Angand Singh",
+    "1905469": "Dilip Kushwah",
+    "1923416": "Rakesh Alice Demo",
+    "807663": "Manoj Singh",
 }
 
 _fallback_configured_cids: Set[str] = set(DEFAULT_CLIENT_NAMES.keys())
