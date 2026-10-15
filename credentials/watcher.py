@@ -160,7 +160,12 @@ async def run_blocked_credentials_check_iteration() -> int:
             static_ip=fresh_data.get("static_ip", ""),
             fingerprint=f"{broker}:{client_id}",
             status="working",
-            token=fresh_data.get("token", "")
+            token=fresh_data.get("token", ""),
+            sid=fresh_data.get("sid", ""),
+            base_url=fresh_data.get("base_url", ""),
+            sub_account_id=fresh_data.get("sub_account_id", ""),
+            public_key=fresh_data.get("public_key", ""),
+            refresh_token=fresh_data.get("refresh_token", "")
         )
 
         user_email = get_client_email(client_id)

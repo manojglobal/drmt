@@ -69,6 +69,8 @@ def build_refresh_tables_html(auth_results: list[dict]) -> tuple[str, str]:
             return "Fyers"
         if "KOTAK" in raw_u:
             return "Kotak Neo"
+        if "AXIS" in raw_u:
+            return "Axis Direct"
         return raw.title()
 
     html_parts = []

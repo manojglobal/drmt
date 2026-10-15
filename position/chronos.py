@@ -13,6 +13,8 @@ from credentials.mstock import login_mstock
 from credentials.flattrade import login_flattrade
 from credentials.aliceblue import login_aliceblue
 from credentials.fyers import login_fyers
+from credentials.kotakneo import login_kotakneo
+from credentials.axisdirect import login_axisdirect
 from position.blocklist import add_to_blocklist, remove_from_blocklist, is_blocked
 from utils.user_mapping import get_client_username
 
@@ -49,6 +51,10 @@ async def refresh_token_with_backoff(cred: Credential) -> bool:
                 token = await login_aliceblue(cred)
             elif cred.broker.upper() == "FYERS":
                 token = await login_fyers(cred)
+            elif cred.broker.upper() in ("KOTAK", "KOTAK NEO", "KOTAKNEO"):
+                token = await login_kotakneo(cred)
+            elif cred.broker.upper() in ("AXIS", "AXIS DIRECT", "AXISDIRECT"):
+                token = await login_axisdirect(cred)
             await logger_auth.info(f"✅ Authentication successful for {cred.broker}:{cred.client_id} ({username})")
             remove_from_blocklist(cred.client_id)
             return True

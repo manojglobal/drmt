@@ -85,6 +85,21 @@ class DatabasePool:
                             await conn.execute(stmt)
                         except aiosqlite.OperationalError as e:
                             logger.debug(f"Ignoring operational error during migration 004: {e}")
+
+            mig_005 = os.path.join(bundle_dir, "migrations", "005_axis_kotak_credentials.sql")
+            if os.path.exists(mig_005):
+                with open(mig_005, 'r') as f:
+                    statements = f.read().split(';')
+                    for stmt in statements:
+                        if not stmt.strip():
+                            continue
+                        try:
+                            await conn.execute(stmt)
+                        except aiosqlite.OperationalError as e:
+                            if "duplicate column name" in str(e).lower():
+                                logger.debug(f"Ignoring duplicate column error during migration 005: {e}")
+                            else:
+                                raise
             await conn.commit()
         
         self._initialized = True

@@ -69,7 +69,7 @@ async def authenticate_configured_credentials():
     async with get_db() as db:
         db.row_factory = None
         query = """
-            SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at
+            SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, sid, base_url, sub_account_id, public_key, refresh_token
             FROM credentials 
             WHERE status = 'working' 
               AND UPPER(broker) != 'FAKE' 
@@ -94,11 +94,18 @@ async def authenticate_configured_credentials():
     for r in filtered:
         broker_upper = str(r[1] or "").strip().upper()
         # Authenticate supported brokers
-        if broker_upper in ("MSTOCK", "FLATTRADE", "ALICE BLUE", "ALICEBLUE", "FYERS"):
+        if broker_upper in ("MSTOCK", "FLATTRADE", "ALICE BLUE", "ALICEBLUE", "FYERS", "KOTAK", "KOTAK NEO", "KOTAKNEO", "AXIS", "AXIS DIRECT", "AXISDIRECT"):
+            sid_val = r[12] if len(r) > 12 else ""
+            base_url_val = r[13] if len(r) > 13 else ""
+            sub_acc_val = r[14] if len(r) > 14 else ""
+            pub_key_val = r[15] if len(r) > 15 else ""
+            ref_tok_val = r[16] if len(r) > 16 else ""
             cred = Credential(
                 id=r[0], broker=r[1], client_id=r[2], api_key=r[3] or "", api_secret=r[4] or "",
                 totp_secret=r[5] or "", password=r[6] or "", static_ip=r[7] or "",
-                fingerprint=r[8], status=r[9], token=r[10] or "", token_updated_at=r[11]
+                fingerprint=r[8], status=r[9], token=r[10] or "", token_updated_at=r[11],
+                sid=sid_val or "", base_url=base_url_val or "",
+                sub_account_id=sub_acc_val or "", public_key=pub_key_val or "", refresh_token=ref_tok_val or ""
             )
             acc_label = f"{cred.broker}:{cred.client_id}"
             user_email = get_client_email(cred.client_id)

@@ -27,6 +27,11 @@ class Credential(BaseModel):
     status: str
     token: str = ""
     token_updated_at: Optional[datetime] = None
+    sid: Optional[str] = Field(default="", exclude=True)
+    base_url: Optional[str] = ""
+    sub_account_id: Optional[str] = ""
+    public_key: Optional[str] = ""
+    refresh_token: Optional[str] = Field(default="", exclude=True)
 
 class ExitHistory(BaseModel):
     id: Optional[int] = None

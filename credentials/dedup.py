@@ -24,20 +24,30 @@ async def save_working_credential(cred: Credential) -> None:
         # Now UPSERT the working credential
         upsert_query = """
             INSERT INTO credentials 
-            (broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working', ?, ?)
+            (broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, sid, base_url, sub_account_id, public_key, refresh_token)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working', ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(fingerprint) DO UPDATE SET
                 status = 'working',
                 token = excluded.token,
                 token_updated_at = excluded.token_updated_at,
                 api_key = excluded.api_key,
                 api_secret = excluded.api_secret,
-                password = excluded.password
+                password = excluded.password,
+                sid = COALESCE(excluded.sid, credentials.sid),
+                base_url = COALESCE(excluded.base_url, credentials.base_url),
+                sub_account_id = COALESCE(excluded.sub_account_id, credentials.sub_account_id),
+                public_key = COALESCE(excluded.public_key, credentials.public_key),
+                refresh_token = COALESCE(excluded.refresh_token, credentials.refresh_token)
         """
         await db.execute(upsert_query, (
             cred.broker, cred.client_id, cred.api_key, cred.api_secret, cred.totp_secret, 
             cred.password, str(cred.static_ip), cred.fingerprint, 
-            cred.token, cred.token_updated_at
+            cred.token, cred.token_updated_at,
+            getattr(cred, "sid", "") or "",
+            getattr(cred, "base_url", "") or "",
+            getattr(cred, "sub_account_id", "") or "",
+            getattr(cred, "public_key", "") or "",
+            getattr(cred, "refresh_token", "") or "",
         ))
         
         await db.commit()

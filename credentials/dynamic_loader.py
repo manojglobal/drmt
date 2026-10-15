@@ -235,8 +235,8 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
         cred_record = {
             "client_id": client_id,
             "password": creds_json.get("password") or "",
-            "api_key": creds_json.get("api_key") or creds_json.get("app_id") or creds_json.get("app_key") or creds_json.get("app_code") or "",
-            "api_secret": creds_json.get("api_secret") or creds_json.get("secret_key") or "",
+            "api_key": creds_json.get("api_key") or creds_json.get("app_id") or creds_json.get("app_key") or creds_json.get("app_code") or creds_json.get("api_token") or creds_json.get("api_client_id") or creds_json.get("apiClientId") or "",
+            "api_secret": creds_json.get("api_secret") or creds_json.get("secret_key") or creds_json.get("authorization_key") or creds_json.get("authorizationKey") or "",
             "totp_secret": creds_json.get("totp_secret") or creds_json.get("totp_secret_key") or creds_json.get("totp") or "",
             "static_ip": static_ip,
             "broker": broker,
@@ -245,6 +245,11 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
             "user_id": int(uid) if uid and uid.isdigit() else None,
             "full_name": new_cid_to_name.get(client_id, full_name),
             "row_id": row_id,
+            "sid": creds_json.get("sid") or "",
+            "base_url": creds_json.get("base_url") or "",
+            "sub_account_id": creds_json.get("sub_account_id") or creds_json.get("subAccountId") or "",
+            "public_key": creds_json.get("public_key") or creds_json.get("publicKey") or "",
+            "refresh_token": creds_json.get("refresh_token") or creds_json.get("refreshToken") or "",
         }
         new_client_creds[client_id] = cred_record
 
@@ -274,8 +279,8 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
             fingerprint = f"{rec['broker']}:{rec['client_id']}"
             upsert_query = """
                 INSERT INTO credentials 
-                (broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, user_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working', ?, datetime('now', 'localtime'), ?)
+                (broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, user_id, sid, base_url, sub_account_id, public_key, refresh_token)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working', ?, datetime('now', 'localtime'), ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(fingerprint) DO UPDATE SET
                     status = 'working',
                     token = CASE 
@@ -291,7 +296,12 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
                     totp_secret = excluded.totp_secret,
                     password = excluded.password,
                     static_ip = excluded.static_ip,
-                    user_id = COALESCE(excluded.user_id, credentials.user_id)
+                    user_id = COALESCE(excluded.user_id, credentials.user_id),
+                    sid = COALESCE(excluded.sid, credentials.sid),
+                    base_url = COALESCE(excluded.base_url, credentials.base_url),
+                    sub_account_id = COALESCE(excluded.sub_account_id, credentials.sub_account_id),
+                    public_key = COALESCE(excluded.public_key, credentials.public_key),
+                    refresh_token = COALESCE(excluded.refresh_token, credentials.refresh_token)
             """
             await db.execute(upsert_query, (
                 rec["broker"],
@@ -304,6 +314,11 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
                 fingerprint,
                 rec["token"],
                 rec["user_id"],
+                rec.get("sid", ""),
+                rec.get("base_url", ""),
+                rec.get("sub_account_id", ""),
+                rec.get("public_key", ""),
+                rec.get("refresh_token", ""),
             ))
             upserted_count += 1
         await db.commit()
@@ -319,7 +334,7 @@ async def _fallback_load_from_db():
     try:
         async with get_db() as db:
             query = """
-                SELECT client_id, broker, password, api_key, api_secret, totp_secret, static_ip, token, user_id
+                SELECT client_id, broker, password, api_key, api_secret, totp_secret, static_ip, token, user_id, sid, base_url, sub_account_id, public_key, refresh_token
                 FROM credentials
                 WHERE status = 'working' AND client_id IS NOT NULL AND TRIM(client_id) != ''
             """
@@ -339,6 +354,11 @@ async def _fallback_load_from_db():
                     "static_ip": row[6] or "",
                     "token": row[7] or "",
                     "user_id": row[8],
+                    "sid": row[9] or "" if len(row) > 9 else "",
+                    "base_url": row[10] or "" if len(row) > 10 else "",
+                    "sub_account_id": row[11] or "" if len(row) > 11 else "",
+                    "public_key": row[12] or "" if len(row) > 12 else "",
+                    "refresh_token": row[13] or "" if len(row) > 13 else "",
                 }
 
         from utils.user_mapping import DEFAULT_CLIENT_NAMES
@@ -396,7 +416,12 @@ def compute_credential_signature(cred: Optional[dict]) -> str:
     totp_secret = str(cred.get("totp_secret") or "").strip()
     password = str(cred.get("password") or "").strip()
     static_ip = str(cred.get("static_ip") or "").strip()
-    raw = f"{broker}:{client_id}:{api_key}:{api_secret}:{totp_secret}:{password}:{static_ip}"
+    sid = str(cred.get("sid") or "").strip()
+    base_url = str(cred.get("base_url") or "").strip()
+    sub_account_id = str(cred.get("sub_account_id") or "").strip()
+    public_key = str(cred.get("public_key") or "").strip()
+    refresh_token = str(cred.get("refresh_token") or "").strip()
+    raw = f"{broker}:{client_id}:{api_key}:{api_secret}:{totp_secret}:{password}:{static_ip}:{sid}:{base_url}:{sub_account_id}:{public_key}:{refresh_token}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 

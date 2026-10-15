@@ -9,6 +9,8 @@ from core.engine import core_engine
 from position.manager import PositionManager
 from execution.mstock_instruments import ensure_mstock_instruments_cached
 from credentials.fyers import get_fyers_auth_header
+from credentials.kotakneo import get_kotak_headers, get_kotak_base_url
+from credentials.axisdirect import send_axis_api_request, get_axis_public_key, AXIS_INVEST_BASE_URL
 from logger.logger import logger_system, logger_monitor
 
 logger = logging.getLogger("DRMT.SCM")
@@ -288,6 +290,180 @@ async def poll_fyers(cred: Credential) -> List[Position]:
         raise
 
 
+async def poll_kotakneo(cred: Credential) -> List[Position]:
+    """Kotak Neo Position Polling (GET /quick/user/positions via Proxy or Direct)."""
+    base_url = get_kotak_base_url(cred)
+    headers = get_kotak_headers(cred)
+
+    if not headers.get("Auth"):
+        raise PermissionError(f"Kotak Neo Auth Error: missing access_token for {cred.client_id}")
+
+    url = f"{base_url}/quick/user/positions"
+    try:
+        if cred.static_ip:
+            resp = await proxy_request("GET", url, str(cred.static_ip), headers=headers)
+        else:
+            session = core_engine.http_session
+            if not session:
+                raise RuntimeError("HTTP session not initialized")
+            async with session.get(url, headers=headers) as r:
+                if r.status in (401, 403):
+                    raise PermissionError(f"Kotak Neo Auth Error: HTTP {r.status} Unauthorized")
+                resp = await r.json(content_type=None)
+
+        if isinstance(resp, str):
+            try:
+                resp = json.loads(resp)
+            except Exception:
+                resp = {}
+
+        if isinstance(resp, dict):
+            stat = str(resp.get("stat") or "").strip().lower()
+            st_code = resp.get("stCode")
+            err_msg = str(resp.get("errMsg") or resp.get("message") or "")
+            if st_code in (100010, 401, 100008, 403, 1037) or stat == "not_ok":
+                raise PermissionError(
+                    f"Kotak Neo Auth Error: Invalid/Expired session (stCode={st_code}, msg={err_msg or 'Session expired'})"
+                )
+            raw_list = resp.get("data") or []
+            if not isinstance(raw_list, list):
+                raw_list = [raw_list] if raw_list else []
+        elif isinstance(resp, list):
+            raw_list = resp
+        else:
+            raw_list = []
+
+        if raw_list:
+            payload_str = json.dumps(raw_list, default=str)
+            if _last_raw_payloads.get(f"kotak:{cred.client_id}") != payload_str:
+                _last_raw_payloads[f"kotak:{cred.client_id}"] = payload_str
+                await logger_monitor.info(f"📥 [Kotak Neo Positions Payload] ({cred.client_id}): {payload_str}")
+        else:
+            _last_raw_payloads.pop(f"kotak:{cred.client_id}", None)
+
+        return PositionManager.normalize_positions(raw_list, cred.broker, cred.client_id)
+    except Exception as e:
+        if "401" in str(e) or "403" in str(e) or "100010" in str(e) or isinstance(e, PermissionError):
+            raise PermissionError(f"Kotak Neo Auth Error: {e}")
+        raise
+
+
+async def poll_axisdirect(cred: Credential) -> List[Position]:
+    """Axis Direct Position Polling via Rapid API / get-order-book."""
+    api_client_id = cred.api_key or ""
+    authorization_key = cred.api_secret or ""
+    sub_account_id = getattr(cred, "sub_account_id", "") or cred.client_id or ""
+    access_token = cred.token or ""
+    public_key = getattr(cred, "public_key", "") or ""
+
+    if not access_token:
+        raise PermissionError(f"Axis Direct Auth Error: missing access_token for {cred.client_id}")
+
+    if not public_key:
+        public_key = await get_axis_public_key(api_client_id, authorization_key, str(cred.static_ip or ""))
+        if public_key:
+            cred.public_key = public_key
+
+    all_raw_items = []
+    try:
+        for seg in ("FO", "EQ"):
+            url = f"{AXIS_INVEST_BASE_URL.rstrip('/')}/trading/orders/get-order-book"
+            status_code, resp = await send_axis_api_request(
+                method="POST",
+                url=url,
+                static_ip=str(cred.static_ip or ""),
+                authorization_key=authorization_key,
+                api_client_id=api_client_id,
+                sub_account_id=sub_account_id,
+                access_token=access_token,
+                public_key=public_key,
+                body={"segment": seg},
+            )
+
+            err_dict = resp.get("error", {}) if isinstance(resp, dict) else {}
+            err_code = str(err_dict.get("code") or "")
+            if status_code in (401, 403) or err_code in ("1081", "1082", "1200", "1002", "1003"):
+                raise PermissionError(
+                    f"Axis Direct Auth Error for {cred.client_id} (code={err_code or status_code}): {err_dict.get('message', 'Session expired')}"
+                )
+
+            data = resp.get("data") if isinstance(resp, dict) else {}
+            items = data.get("orders") or data.get("positions") or [] if isinstance(data, dict) else []
+            if isinstance(items, list):
+                all_raw_items.extend(items)
+
+        # If orderbook orders, derive open net positions from executed trades
+        positions_to_normalize = []
+        if all_raw_items and any("orderStatus" in x or "omsOrderId" in x for x in all_raw_items if isinstance(x, dict)):
+            order_groups: Dict[str, Dict[str, Any]] = {}
+            for o in all_raw_items:
+                if not isinstance(o, dict):
+                    continue
+                st = str(o.get("orderStatus") or "").upper()
+                if st not in ("TRADED", "COMPLETE", "EXECUTED"):
+                    continue
+                sym = str(o.get("scriptId") or o.get("tradingSymbol") or "").strip()
+                if not sym:
+                    continue
+                exch = str(o.get("exchange") or "").strip()
+                key = f"{exch}:{sym}"
+                txn = str(o.get("transactionType") or "").upper()
+                qty = float(o.get("executedQty") or o.get("tradeQty") or o.get("totalQty") or 0)
+                price = float(o.get("tradedPrice") or o.get("tradePrice") or o.get("orderPrice") or 0)
+                prod = str(o.get("productType") or "DELIVERY").strip()
+
+                if key not in order_groups:
+                    order_groups[key] = {
+                        "scriptId": sym,
+                        "exchange": exch,
+                        "product": prod,
+                        "buyQty": 0.0,
+                        "sellQty": 0.0,
+                        "buyVal": 0.0,
+                        "sellVal": 0.0,
+                    }
+                if txn in ("BUY", "B"):
+                    order_groups[key]["buyQty"] += qty
+                    order_groups[key]["buyVal"] += qty * price
+                else:
+                    order_groups[key]["sellQty"] += qty
+                    order_groups[key]["sellVal"] += qty * price
+
+            for key, g in order_groups.items():
+                net_qty = g["buyQty"] - g["sellQty"]
+                if net_qty != 0:
+                    if net_qty > 0 and g["buyQty"] > 0:
+                        avg_p = g["buyVal"] / g["buyQty"]
+                    elif net_qty < 0 and g["sellQty"] > 0:
+                        avg_p = g["sellVal"] / g["sellQty"]
+                    else:
+                        avg_p = 0.0
+                    positions_to_normalize.append({
+                        "scriptId": g["scriptId"],
+                        "exchange": g["exchange"],
+                        "product": g["product"],
+                        "netQty": int(net_qty),
+                        "avgPrice": round(avg_p, 2),
+                        "transactionType": "BUY" if net_qty > 0 else "SELL",
+                    })
+        else:
+            positions_to_normalize = all_raw_items
+
+        if positions_to_normalize:
+            payload_str = json.dumps(positions_to_normalize, default=str)
+            if _last_raw_payloads.get(f"axis:{cred.client_id}") != payload_str:
+                _last_raw_payloads[f"axis:{cred.client_id}"] = payload_str
+                await logger_monitor.info(f"📥 [Axis Direct Positions Payload] ({cred.client_id}): {payload_str}")
+        else:
+            _last_raw_payloads.pop(f"axis:{cred.client_id}", None)
+
+        return PositionManager.normalize_positions(positions_to_normalize, cred.broker, cred.client_id)
+    except Exception as e:
+        if "401" in str(e) or "403" in str(e) or isinstance(e, PermissionError):
+            raise PermissionError(f"Axis Direct Auth Error: {e}")
+        raise
+
+
 async def broker_poll(cred: Credential) -> List[Position]:
     """Router for broker polling based on credential."""
     if cred.broker.upper() == "FAKE":
@@ -300,6 +476,10 @@ async def broker_poll(cred: Credential) -> List[Position]:
         return await poll_aliceblue(cred)
     elif cred.broker.upper() == "FYERS":
         return await poll_fyers(cred)
+    elif cred.broker.upper() in ("KOTAK", "KOTAK NEO", "KOTAKNEO"):
+        return await poll_kotakneo(cred)
+    elif cred.broker.upper() in ("AXIS", "AXIS DIRECT", "AXISDIRECT"):
+        return await poll_axisdirect(cred)
     else:
         logger.warning(f"Unknown broker: {cred.broker}")
         return []

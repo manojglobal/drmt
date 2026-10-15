@@ -8,6 +8,8 @@ from execution.aliceblue import exit_aliceblue
 from execution.flattrade import exit_flattrade
 from execution.mstock import exit_mstock
 from execution.fyers import exit_fyers
+from execution.kotakneo import exit_kotakneo
+from execution.axisdirect import exit_axisdirect
 from logger.logger import logger_exit
 from models.schemas import Credential, Position
 
@@ -25,6 +27,10 @@ async def execute_exit_order(pos: Position, cred: Credential) -> bool:
                 return await exit_flattrade(pos, cred)
             elif cred.broker.upper() == "FYERS":
                 return await exit_fyers(pos, cred)
+            elif cred.broker.upper() in ("KOTAK", "KOTAK NEO", "KOTAKNEO"):
+                return await exit_kotakneo(pos, cred)
+            elif cred.broker.upper() in ("AXIS", "AXIS DIRECT", "AXISDIRECT"):
+                return await exit_axisdirect(pos, cred)
             else:
                 await logger_exit.warn(f"Unknown broker for exit: {cred.broker}")
                 return False

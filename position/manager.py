@@ -26,20 +26,34 @@ class PositionManager:
                 or raw.get("formattedInstrumentName")
                 or raw.get("tsym")
                 or raw.get("TrdSym")
+                or raw.get("trdSym")
+                or raw.get("pTrdSymbol")
+                or raw.get("name")
+                or raw.get("scriptId")
+                or raw.get("scriptid")
+                or raw.get("scripName")
                 or "UNKNOWN"
             )
-            qty_raw = (
-                raw.get("netQty")
-                or raw.get("netQuantity")
-                or raw.get("quantity")
-                or raw.get("netqty")
-                or raw.get("Netqty")
-                or 0
-            )
-            try:
-                qty = int(qty_raw)
-            except (ValueError, TypeError):
-                qty = 0
+            if "flBuyQty" in raw or "flSellQty" in raw or "cfBuyQty" in raw:
+                try:
+                    buy_q = int(float(raw.get("flBuyQty") or 0)) + int(float(raw.get("cfBuyQty") or 0))
+                    sell_q = int(float(raw.get("flSellQty") or 0)) + int(float(raw.get("cfSellQty") or 0))
+                    qty = buy_q - sell_q
+                except (ValueError, TypeError):
+                    qty = 0
+            else:
+                qty_raw = (
+                    raw.get("netQty")
+                    or raw.get("netQuantity")
+                    or raw.get("quantity")
+                    or raw.get("netqty")
+                    or raw.get("Netqty")
+                    or 0
+                )
+                try:
+                    qty = int(qty_raw)
+                except (ValueError, TypeError):
+                    qty = 0
             
             # Rule: Zero-Qty -> actively skip/delete from tracking
             if qty == 0:
@@ -51,9 +65,22 @@ class PositionManager:
                 or raw.get("exch")
                 or raw.get("exc")
                 or raw.get("Exchange")
+                or raw.get("exSeg")
+                or raw.get("pExchSeg")
                 or ""
             )
             raw_exch_upper = str(raw_exch).strip().upper()
+            if raw_exch_upper in ("NSE_FO", "NFO"):
+                raw_exch_upper = "NFO"
+            elif raw_exch_upper in ("BSE_FO", "BFO"):
+                raw_exch_upper = "BFO"
+            elif raw_exch_upper in ("NSE_CM", "NSE_EQ"):
+                raw_exch_upper = "NSE"
+            elif raw_exch_upper in ("BSE_CM", "BSE_EQ"):
+                raw_exch_upper = "BSE"
+            elif raw_exch_upper in ("MCX_FO", "MCX_COMM"):
+                raw_exch_upper = "MCX"
+
             if not raw_exch_upper and ":" in symbol:
                 prefix = symbol.split(":")[0].upper()
                 if prefix in ("NSE", "BSE", "MCX", "BFO", "NFO", "CDS", "BCD"):
@@ -93,6 +120,8 @@ class PositionManager:
                 or raw.get("productType")
                 or raw.get("producttype")
                 or raw.get("prd")
+                or raw.get("prod")
+                or raw.get("pc")
                 or raw.get("Pcode")
                 or ""
             )
@@ -214,6 +243,11 @@ class PositionManager:
                 or raw.get("symboltoken")
                 or raw.get("sym")
                 or raw.get("Token")
+                or raw.get("tok")
+                or raw.get("tp")
+                or raw.get("pSymbol")
+                or raw.get("scriptId")
+                or raw.get("scriptid")
                 or raw.get("id")
                 or ""
             )

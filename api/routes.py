@@ -133,14 +133,16 @@ async def exit_positions(request: web.Request):
     async with get_db() as db:
         db.row_factory = None
         valid_filter = "status = 'working' AND UPPER(broker) != 'FAKE' AND client_id IS NOT NULL AND TRIM(client_id) != ''"
-        async with db.execute(f"SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE {valid_filter}") as cursor:
+        async with db.execute(f"SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, sid, base_url, sub_account_id, public_key, refresh_token FROM credentials WHERE {valid_filter}") as cursor:
             rows = await cursor.fetchall()
             
     configured_cids = get_configured_client_ids()
     credentials = [Credential(
         id=r[0], broker=r[1], client_id=r[2], api_key=r[3], api_secret=r[4],
         totp_secret=r[5], password=r[6], static_ip=r[7],
-        fingerprint=r[8], status=r[9], token=r[10], token_updated_at=r[11]
+        fingerprint=r[8], status=r[9], token=r[10], token_updated_at=r[11],
+        sid=r[12] if len(r) > 12 else "", base_url=r[13] if len(r) > 13 else "",
+        sub_account_id=r[14] if len(r) > 14 else "", public_key=r[15] if len(r) > 15 else "", refresh_token=r[16] if len(r) > 16 else ""
     ) for r in rows if not configured_cids or r[2] in configured_cids]
     
     symbol_list = [f"{p.broker}:{p.client_id}:{p.symbol}" for p in positions]
@@ -392,26 +394,36 @@ async def retry_blocked_user(request: web.Request):
         if fresh_creds.get("token"):
             await db.execute("""
                 UPDATE credentials 
-                SET password = ?, api_key = ?, totp_secret = ?, static_ip = ?, status = 'working', token = ?, token_updated_at = datetime('now', 'localtime')
+                SET password = ?, api_key = ?, totp_secret = ?, static_ip = ?, sid = ?, base_url = ?, sub_account_id = ?, public_key = ?, refresh_token = ?, status = 'working', token = ?, token_updated_at = datetime('now', 'localtime')
                 WHERE client_id = ?
             """, (
                 fresh_creds["password"],
                 fresh_creds["api_key"],
                 fresh_creds["totp_secret"],
                 fresh_creds["static_ip"],
+                fresh_creds.get("sid", ""),
+                fresh_creds.get("base_url", ""),
+                fresh_creds.get("sub_account_id", ""),
+                fresh_creds.get("public_key", ""),
+                fresh_creds.get("refresh_token", ""),
                 fresh_creds["token"],
                 client_id
             ))
         else:
             await db.execute("""
                 UPDATE credentials 
-                SET password = ?, api_key = ?, totp_secret = ?, static_ip = ?, status = 'working'
+                SET password = ?, api_key = ?, totp_secret = ?, static_ip = ?, sid = ?, base_url = ?, sub_account_id = ?, public_key = ?, refresh_token = ?, status = 'working'
                 WHERE client_id = ?
             """, (
                 fresh_creds["password"],
                 fresh_creds["api_key"],
                 fresh_creds["totp_secret"],
                 fresh_creds["static_ip"],
+                fresh_creds.get("sid", ""),
+                fresh_creds.get("base_url", ""),
+                fresh_creds.get("sub_account_id", ""),
+                fresh_creds.get("public_key", ""),
+                fresh_creds.get("refresh_token", ""),
                 client_id
             ))
         await db.commit()
@@ -419,7 +431,7 @@ async def retry_blocked_user(request: web.Request):
         # Load the updated record
         db.row_factory = None
         async with db.execute(
-            "SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE client_id = ?",
+            "SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, sid, base_url, sub_account_id, public_key, refresh_token FROM credentials WHERE client_id = ?",
             (client_id,)
         ) as cursor:
             row = await cursor.fetchone()
@@ -434,7 +446,9 @@ async def retry_blocked_user(request: web.Request):
     cred = Credential(
         id=row[0], broker=row[1], client_id=row[2], api_key=row[3], api_secret=row[4],
         totp_secret=row[5], password=row[6], static_ip=row[7],
-        fingerprint=row[8], status=row[9], token=row[10], token_updated_at=row[11]
+        fingerprint=row[8], status=row[9], token=row[10], token_updated_at=row[11],
+        sid=row[12] if len(row) > 12 else "", base_url=row[13] if len(row) > 13 else "",
+        sub_account_id=row[14] if len(row) > 14 else "", public_key=row[15] if len(row) > 15 else "", refresh_token=row[16] if len(row) > 16 else ""
     )
     
     # 3. Attempt single-attempt login
@@ -515,26 +529,36 @@ async def sync_dropbox_blocked_users(request: web.Request):
             if fresh_creds.get("token"):
                 await db.execute("""
                     UPDATE credentials 
-                    SET password = ?, api_key = ?, totp_secret = ?, static_ip = ?, status = 'working', token = ?, token_updated_at = datetime('now', 'localtime')
+                    SET password = ?, api_key = ?, totp_secret = ?, static_ip = ?, sid = ?, base_url = ?, sub_account_id = ?, public_key = ?, refresh_token = ?, status = 'working', token = ?, token_updated_at = datetime('now', 'localtime')
                     WHERE client_id = ?
                 """, (
                     fresh_creds["password"],
                     fresh_creds["api_key"],
                     fresh_creds["totp_secret"],
                     fresh_creds["static_ip"],
+                    fresh_creds.get("sid", ""),
+                    fresh_creds.get("base_url", ""),
+                    fresh_creds.get("sub_account_id", ""),
+                    fresh_creds.get("public_key", ""),
+                    fresh_creds.get("refresh_token", ""),
                     fresh_creds["token"],
                     client_id
                 ))
             else:
                 await db.execute("""
                     UPDATE credentials 
-                    SET password = ?, api_key = ?, totp_secret = ?, static_ip = ?, status = 'working'
+                    SET password = ?, api_key = ?, totp_secret = ?, static_ip = ?, sid = ?, base_url = ?, sub_account_id = ?, public_key = ?, refresh_token = ?, status = 'working'
                     WHERE client_id = ?
                 """, (
                     fresh_creds["password"],
                     fresh_creds["api_key"],
                     fresh_creds["totp_secret"],
                     fresh_creds["static_ip"],
+                    fresh_creds.get("sid", ""),
+                    fresh_creds.get("base_url", ""),
+                    fresh_creds.get("sub_account_id", ""),
+                    fresh_creds.get("public_key", ""),
+                    fresh_creds.get("refresh_token", ""),
                     client_id
                 ))
             await db.commit()
@@ -542,7 +566,7 @@ async def sync_dropbox_blocked_users(request: web.Request):
             # Load the updated record
             db.row_factory = None
             async with db.execute(
-                "SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE client_id = ?",
+                "SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, sid, base_url, sub_account_id, public_key, refresh_token FROM credentials WHERE client_id = ?",
                 (client_id,)
             ) as cursor:
                 row = await cursor.fetchone()
@@ -554,7 +578,9 @@ async def sync_dropbox_blocked_users(request: web.Request):
         cred = Credential(
             id=row[0], broker=row[1], client_id=row[2], api_key=row[3], api_secret=row[4],
             totp_secret=row[5], password=row[6], static_ip=row[7],
-            fingerprint=row[8], status=row[9], token=row[10], token_updated_at=row[11]
+            fingerprint=row[8], status=row[9], token=row[10], token_updated_at=row[11],
+            sid=row[12] if len(row) > 12 else "", base_url=row[13] if len(row) > 13 else "",
+            sub_account_id=row[14] if len(row) > 14 else "", public_key=row[15] if len(row) > 15 else "", refresh_token=row[16] if len(row) > 16 else ""
         )
 
         logger.info(f"🔄 [BLOCKLIST DROPBOX SYNC] Retrying {cred.broker}:{cred.client_id} ({username}) with fresh Dropbox credentials")
@@ -615,7 +641,7 @@ async def refresh_blocked_user_token(request: web.Request):
         db.row_factory = None
         async with db.execute(
             """
-            SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at 
+            SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, sid, base_url, sub_account_id, public_key, refresh_token 
             FROM credentials 
             WHERE client_id = ?
             """,
@@ -633,7 +659,9 @@ async def refresh_blocked_user_token(request: web.Request):
     cred = Credential(
         id=row[0], broker=row[1], client_id=row[2], api_key=row[3], api_secret=row[4],
         totp_secret=row[5], password=row[6], static_ip=row[7],
-        fingerprint=row[8], status=row[9], token=row[10], token_updated_at=row[11]
+        fingerprint=row[8], status=row[9], token=row[10], token_updated_at=row[11],
+        sid=row[12] if len(row) > 12 else "", base_url=row[13] if len(row) > 13 else "",
+        sub_account_id=row[14] if len(row) > 14 else "", public_key=row[15] if len(row) > 15 else "", refresh_token=row[16] if len(row) > 16 else ""
     )
 
     logger.info(f"🔑 [TOKEN REFRESH] Attempting broker token refresh for {cred.broker}:{cred.client_id} ({username}) using local DB credentials")
