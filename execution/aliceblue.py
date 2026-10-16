@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from typing import Any
+from typing import Any, Optional
 import uuid
 
 from core.engine import core_engine
@@ -28,81 +28,16 @@ ALICE_WEB_HEADERS = {
 }
 
 
-def _build_web_payload(pos: Position) -> list:
+def _build_web_payload(pos: Position, cred: Optional[Credential] = None) -> list:
     """Builds order payload for AliceBlue OMK Web Flow (Plato _place_web_order)."""
-    trans_type = "S" if pos.quantity > 0 else "B"
-    qty = abs(pos.quantity)
-    prod_upper = str(pos.product_type).upper()
-    if prod_upper in ("INTRADAY", "MIS", "I"):
-        prod = "MIS"
-    elif prod_upper in ("CARRYFORWARD", "NRML", "NORMAL", "M"):
-        prod = "NRML"
-    else:
-        prod = "CNC"
-    inst_id = str(pos.token)
-
-    return [{
-        "deviceNumber": "57a9f9b93ffbd16d3e4be86448a7a472",
-        "exchange": pos.exchange,
-        "token": inst_id,
-        "tradingSymbol": pos.symbol,
-        "ltp": "",
-        "qty": str(qty),
-        "price": 0,
-        "product": prod,
-        "priceType": "MKT",
-        "orderType": "Regular",
-        "transType": trans_type,
-        "ret": "DAY",
-        "triggerPrice": 0,
-        "disclosedQty": "",
-        "mktProtection": "",
-        "target": "",
-        "stopLoss": "",
-        "trailingStopLoss": "",
-        "orderTag": "DRMT_EXIT"
-    }]
+    from execution.payload_master import PayloadMaster
+    return PayloadMaster.build_alice_web_payload(pos, cred)
 
 
-def _build_sdk_payload(pos: Position) -> list:
+def _build_sdk_payload(pos: Position, cred: Optional[Credential] = None) -> list:
     """Builds order payload for AliceBlue Open-API / SDK Flow."""
-    trans_type = "SELL" if pos.quantity > 0 else "BUY"
-    qty = abs(pos.quantity)
-    prod_upper = str(pos.product_type).upper()
-
-    if prod_upper in ("INTRADAY", "MIS", "I"):
-        prod = "INTRADAY"
-    elif prod_upper in ("DELIVERY", "CNC", "LONGTERM", "C"):
-        prod = "LONGTERM"
-    elif prod_upper in ("MTF",):
-        prod = "MTF"
-    elif prod_upper in ("CARRYFORWARD", "NRML", "NORMAL", "M"):
-        prod = "LONGTERM" if str(pos.exchange).upper() in ("NSE", "BSE") else "NORMAL"
-    else:
-        prod = "INTRADAY"
-
-    # Marketable Limit price to guarantee immediate execution on Open-API SDK
-    base_price = pos.ltp if (pos.ltp and pos.ltp > 0) else (pos.avg_price if (pos.avg_price and pos.avg_price > 0) else 0.0)
-    if base_price > 0:
-        raw_price = max(0.05, base_price * 0.99) if trans_type == "SELL" else (base_price * 1.01)
-        limit_price = round(round(raw_price / 0.05) * 0.05, 2)
-    else:
-        limit_price = 0.05
-
-    return [{
-        "exchange": pos.exchange,
-        "instrumentId": str(pos.token),
-        "transactionType": trans_type,
-        "quantity": qty,
-        "product": prod,
-        "orderComplexity": "REGULAR",
-        "orderType": "LIMIT",
-        "validity": "DAY",
-        "price": limit_price,
-        "disclosedQuantity": 0,
-        "orderTag": "DRMT_EXIT",
-        "deviceId": "57a9f9b93ffbd16d3e4be86448a7a472"
-    }]
+    from execution.payload_master import PayloadMaster
+    return PayloadMaster.build_alice_sdk_payload(pos, cred)
 
 
 def _check_order_success(data: Any, flow_mode: str = "WEB") -> tuple[bool, str]:
@@ -150,13 +85,13 @@ async def exit_aliceblue(pos: Position, cred: Credential) -> bool:
             "Authorization": f"Bearer {cred.token}",
             "Content-Type": "application/json"
         }
-        payload = _build_sdk_payload(pos)
+        payload = _build_sdk_payload(pos, cred)
         flow_label = "SDK"
     else:
         url = ALICE_WEB_ORDER_URL
         headers = dict(ALICE_WEB_HEADERS)
         headers["Authorization"] = f"Bearer {cred.token}"
-        payload = _build_web_payload(pos)
+        payload = _build_web_payload(pos, cred)
         flow_label = "Web"
 
     try:

@@ -13,22 +13,6 @@ async def exit_mstock(pos: Position, cred: Credential) -> bool:
     """MStock Exit via DRMT Proxy."""
     url = "https://api.mstock.trade/openapi/typeb/orders/regular"
     
-    # MStock specific mappings
-    prod_type = pos.product_type.upper()
-    if prod_type in ("NFO", "BFO", "NCR", "CARRYFORWARD", "NRML"):
-        prod_type = "CARRYFORWARD"
-    elif prod_type in ("MIS", "INTRADAY"):
-        prod_type = "INTRADAY"
-    elif prod_type in ("CNC", "DELIVERY"):
-        prod_type = "DELIVERY"
-        
-    tran_type = "SELL" if pos.quantity > 0 else "BUY"
-    qty = abs(pos.quantity)
-    
-    # ordertag truncated to 15 chars
-    order_tag = str(uuid.uuid4()).replace("-", "")[:15]
-    resolved_token = pos.token
-    
     # Look up official exchange trading symbol from Redis Script Master mapping
     trading_symbol = await get_mstock_trading_symbol(pos.symbol, str(pos.token), pos.exchange)
     if not trading_symbol:
@@ -39,24 +23,8 @@ async def exit_mstock(pos: Position, cred: Credential) -> bool:
         elif pos.exchange.upper() == "BSE" and not ("-" in trading_symbol) and not any(s in trading_symbol for s in ("CE", "PE", "FUT")):
             trading_symbol = f"{pos.symbol}-A"
     
-    payload = {
-        "variety": "NORMAL",
-        "tradingsymbol": trading_symbol,
-        "symboltoken": str(resolved_token),
-        "exchange": pos.exchange,
-        "transactiontype": tran_type,
-        "ordertype": "MARKET",
-        "quantity": str(qty),
-        "producttype": prod_type,
-        "price": "0",
-        "triggerprice": "0",
-        "squareoff": "0",
-        "stoploss": "0",
-        "trailingStopLoss": "",
-        "disclosedquantity": "0",
-        "duration": "DAY",
-        "ordertag": order_tag
-    }
+    from execution.payload_master import PayloadMaster
+    payload = PayloadMaster.build_mstock_payload(pos, trading_symbol)
     
     headers = {
         "Authorization": f"Bearer {cred.token}",

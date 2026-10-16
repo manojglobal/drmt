@@ -24,37 +24,8 @@ async def exit_fyers(pos: Position, cred: Credential) -> bool:
         )
         return False
 
-    # Determine closing side: 1 = BUY, -1 = SELL
-    tran_type = -1 if pos.quantity > 0 else 1
-    qty = abs(pos.quantity)
-
-    # Product Type mapping for Fyers API v3
-    prod = (pos.product_type or "").upper()
-    if prod in ("CNC", "DELIVERY", "C"):
-        fyers_product = "CNC"
-    elif prod in ("NRML", "NORMAL", "CARRYFORWARD", "M"):
-        fyers_product = "MARGIN"
-    elif prod in ("BO", "B"):
-        fyers_product = "BO"
-    elif prod in ("CO", "H"):
-        fyers_product = "CO"
-    else:
-        fyers_product = "INTRADAY"
-
-    payload = {
-        "symbol": pos.symbol,
-        "qty": qty,
-        "type": 2,  # Market order
-        "side": tran_type,
-        "productType": fyers_product,
-        "limitPrice": 0,
-        "stopPrice": 0,
-        "validity": "DAY",
-        "disclosedQty": 0,
-        "offlineOrder": False,
-        "stopLoss": 0,
-        "takeProfit": 0,
-    }
+    from execution.payload_master import PayloadMaster
+    payload = PayloadMaster.build_fyers_payload(pos)
 
     headers = {
         "Authorization": auth_header,

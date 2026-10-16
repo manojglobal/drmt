@@ -13,49 +13,8 @@ async def exit_flattrade(pos: Position, cred: Credential) -> bool:
     """Flattrade Exit (Direct or Proxy)."""
     url = "https://emergeapi.flattrade.in/placeOrder"
     
-    tran_type = "S" if pos.quantity > 0 else "B"
-    qty = abs(pos.quantity)
-    
-    # Flattrade single-letter product codes: C (CNC), M (NRML), I (MIS), B (BO), H (CO)
-    prod_type = pos.product_type.upper()
-    if prod_type in ("CNC", "DELIVERY", "C"):
-        prd = "C"
-    elif prod_type in ("NRML", "NORMAL", "CARRYFORWARD", "M"):
-        prd = "M"
-    elif prod_type in ("MIS", "INTRADAY", "I"):
-        prd = "I"
-    elif prod_type in ("BO", "B"):
-        prd = "B"
-    elif prod_type in ("CO", "H"):
-        prd = "H"
-    else:
-        prd = prod_type
-        
-    app_inst_id = str(uuid.uuid4())
-    
-    # Flattrade order routing expects BFO for BSE derivatives (CE/PE/FUT)
-    exch = pos.exchange
-    if str(exch).upper() == "BSE" and any(x in pos.symbol.upper() for x in ("CE", "PE", "FUT")):
-        exch = "BFO"
-    elif str(exch).upper() == "NSE" and any(x in pos.symbol.upper() for x in ("CE", "PE", "FUT")):
-        exch = "NFO"
-        
-    payload = {
-        "uid": cred.client_id,
-        "actid": cred.client_id,
-        "exch": exch,
-        "tsym": pos.symbol,
-        "qty": str(qty),
-        "prc": "0",
-        "prd": prd,
-        "trantype": tran_type,
-        "prctyp": "MKT",
-        "ret": "DAY",
-        "remarks": app_inst_id,
-        "app_inst_id": app_inst_id,
-        "jKey": cred.token,
-        "jkey": cred.token
-    }
+    from execution.payload_master import PayloadMaster
+    payload = PayloadMaster.build_flattrade_payload(pos, cred)
     
     headers = {
         "Content-Type": "application/json",

@@ -26,55 +26,25 @@ async def exit_kotakneo(pos: Position, cred: Credential) -> bool:
         await logger_exit.error(f"Kotak Neo exit failed for {pos.symbol}: no access_token found for {cred.client_id}")
         return False
 
-    # 1. Transaction side inversion: closing a BUY requires SELL ('S'), closing a SELL requires BUY ('B')
-    kotak_txn = "S" if pos.quantity > 0 else "B"
-    qty = abs(pos.quantity)
+    # Ensure token is numeric; resolve from Kotak instrument master if needed
+    if not str(pos.token or "").strip().isdigit():
+        try:
+            from execution.kotak_instruments import get_kotak_exchange_token
+            resolved_tok = await get_kotak_exchange_token(pos.symbol, pos.exchange)
+            if resolved_tok and str(resolved_tok).isdigit():
+                pos.token = str(resolved_tok)
+        except Exception:
+            pass
 
-    # 2. Product type mapping
-    prod_upper = (pos.product_type or "").upper()
-    if prod_upper in ("CNC", "DELIVERY", "C"):
-        product_code = "CNC"
-    elif prod_upper in ("NRML", "NORMAL", "CARRYFORWARD", "M"):
-        product_code = "NRML"
-    else:
-        product_code = "MIS"
-
-    # 3. Exchange segment mapping for Kotak Neo (e.g. nse_fo, bse_fo, nse_cm, bse_cm)
-    exch_upper = str(pos.exchange or "").upper()
-    sym_upper = str(pos.symbol or "").upper()
-    is_derivative = exch_upper in ("NFO", "BFO") or any(x in sym_upper for x in ("-CE", "-PE", " CE", " PE", " FUT"))
-
-    if exch_upper in ("BFO", "BSE") and is_derivative:
-        exch_seg = "bse_fo"
-    elif exch_upper in ("NFO", "NSE") and is_derivative:
-        exch_seg = "nse_fo"
-    elif exch_upper == "MCX":
-        exch_seg = "mcx_fo"
-    elif exch_upper == "BSE":
-        exch_seg = "bse_cm"
-    else:
-        exch_seg = "nse_cm"
-
-    order_uuid = str(uuid.uuid4())[:15]
-    order_values = {
-        "am": "NO",
-        "dq": "0",
-        "es": exch_seg,
-        "mp": "0",
-        "pc": product_code,
-        "pr": "0",
-        "pt": "MKT",
-        "qt": str(qty),
-        "rt": "DAY",
-        "tp": str(pos.token or pos.symbol),
-        "ts": pos.symbol,
-        "tt": kotak_txn,
-        "ig": order_uuid,
-        "os": "APP",
-    }
+    from execution.payload_master import PayloadMaster
+    form_data = PayloadMaster.build_kotak_payload(pos)
+    order_values = json.loads(form_data.get("jData", "{}"))
+    kotak_txn = order_values.get("tt", "")
+    qty = order_values.get("qt", "")
+    exch_seg = order_values.get("es", "")
+    product_code = order_values.get("pc", "")
 
     url = f"{base_url}/quick/order/rule/ms/place"
-    form_data = {"jData": json.dumps(order_values)}
 
     await logger_exit.info(
         f"🚨 [KOTAK ORDER DISPATCH] {pos.symbol} | Side: {kotak_txn} | Qty: {qty} | Seg: {exch_seg} | Prod: {product_code} | Target: {cred.client_id}"

@@ -17,6 +17,13 @@ from execution.axis_instruments import (
     get_axis_close_price,
     fetch_axis_quotes,
 )
+from execution.kotak_instruments import (
+    ensure_kotak_instruments_cached,
+    resolve_kotak_exchange_segment,
+    get_kotak_exchange_token,
+)
+from execution.flattrade_instruments import ensure_flattrade_instruments_cached
+from execution.alice_instruments import ensure_alice_instruments_cached
 from logger.logger import logger_system, logger_monitor
 
 logger = logging.getLogger("DRMT.SCM")
@@ -179,6 +186,7 @@ async def poll_flattrade(cred: Credential) -> List[Position]:
         else:
             _last_raw_payloads.pop(f"flattrade:{cred.client_id}", None)
             
+        asyncio.create_task(ensure_flattrade_instruments_cached(cred))
         return PositionManager.normalize_positions(raw_list, cred.broker, cred.client_id)
     except Exception as e:
         if "401" in str(e) or "403" in str(e) or isinstance(e, PermissionError):
@@ -226,6 +234,7 @@ async def poll_aliceblue(cred: Credential) -> List[Position]:
             else:
                 _last_raw_payloads.pop(f"aliceblue:{cred.client_id}", None)
 
+            asyncio.create_task(ensure_alice_instruments_cached(cred))
             if isinstance(result, list):
                 return PositionManager.normalize_positions(result, cred.broker, cred.client_id)
             return []
@@ -355,21 +364,18 @@ async def poll_kotakneo(cred: Credential) -> List[Position]:
         if not positions:
             return positions
 
+        # Ensure Kotak Neo Script Master is cached in Redis (non-blocking)
+        asyncio.create_task(ensure_kotak_instruments_cached(cred))
+
         # Batch fetch real-time market LTP via Kotak Neo quotes endpoint
         neo_tokens = []
         for p in positions:
+            if not p.token or not str(p.token).isdigit():
+                tok_lookup = await get_kotak_exchange_token(p.symbol, p.exchange)
+                if tok_lookup:
+                    p.token = tok_lookup
             if p.token:
-                exch = str(p.exchange or "").upper().strip()
-                if exch in ("NFO", "NSE_FO"):
-                    seg = "nse_fo"
-                elif exch in ("BFO", "BSE_FO"):
-                    seg = "bse_fo"
-                elif exch in ("BSE", "BSE_CM"):
-                    seg = "bse_cm"
-                elif exch in ("MCX", "MCX_FO"):
-                    seg = "mcx_fo"
-                else:
-                    seg = "nse_cm"
+                seg = resolve_kotak_exchange_segment(p.exchange, p.symbol)
                 neo_tokens.append(f"{seg}|{p.token}")
 
         if neo_tokens:

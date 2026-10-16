@@ -44,57 +44,14 @@ async def exit_axisdirect(pos: Position, cred: Credential) -> bool:
         if public_key:
             cred.public_key = public_key
 
-    # 1. Transaction side inversion: closing BUY requires 'SELL', closing SELL requires 'BUY'
-    txn_type = "SELL" if pos.quantity > 0 else "BUY"
-    qty = abs(int(pos.quantity))
-
-    # 2. Segment & Exchange format resolution
-    exch_upper = str(pos.exchange or "").upper().strip()
-    sym_upper = str(pos.symbol or "").upper().strip()
-    is_derivative = exch_upper in ("NFO", "BFO", "NSE_FO", "BSE_FO") or any(
-        x in sym_upper for x in ("-CE", "-PE", " CE", " PE", " FUT", "-FUT")
-    )
-    seg = "FO" if is_derivative else "EQ"
-
-    if "_" in exch_upper:
-        exchange_formatted = exch_upper
-    elif is_derivative:
-        exchange_formatted = "BSE_FO" if ("BSE" in exch_upper or "BFO" in exch_upper) else "NSE_FO"
-    else:
-        exchange_formatted = "BSE_EQ" if ("BSE" in exch_upper) else "NSE_EQ"
-
-    # 3. CRITICAL SAFEGUARD — Market Protection Pricing (MPP) for Options
-    # Raw Market orders on Axis Options are rejected by broker or incur extreme slippage.
-    # Enforce Limit order at current LTP (fallback to entry avg_price if LTP unavailable).
-    is_option = any(x in sym_upper for x in ("-CE", "-PE", " CE", " PE")) or exch_upper in ("NFO", "BFO")
-    if is_option:
-        order_price = float(pos.ltp) if pos.ltp > 0 else float(pos.avg_price)
-        order_price = round(order_price, 2)
-    else:
-        order_price = 0.0
-
-    from execution.axis_instruments import get_axis_script_id
-    script_id = str(pos.token or "").strip()
-    if not script_id.isdigit():
-        script_id = get_axis_script_id(pos.symbol) or script_id or str(pos.symbol)
-    order_ref_id = str(uuid.uuid4())[:15]
-
-    order_values = {
-        "orderRefId": order_ref_id,
-        "segment": seg,
-        "exchange": exchange_formatted,
-        "scriptId": script_id,
-        "transactionType": txn_type,
-        "productType": "DELIVERY",
-        "orderType": "RL",
-        "totalQty": qty,
-        "disclosedQty": 0,
-        "orderPrice": order_price,
-        "triggerPrice": 0.0,
-        "validityType": "DAY",
-        "validityDays": 1,
-        "isAmo": False,
-    }
+    from execution.payload_master import PayloadMaster
+    order_values = PayloadMaster.build_axis_payload(pos, cred)
+    txn_type = order_values.get("transactionType", "")
+    qty = order_values.get("totalQty", 0)
+    order_price = order_values.get("orderPrice", 0.0)
+    seg = order_values.get("segment", "")
+    exchange_formatted = order_values.get("exchange", "")
+    is_option = order_price > 0.0
 
     url = f"{AXIS_INVEST_BASE_URL.rstrip('/')}/trading/orders/place-order"
 

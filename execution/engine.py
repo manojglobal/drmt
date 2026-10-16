@@ -105,21 +105,43 @@ _recently_exited_positions: Dict[str, float] = {}
 
 def mark_position_as_exited(position_id: str):
     """Registers a position as successfully exited to prevent stale in-flight scan echoes from restoring it."""
-    if position_id:
-        _recently_exited_positions[str(position_id)] = time.monotonic()
+    if not position_id:
+        return
+    now = time.monotonic()
+    pos_str = str(position_id).strip()
+    _recently_exited_positions[pos_str] = now
+    _recently_exited_positions[pos_str.upper()] = now
+
+    parts = pos_str.split(":")
+    if len(parts) >= 3:
+        cid = parts[1].strip().upper()
+        sym = parts[2].strip().upper()
+        _recently_exited_positions[f"{cid}:{sym}"] = now
+        base_sym = sym.replace("-EQ", "")
+        _recently_exited_positions[f"{cid}:{base_sym}"] = now
 
 
 def is_recently_exited(position_id: str, ttl_seconds: float = 20.0) -> bool:
     """Checks whether a position was recently exited within the TTL window."""
     if not position_id:
         return False
-    ts = _recently_exited_positions.get(str(position_id))
-    if not ts:
-        return False
     now = time.monotonic()
-    if (now - ts) < ttl_seconds:
-        return True
-    _recently_exited_positions.pop(str(position_id), None)
+    pos_str = str(position_id).strip()
+
+    for key in (pos_str, pos_str.upper()):
+        ts = _recently_exited_positions.get(key)
+        if ts and (now - ts) < ttl_seconds:
+            return True
+
+    parts = pos_str.split(":")
+    if len(parts) >= 3:
+        cid = parts[1].strip().upper()
+        sym = parts[2].strip().upper()
+        for k in (f"{cid}:{sym}", f"{cid}:{sym.replace('-EQ', '')}"):
+            ts = _recently_exited_positions.get(k)
+            if ts and (now - ts) < ttl_seconds:
+                return True
+
     return False
 
 
@@ -130,3 +152,4 @@ def get_recently_exited_ids(ttl_seconds: float = 20.0) -> set:
     for k in expired:
         _recently_exited_positions.pop(k, None)
     return set(_recently_exited_positions.keys())
+
