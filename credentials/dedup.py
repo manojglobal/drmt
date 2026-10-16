@@ -24,8 +24,8 @@ async def save_working_credential(cred: Credential) -> None:
         # Now UPSERT the working credential
         upsert_query = """
             INSERT INTO credentials 
-            (broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, sid, base_url, sub_account_id, public_key, refresh_token)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working', ?, ?, ?, ?, ?, ?, ?)
+            (broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, sid, base_url, sub_account_id, public_key, refresh_token, mobile_number, mpin)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working', ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(fingerprint) DO UPDATE SET
                 status = 'working',
                 token = excluded.token,
@@ -36,8 +36,10 @@ async def save_working_credential(cred: Credential) -> None:
                 sid = COALESCE(excluded.sid, credentials.sid),
                 base_url = COALESCE(excluded.base_url, credentials.base_url),
                 sub_account_id = COALESCE(excluded.sub_account_id, credentials.sub_account_id),
-                public_key = COALESCE(excluded.public_key, credentials.public_key),
-                refresh_token = COALESCE(excluded.refresh_token, credentials.refresh_token)
+                public_key = CASE WHEN excluded.public_key != '' THEN excluded.public_key ELSE credentials.public_key END,
+                refresh_token = CASE WHEN excluded.refresh_token != '' THEN excluded.refresh_token ELSE credentials.refresh_token END,
+                mobile_number = COALESCE(excluded.mobile_number, credentials.mobile_number),
+                mpin = COALESCE(excluded.mpin, credentials.mpin)
         """
         await db.execute(upsert_query, (
             cred.broker, cred.client_id, cred.api_key, cred.api_secret, cred.totp_secret, 
@@ -48,6 +50,8 @@ async def save_working_credential(cred: Credential) -> None:
             getattr(cred, "sub_account_id", "") or "",
             getattr(cred, "public_key", "") or "",
             getattr(cred, "refresh_token", "") or "",
+            getattr(cred, "mobile_number", "") or "",
+            getattr(cred, "mpin", "") or "",
         ))
         
         await db.commit()

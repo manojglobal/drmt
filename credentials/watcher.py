@@ -165,7 +165,9 @@ async def run_blocked_credentials_check_iteration() -> int:
             base_url=fresh_data.get("base_url", ""),
             sub_account_id=fresh_data.get("sub_account_id", ""),
             public_key=fresh_data.get("public_key", ""),
-            refresh_token=fresh_data.get("refresh_token", "")
+            refresh_token=fresh_data.get("refresh_token", ""),
+            mobile_number=fresh_data.get("mobile_number", ""),
+            mpin=fresh_data.get("mpin", ""),
         )
 
         user_email = get_client_email(client_id)

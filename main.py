@@ -35,24 +35,31 @@ async def seed_admin_user():
 async def display_configured_credentials():
     """Logs only configured and verified broker credentials to the terminal on startup."""
     configured_cids = get_configured_client_ids()
+    if not configured_cids:
+        await logger_system.info("⚠️  No active broker credentials configured.")
+        return
+
+    placeholders = ",".join("?" for _ in configured_cids)
     async with get_db() as db:
         db.row_factory = None
-        query = """
-            SELECT broker, client_id, static_ip, status
+        query = f"""
+            SELECT broker, client_id, static_ip, status, api_key, token
             FROM credentials 
             WHERE status = 'working' 
               AND UPPER(broker) != 'FAKE' 
-              AND client_id IS NOT NULL 
-              AND TRIM(client_id) != ''
+              AND client_id IN ({placeholders})
             ORDER BY broker, client_id
         """
-        async with db.execute(query) as cursor:
+        async with db.execute(query, list(configured_cids)) as cursor:
             rows = await cursor.fetchall()
             
-    filtered_rows = [r for r in rows if not configured_cids or r[1] in configured_cids]
+    filtered_rows = [
+        r for r in rows 
+        if r[1] in configured_cids and (r[4] or r[5])
+    ]
     if filtered_rows:
         await logger_system.info(f"─── [DRMT] Configured Broker Credentials ({len(filtered_rows)} Active) ───")
-        for broker, client_id, static_ip, status in filtered_rows:
+        for broker, client_id, static_ip, status, api_key, token in filtered_rows:
             name = get_client_username(client_id)
             ip_str = f" | IP: {static_ip}" if static_ip else ""
             name_str = f" | Name: {name}" if name and name != client_id else ""
@@ -65,22 +72,26 @@ async def authenticate_configured_credentials():
     """Authenticates configured broker accounts on startup."""
     from position.chronos import refresh_token_with_backoff
     from models.schemas import Credential
+    from credentials.dynamic_loader import get_dynamic_credentials
     configured_cids = get_configured_client_ids()
+    if not configured_cids:
+        return [], [], []
+
+    placeholders = ",".join("?" for _ in configured_cids)
     async with get_db() as db:
         db.row_factory = None
-        query = """
-            SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, sid, base_url, sub_account_id, public_key, refresh_token
+        query = f"""
+            SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, sid, base_url, sub_account_id, public_key, refresh_token, mobile_number, mpin
             FROM credentials 
             WHERE status = 'working' 
               AND UPPER(broker) != 'FAKE' 
-              AND client_id IS NOT NULL 
-              AND TRIM(client_id) != ''
+              AND client_id IN ({placeholders})
             ORDER BY broker, client_id
         """
-        async with db.execute(query) as cursor:
+        async with db.execute(query, list(configured_cids)) as cursor:
             rows = await cursor.fetchall()
             
-    filtered = [r for r in rows if not configured_cids or r[2] in configured_cids]
+    filtered = [r for r in rows if r[2] in configured_cids]
     if not filtered:
         return [], [], []
         
@@ -100,12 +111,16 @@ async def authenticate_configured_credentials():
             sub_acc_val = r[14] if len(r) > 14 else ""
             pub_key_val = r[15] if len(r) > 15 else ""
             ref_tok_val = r[16] if len(r) > 16 else ""
+            dyn_data = get_dynamic_credentials(r[2]) or {}
+            mob_val = r[17] if len(r) > 17 and r[17] else dyn_data.get("mobile_number") or ""
+            mpin_val = r[18] if len(r) > 18 and r[18] else dyn_data.get("mpin") or ""
             cred = Credential(
                 id=r[0], broker=r[1], client_id=r[2], api_key=r[3] or "", api_secret=r[4] or "",
                 totp_secret=r[5] or "", password=r[6] or "", static_ip=r[7] or "",
                 fingerprint=r[8], status=r[9], token=r[10] or "", token_updated_at=r[11],
                 sid=sid_val or "", base_url=base_url_val or "",
-                sub_account_id=sub_acc_val or "", public_key=pub_key_val or "", refresh_token=ref_tok_val or ""
+                sub_account_id=sub_acc_val or "", public_key=pub_key_val or "", refresh_token=ref_tok_val or "",
+                mobile_number=mob_val, mpin=mpin_val
             )
             acc_label = f"{cred.broker}:{cred.client_id}"
             user_email = get_client_email(cred.client_id)
@@ -179,7 +194,11 @@ async def on_startup(app: web.Application):
     asyncio.create_task(start_log_cleanup_loop(retention_days=30), name="log_retention_cleanup")
     
     # 10. Start Daily Morning Credential Refresh Scheduler (09:10 AM IST)
-    from credentials.scheduler import start_daily_credential_scheduler, start_market_close_report_scheduler
+    from credentials.scheduler import (
+        start_daily_credential_scheduler,
+        start_market_close_report_scheduler,
+        start_axis_token_refresh_worker,
+    )
     app["daily_scheduler_task"] = asyncio.create_task(start_daily_credential_scheduler(), name="daily_credential_scheduler")
     
     # 11. Start Market-Close Email Report Scheduler (03:30 PM IST)
@@ -193,6 +212,12 @@ async def on_startup(app: web.Application):
     app["blocked_watcher_task"] = asyncio.create_task(
         start_blocked_credentials_watcher(interval_seconds=settings.BLOCKED_RECHECK_INTERVAL_SEC),
         name="blocked_credentials_watcher"
+    )
+
+    # 13. Start Axis Direct 13-Minute Silent Token Refresh Worker (Mon-Fri 08:30-16:00 IST)
+    app["axis_refresh_task"] = asyncio.create_task(
+        start_axis_token_refresh_worker(interval_seconds=780),
+        name="axis_token_refresh_worker"
     )
     
     await logger_system.info("Application startup complete.")
@@ -218,6 +243,10 @@ async def on_cleanup(app: web.Application):
     # 5. Stop Blocked Credentials Watcher Task
     if "blocked_watcher_task" in app and not app["blocked_watcher_task"].done():
         app["blocked_watcher_task"].cancel()
+
+    # 6. Stop Axis Token Refresh Worker Task
+    if "axis_refresh_task" in app and not app["axis_refresh_task"].done():
+        app["axis_refresh_task"].cancel()
     
     # DB Pool is managed by context managers, but we can assume safe closure as connections complete.
     await logger_system.info("Application shutdown complete.")

@@ -11,12 +11,21 @@ from execution.mstock_instruments import ensure_mstock_instruments_cached
 from credentials.fyers import get_fyers_auth_header
 from credentials.kotakneo import get_kotak_headers, get_kotak_base_url
 from credentials.axisdirect import send_axis_api_request, get_axis_public_key, AXIS_INVEST_BASE_URL
+from execution.axis_instruments import (
+    ensure_axis_instruments_cached,
+    get_axis_trading_symbol,
+    get_axis_close_price,
+    fetch_axis_quotes,
+)
 from logger.logger import logger_system, logger_monitor
 
 logger = logging.getLogger("DRMT.SCM")
 
 # Tracks last raw payload to avoid redundant log spam when positions are unchanged
 _last_raw_payloads: Dict[str, str] = {}
+
+# In-memory entry price cache for Axis Direct positions to prevent floating LTP overwrite
+_axis_entry_prices: Dict[str, float] = {}
 
 async def poll_mstock(cred: Credential) -> List[Position]:
     """MStock Position Polling via DRMT Proxy."""
@@ -321,11 +330,12 @@ async def poll_kotakneo(cred: Credential) -> List[Position]:
             stat = str(resp.get("stat") or "").strip().lower()
             st_code = resp.get("stCode")
             err_msg = str(resp.get("errMsg") or resp.get("message") or "")
-            if st_code in (100010, 401, 100008, 403, 1037) or stat == "not_ok":
+            is_no_data = "no data" in err_msg.lower() or "no data" in stat
+            if not is_no_data and (st_code in (100010, 401, 100008, 403, 1037) or stat == "not_ok"):
                 raise PermissionError(
                     f"Kotak Neo Auth Error: Invalid/Expired session (stCode={st_code}, msg={err_msg or 'Session expired'})"
                 )
-            raw_list = resp.get("data") or []
+            raw_list = [] if is_no_data else (resp.get("data") or [])
             if not isinstance(raw_list, list):
                 raw_list = [raw_list] if raw_list else []
         elif isinstance(resp, list):
@@ -341,7 +351,79 @@ async def poll_kotakneo(cred: Credential) -> List[Position]:
         else:
             _last_raw_payloads.pop(f"kotak:{cred.client_id}", None)
 
-        return PositionManager.normalize_positions(raw_list, cred.broker, cred.client_id)
+        positions = PositionManager.normalize_positions(raw_list, cred.broker, cred.client_id)
+        if not positions:
+            return positions
+
+        # Batch fetch real-time market LTP via Kotak Neo quotes endpoint
+        neo_tokens = []
+        for p in positions:
+            if p.token:
+                exch = str(p.exchange or "").upper().strip()
+                if exch in ("NFO", "NSE_FO"):
+                    seg = "nse_fo"
+                elif exch in ("BFO", "BSE_FO"):
+                    seg = "bse_fo"
+                elif exch in ("BSE", "BSE_CM"):
+                    seg = "bse_cm"
+                elif exch in ("MCX", "MCX_FO"):
+                    seg = "mcx_fo"
+                else:
+                    seg = "nse_cm"
+                neo_tokens.append(f"{seg}|{p.token}")
+
+        if neo_tokens:
+            try:
+                sym_str = ",".join(neo_tokens[:50])
+                quote_url = f"{base_url}/script-details/1.0/quotes/neosymbol/{sym_str}/ltp"
+                if cred.static_ip:
+                    quote_resp = await asyncio.wait_for(
+                        proxy_request("GET", quote_url, str(cred.static_ip), headers=headers),
+                        timeout=2.0
+                    )
+                else:
+                    session = core_engine.http_session
+                    if session:
+                        async with session.get(quote_url, headers=headers) as qr:
+                            quote_resp = await qr.json(content_type=None)
+                    else:
+                        quote_resp = None
+
+                items = quote_resp if isinstance(quote_resp, list) else (quote_resp.get("data") if isinstance(quote_resp, dict) else [])
+                if isinstance(items, list):
+                    ltp_map = {}
+                    for item in items:
+                        if isinstance(item, dict):
+                            t_id = str(item.get("exchange_token") or item.get("instrument_token") or "").strip()
+                            lp = item.get("ltp")
+                            if t_id and lp is not None:
+                                try:
+                                    ltp_map[t_id] = float(lp)
+                                except (ValueError, TypeError):
+                                    pass
+                    for p in positions:
+                        if p.token in ltp_map and ltp_map[p.token] > 0:
+                            p.ltp = round(ltp_map[p.token], 2)
+                        elif p.ltp == 0.0 and p.avg_price > 0:
+                            p.ltp = p.avg_price
+
+                        if p.avg_price > 0 and p.ltp > 0 and p.quantity != 0:
+                            if p.transaction_type == "BUY":
+                                p.pnl = round((p.ltp - p.avg_price) * abs(p.quantity), 2)
+                            else:
+                                p.pnl = round((p.avg_price - p.ltp) * abs(p.quantity), 2)
+            except Exception as e:
+                logger.debug(f"Could not fetch Kotak Neo quotes for {cred.client_id}: {e}")
+                for p in positions:
+                    if p.ltp == 0.0 and p.avg_price > 0:
+                        p.ltp = p.avg_price
+                    if p.avg_price > 0 and p.ltp > 0 and p.quantity != 0:
+                        if p.transaction_type == "BUY":
+                            p.pnl = round((p.ltp - p.avg_price) * abs(p.quantity), 2)
+                        else:
+                            p.pnl = round((p.avg_price - p.ltp) * abs(p.quantity), 2)
+
+        return positions
     except Exception as e:
         if "401" in str(e) or "403" in str(e) or "100010" in str(e) or isinstance(e, PermissionError):
             raise PermissionError(f"Kotak Neo Auth Error: {e}")
@@ -349,7 +431,7 @@ async def poll_kotakneo(cred: Credential) -> List[Position]:
 
 
 async def poll_axisdirect(cred: Credential) -> List[Position]:
-    """Axis Direct Position Polling via Rapid API / get-order-book."""
+    """Axis Direct Position Polling via RAPID API (get-positions with order-book fallback)."""
     api_client_id = cred.api_key or ""
     authorization_key = cred.api_secret or ""
     sub_account_id = getattr(cred, "sub_account_id", "") or cred.client_id or ""
@@ -366,8 +448,9 @@ async def poll_axisdirect(cred: Credential) -> List[Position]:
 
     all_raw_items = []
     try:
+        # 1. First probe portfolio positions endpoint
         for seg in ("FO", "EQ"):
-            url = f"{AXIS_INVEST_BASE_URL.rstrip('/')}/trading/orders/get-order-book"
+            url = f"{AXIS_INVEST_BASE_URL.rstrip('/')}/trading/portfolio/get-positions"
             status_code, resp = await send_axis_api_request(
                 method="POST",
                 url=url,
@@ -377,7 +460,7 @@ async def poll_axisdirect(cred: Credential) -> List[Position]:
                 sub_account_id=sub_account_id,
                 access_token=access_token,
                 public_key=public_key,
-                body={"segment": seg},
+                body={"segment": seg, "interop": True, "type": "open"},
             )
 
             err_dict = resp.get("error", {}) if isinstance(resp, dict) else {}
@@ -387,16 +470,67 @@ async def poll_axisdirect(cred: Credential) -> List[Position]:
                     f"Axis Direct Auth Error for {cred.client_id} (code={err_code or status_code}): {err_dict.get('message', 'Session expired')}"
                 )
 
-            data = resp.get("data") if isinstance(resp, dict) else {}
-            items = data.get("orders") or data.get("positions") or [] if isinstance(data, dict) else []
+            data = resp.get("data") if isinstance(resp, dict) else resp
+            items = []
+            if isinstance(data, list):
+                items = data
+            elif isinstance(data, dict):
+                items = data.get("positions") or data.get("positionList") or data.get("data") or []
+                if not isinstance(items, list):
+                    items = [items] if items else []
+
             if isinstance(items, list):
                 all_raw_items.extend(items)
+
+        # 2. If portfolio positions were empty or returned 404, fallback to order-book to derive positions
+        if not all_raw_items:
+            for seg in ("FO", "EQ"):
+                ob_url = f"{AXIS_INVEST_BASE_URL.rstrip('/')}/trading/orders/get-order-book"
+                status_code, ob_resp = await send_axis_api_request(
+                    method="POST",
+                    url=ob_url,
+                    static_ip=str(cred.static_ip or ""),
+                    authorization_key=authorization_key,
+                    api_client_id=api_client_id,
+                    sub_account_id=sub_account_id,
+                    access_token=access_token,
+                    public_key=public_key,
+                    body={"segment": seg, "omsOrderId": "", "orderStatus": "-1"},
+                )
+                err_dict = ob_resp.get("error", {}) if isinstance(ob_resp, dict) else {}
+                err_code = str(err_dict.get("code") or "")
+                if status_code in (401, 403) or err_code in ("1081", "1082", "1200", "1002", "1003"):
+                    raise PermissionError(
+                        f"Axis Direct Auth Error for {cred.client_id} (code={err_code or status_code}): {err_dict.get('message', 'Session expired')}"
+                    )
+
+                ob_data = ob_resp.get("data") if isinstance(ob_resp, dict) else ob_resp
+                ob_orders = []
+                if isinstance(ob_data, dict):
+                    ob_orders = ob_data.get("orders") or []
+                elif isinstance(ob_data, list):
+                    ob_orders = ob_data
+                if isinstance(ob_orders, list):
+                    all_raw_items.extend(ob_orders)
 
         # If orderbook orders, derive open net positions from executed trades
         positions_to_normalize = []
         if all_raw_items and any("orderStatus" in x or "omsOrderId" in x for x in all_raw_items if isinstance(x, dict)):
-            order_groups: Dict[str, Dict[str, Any]] = {}
+            # Deduplicate raw order records by unique order identifier (omsOrderId / orderRefId)
+            seen_order_ids = set()
+            unique_orders = []
             for o in all_raw_items:
+                if not isinstance(o, dict):
+                    continue
+                oid = str(o.get("omsOrderId") or o.get("orderRefId") or o.get("exchangeOrderId") or "").strip()
+                if oid:
+                    if oid in seen_order_ids:
+                        continue
+                    seen_order_ids.add(oid)
+                unique_orders.append(o)
+
+            order_groups: Dict[str, Dict[str, Any]] = {}
+            for o in unique_orders:
                 if not isinstance(o, dict):
                     continue
                 st = str(o.get("orderStatus") or "").upper()
@@ -409,7 +543,47 @@ async def poll_axisdirect(cred: Credential) -> List[Position]:
                 key = f"{exch}:{sym}"
                 txn = str(o.get("transactionType") or "").upper()
                 qty = float(o.get("executedQty") or o.get("tradeQty") or o.get("totalQty") or 0)
-                price = float(o.get("tradedPrice") or o.get("tradePrice") or o.get("orderPrice") or 0)
+                
+                # Extract executed price across multiple potential broker keys (both camelCase and snake_case)
+                price = 0.0
+                for pk in (
+                    "average_price", "avg_price", "averagePrice", "avgPrice",
+                    "tradedPrice", "tradePrice", "traded_price", "trade_price",
+                    "executionPrice", "execution_price", "executedPrice", "executed_price",
+                    "orderPrice", "order_price", "price", "rate", "costPrice", "buyAvgPrice"
+                ):
+                    pv = o.get(pk)
+                    if pv is not None:
+                        try:
+                            fp = float(pv)
+                            if fp > 0:
+                                price = fp
+                                break
+                        except (ValueError, TypeError):
+                            pass
+
+                # Also inspect nested trade details if present in order record
+                if price == 0.0:
+                    for nested_k in ("tradeDetails", "executedDetails", "trades", "orderDetails", "fillDetails"):
+                        nested_items = o.get(nested_k)
+                        if isinstance(nested_items, list) and nested_items:
+                            for n_item in nested_items:
+                                if isinstance(n_item, dict):
+                                    for npk in ("tradePrice", "tradedPrice", "price", "rate", "avgPrice", "averagePrice"):
+                                        nv = n_item.get(npk)
+                                        if nv is not None:
+                                            try:
+                                                fp = float(nv)
+                                                if fp > 0:
+                                                    price = fp
+                                                    break
+                                            except (ValueError, TypeError):
+                                                pass
+                                if price > 0:
+                                    break
+                        if price > 0:
+                            break
+
                 prod = str(o.get("productType") or "DELIVERY").strip()
 
                 if key not in order_groups:
@@ -447,7 +621,28 @@ async def poll_axisdirect(cred: Credential) -> List[Position]:
                         "transactionType": "BUY" if net_qty > 0 else "SELL",
                     })
         else:
-            positions_to_normalize = all_raw_items
+            # Deduplicate portfolio positions if identical items returned across segments
+            seen_pos_keys = set()
+            for it in all_raw_items:
+                if isinstance(it, dict):
+                    pkey = (str(it.get("exchange") or ""), str(it.get("scriptId") or it.get("token") or ""), str(it.get("product") or ""))
+                    if pkey != ("", "", ""):
+                        if pkey in seen_pos_keys:
+                            continue
+                        seen_pos_keys.add(pkey)
+                positions_to_normalize.append(it)
+
+        # Ensure Axis Direct Script Master is cached in Redis (non-blocking)
+        asyncio.create_task(ensure_axis_instruments_cached(cred))
+
+        # Resolve official human-readable trading symbols (e.g. 223787 -> WIPRO)
+        for p in positions_to_normalize:
+            sid = str(p.get("scriptId") or p.get("token") or "").strip()
+            if sid:
+                real_sym = await get_axis_trading_symbol(sid, str(p.get("exchange") or ""))
+                if real_sym:
+                    p["tradingSymbol"] = real_sym
+                    p["symbol"] = real_sym
 
         if positions_to_normalize:
             payload_str = json.dumps(positions_to_normalize, default=str)
@@ -457,7 +652,68 @@ async def poll_axisdirect(cred: Credential) -> List[Position]:
         else:
             _last_raw_payloads.pop(f"axis:{cred.client_id}", None)
 
-        return PositionManager.normalize_positions(positions_to_normalize, cred.broker, cred.client_id)
+        positions = PositionManager.normalize_positions(positions_to_normalize, cred.broker, cred.client_id)
+
+        # Batch fetch real-time market LTP via Axis Direct feed quote API
+        token_ids = [str(p.token) for p in positions if p.token]
+        if token_ids:
+            try:
+                ltp_map = await asyncio.wait_for(
+                    fetch_axis_quotes(token_ids, cred),
+                    timeout=2.0
+                )
+                for p in positions:
+                    ltp_val = ltp_map.get(str(p.token))
+                    if not ltp_val or ltp_val <= 0:
+                        # Fallback to previous close price from security master
+                        ltp_val = get_axis_close_price(str(p.token))
+
+                    if ltp_val and ltp_val > 0:
+                        p.ltp = round(float(ltp_val), 2)
+
+                    # Manage entry price persistence to prevent it from floating with live LTP
+                    cache_key = f"{cred.client_id}:{p.token}"
+                    if p.avg_price > 0:
+                        _axis_entry_prices[cache_key] = p.avg_price
+                    elif cache_key in _axis_entry_prices and _axis_entry_prices[cache_key] > 0:
+                        p.avg_price = _axis_entry_prices[cache_key]
+                    else:
+                        # Initial entry price fallback: prefer previous close price, then first live LTP
+                        cp = get_axis_close_price(str(p.token))
+                        init_price = cp if cp > 0 else p.ltp
+                        if init_price > 0:
+                            p.avg_price = round(float(init_price), 2)
+                            _axis_entry_prices[cache_key] = p.avg_price
+
+                    if p.ltp > 0 and p.avg_price > 0 and p.quantity != 0:
+                        if p.transaction_type == "BUY":
+                            p.pnl = round((p.ltp - p.avg_price) * abs(p.quantity), 2)
+                        else:
+                            p.pnl = round((p.avg_price - p.ltp) * abs(p.quantity), 2)
+            except Exception as e:
+                logger.debug(f"Could not fetch Axis quotes: {e}")
+                for p in positions:
+                    cache_key = f"{cred.client_id}:{p.token}"
+                    if p.ltp == 0.0:
+                        cp = get_axis_close_price(str(p.token))
+                        if cp > 0:
+                            p.ltp = cp
+
+                    if p.avg_price > 0:
+                        _axis_entry_prices[cache_key] = p.avg_price
+                    elif cache_key in _axis_entry_prices and _axis_entry_prices[cache_key] > 0:
+                        p.avg_price = _axis_entry_prices[cache_key]
+                    elif p.ltp > 0:
+                        p.avg_price = p.ltp
+                        _axis_entry_prices[cache_key] = p.avg_price
+
+                    if p.ltp > 0 and p.avg_price > 0 and p.quantity != 0:
+                        if p.transaction_type == "BUY":
+                            p.pnl = round((p.ltp - p.avg_price) * abs(p.quantity), 2)
+                        else:
+                            p.pnl = round((p.avg_price - p.ltp) * abs(p.quantity), 2)
+
+        return positions
     except Exception as e:
         if "401" in str(e) or "403" in str(e) or isinstance(e, PermissionError):
             raise PermissionError(f"Axis Direct Auth Error: {e}")

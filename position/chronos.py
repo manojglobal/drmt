@@ -156,6 +156,16 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                                 c.password = fresh["password"]
                             if fresh.get("totp_secret") and fresh["totp_secret"] != c.totp_secret:
                                 c.totp_secret = fresh["totp_secret"]
+                            if fresh.get("sub_account_id") and fresh["sub_account_id"] != getattr(c, "sub_account_id", ""):
+                                c.sub_account_id = fresh["sub_account_id"]
+                            if fresh.get("public_key") and fresh["public_key"] != getattr(c, "public_key", ""):
+                                c.public_key = fresh["public_key"]
+                            if fresh.get("refresh_token") and fresh["refresh_token"] != getattr(c, "refresh_token", ""):
+                                c.refresh_token = fresh["refresh_token"]
+                            if fresh.get("static_ip") and fresh["static_ip"] != getattr(c, "static_ip", ""):
+                                c.static_ip = fresh["static_ip"]
+                            if fresh.get("mobile_number") and fresh["mobile_number"] != getattr(c, "mobile_number", ""):
+                                c.mobile_number = fresh["mobile_number"]
                     except Exception:
                         pass
 
@@ -228,6 +238,9 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                 for res in poll_batch:
                     if isinstance(res, list):
                         new_data_models.extend(res)
+                
+                from execution.engine import is_recently_exited
+                new_data_models = [p for p in new_data_models if not is_recently_exited(p.id)]
                 
                 target_count = len(new_data_models) if new_data_models else len(credentials)
                 await logger_system.info(f"─── [POSITION SCAN] Scanned {target_count} Targets in {poll_duration_ms:.1f}ms ───")

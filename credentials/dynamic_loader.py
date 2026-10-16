@@ -160,7 +160,14 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
         except Exception:
             continue
 
-        client_id = creds_json.get("client_id")
+        client_id = (
+            creds_json.get("client_id")
+            or creds_json.get("sub_account_id")
+            or creds_json.get("subAccountId")
+            or creds_json.get("api_client_id")
+            or creds_json.get("clientcode")
+            or creds_json.get("uid")
+        )
         if not client_id:
             continue
 
@@ -250,6 +257,8 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
             "sub_account_id": creds_json.get("sub_account_id") or creds_json.get("subAccountId") or "",
             "public_key": creds_json.get("public_key") or creds_json.get("publicKey") or "",
             "refresh_token": creds_json.get("refresh_token") or creds_json.get("refreshToken") or "",
+            "mobile_number": (creds_json.get("mobile_number") or creds_json.get("phone_number") or "").strip(),
+            "mpin": str(creds_json.get("mpin") or "").strip(),
         }
         new_client_creds[client_id] = cred_record
 
@@ -279,17 +288,17 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
             fingerprint = f"{rec['broker']}:{rec['client_id']}"
             upsert_query = """
                 INSERT INTO credentials 
-                (broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, user_id, sid, base_url, sub_account_id, public_key, refresh_token)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working', ?, datetime('now', 'localtime'), ?, ?, ?, ?, ?, ?)
+                (broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, user_id, sid, base_url, sub_account_id, public_key, refresh_token, mobile_number, mpin)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working', ?, datetime('now', 'localtime'), ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(fingerprint) DO UPDATE SET
                     status = 'working',
                     token = CASE 
-                        WHEN credentials.token IS NOT NULL AND credentials.token != '' THEN credentials.token 
-                        ELSE excluded.token 
+                        WHEN excluded.token IS NOT NULL AND excluded.token != '' THEN excluded.token 
+                        ELSE credentials.token 
                     END,
                     token_updated_at = CASE 
-                        WHEN credentials.token IS NOT NULL AND credentials.token != '' THEN credentials.token_updated_at 
-                        ELSE excluded.token_updated_at 
+                        WHEN excluded.token IS NOT NULL AND excluded.token != '' THEN excluded.token_updated_at 
+                        ELSE credentials.token_updated_at 
                     END,
                     api_key = excluded.api_key,
                     api_secret = excluded.api_secret,
@@ -300,8 +309,10 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
                     sid = COALESCE(excluded.sid, credentials.sid),
                     base_url = COALESCE(excluded.base_url, credentials.base_url),
                     sub_account_id = COALESCE(excluded.sub_account_id, credentials.sub_account_id),
-                    public_key = COALESCE(excluded.public_key, credentials.public_key),
-                    refresh_token = COALESCE(excluded.refresh_token, credentials.refresh_token)
+                    public_key = CASE WHEN excluded.public_key != '' THEN excluded.public_key ELSE credentials.public_key END,
+                    refresh_token = CASE WHEN excluded.refresh_token != '' THEN excluded.refresh_token ELSE credentials.refresh_token END,
+                    mobile_number = COALESCE(excluded.mobile_number, credentials.mobile_number),
+                    mpin = COALESCE(excluded.mpin, credentials.mpin)
             """
             await db.execute(upsert_query, (
                 rec["broker"],
@@ -319,8 +330,23 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
                 rec.get("sub_account_id", ""),
                 rec.get("public_key", ""),
                 rec.get("refresh_token", ""),
+                rec.get("mobile_number", ""),
+                rec.get("mpin", ""),
             ))
             upserted_count += 1
+
+        # Mark credentials in SQLite not present in active CSV as archived
+        if new_configured_cids:
+            placeholders = ",".join("?" for _ in new_configured_cids)
+            archive_query = f"""
+                UPDATE credentials 
+                SET status = 'archived' 
+                WHERE status = 'working' 
+                  AND UPPER(broker) != 'FAKE'
+                  AND client_id NOT IN ({placeholders})
+            """
+            await db.execute(archive_query, list(new_configured_cids))
+
         await db.commit()
 
     logger.info(f"✅ Successfully synced {upserted_count} credentials from remote CSV into SQLite.")
@@ -334,7 +360,7 @@ async def _fallback_load_from_db():
     try:
         async with get_db() as db:
             query = """
-                SELECT client_id, broker, password, api_key, api_secret, totp_secret, static_ip, token, user_id, sid, base_url, sub_account_id, public_key, refresh_token
+                SELECT client_id, broker, password, api_key, api_secret, totp_secret, static_ip, token, user_id, sid, base_url, sub_account_id, public_key, refresh_token, mobile_number, mpin
                 FROM credentials
                 WHERE status = 'working' AND client_id IS NOT NULL AND TRIM(client_id) != ''
             """
@@ -359,6 +385,8 @@ async def _fallback_load_from_db():
                     "sub_account_id": row[11] or "" if len(row) > 11 else "",
                     "public_key": row[12] or "" if len(row) > 12 else "",
                     "refresh_token": row[13] or "" if len(row) > 13 else "",
+                    "mobile_number": row[14] or "" if len(row) > 14 else "",
+                    "mpin": row[15] or "" if len(row) > 15 else "",
                 }
 
         from utils.user_mapping import DEFAULT_CLIENT_NAMES

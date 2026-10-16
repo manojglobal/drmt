@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import time
-from typing import List
+from typing import List, Dict
 
 from core.engine import core_engine
 from execution.aliceblue import exit_aliceblue
@@ -80,6 +80,8 @@ async def mass_exit(positions: List[Position], credentials: List[Credential]) ->
     results = list(missing_results)
     for pos, res in zip(task_positions, raw_results):
         is_success = res is True
+        if is_success and pos and pos.id:
+            mark_position_as_exited(pos.id)
         msg = "Order placed successfully" if is_success else (str(res) if isinstance(res, Exception) else "Broker rejected exit order")
         results.append({
             "broker": pos.broker,
@@ -95,3 +97,36 @@ async def mass_exit(positions: List[Position], credentials: List[Credential]) ->
         f"🏁 [MASS EXIT COMPLETE] {success_count}/{len(positions)} order(s) placed successfully in {elapsed_ms:.1f}ms"
     )
     return success_count, results
+
+
+# In-memory cache for recently exited position IDs with TTL to prevent race condition echoes
+_recently_exited_positions: Dict[str, float] = {}
+
+
+def mark_position_as_exited(position_id: str):
+    """Registers a position as successfully exited to prevent stale in-flight scan echoes from restoring it."""
+    if position_id:
+        _recently_exited_positions[str(position_id)] = time.monotonic()
+
+
+def is_recently_exited(position_id: str, ttl_seconds: float = 20.0) -> bool:
+    """Checks whether a position was recently exited within the TTL window."""
+    if not position_id:
+        return False
+    ts = _recently_exited_positions.get(str(position_id))
+    if not ts:
+        return False
+    now = time.monotonic()
+    if (now - ts) < ttl_seconds:
+        return True
+    _recently_exited_positions.pop(str(position_id), None)
+    return False
+
+
+def get_recently_exited_ids(ttl_seconds: float = 20.0) -> set:
+    """Returns the set of active recently exited position IDs."""
+    now = time.monotonic()
+    expired = [k for k, ts in _recently_exited_positions.items() if (now - ts) >= ttl_seconds]
+    for k in expired:
+        _recently_exited_positions.pop(k, None)
+    return set(_recently_exited_positions.keys())

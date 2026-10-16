@@ -73,7 +73,10 @@ async def exit_axisdirect(pos: Position, cred: Credential) -> bool:
     else:
         order_price = 0.0
 
-    script_id = str(pos.token or pos.symbol)
+    from execution.axis_instruments import get_axis_script_id
+    script_id = str(pos.token or "").strip()
+    if not script_id.isdigit():
+        script_id = get_axis_script_id(pos.symbol) or script_id or str(pos.symbol)
     order_ref_id = str(uuid.uuid4())[:15]
 
     order_values = {

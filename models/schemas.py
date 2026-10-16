@@ -32,6 +32,8 @@ class Credential(BaseModel):
     sub_account_id: Optional[str] = ""
     public_key: Optional[str] = ""
     refresh_token: Optional[str] = Field(default="", exclude=True)
+    mobile_number: Optional[str] = Field(default="", exclude=True)
+    mpin: Optional[str] = Field(default="", exclude=True)
 
 class ExitHistory(BaseModel):
     id: Optional[int] = None

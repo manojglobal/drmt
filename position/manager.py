@@ -23,6 +23,7 @@ class PositionManager:
                 or raw.get("symbol")
                 or raw.get("symbolname")
                 or raw.get("tradingsymbol")
+                or raw.get("TradingSymbol")
                 or raw.get("formattedInstrumentName")
                 or raw.get("tsym")
                 or raw.get("TrdSym")
@@ -168,10 +169,14 @@ class PositionManager:
                 raw.get("netavgprc"),
                 raw.get("netprice"),
                 raw.get("avg_price"),
+                raw.get("buyAvg") if tran_type == "BUY" else raw.get("sellAvg"),
+                raw.get("buy_avg") if tran_type == "BUY" else raw.get("sell_avg"),
                 raw.get("sellavgprice") if tran_type == "SELL" else raw.get("buyavgprice"),
                 raw.get("cfsellavgprice") if tran_type == "SELL" else raw.get("cfbuyavgprice"),
                 raw.get("totalsellavgprice") if tran_type == "SELL" else raw.get("totalbuyavgprice"),
                 raw.get("Price"),
+                raw.get("buyAvg"),
+                raw.get("sellAvg"),
                 raw.get("buyavgprice"),
                 raw.get("sellavgprice"),
             ]
@@ -184,6 +189,34 @@ class PositionManager:
                             break
                     except (ValueError, TypeError):
                         continue
+
+            # Fallback for brokers returning executed cash amounts and quantities (e.g. Kotak Neo)
+            if avg_price == 0.0 and ("flBuyQty" in raw or "flSellQty" in raw or "buyAmt" in raw or "sellAmt" in raw):
+                try:
+                    if tran_type == "SELL":
+                        tot_sell_amt = float(raw.get("sellAmt") or 0.0) + float(raw.get("cfSellAmt") or 0.0)
+                        tot_sell_qty = float(raw.get("flSellQty") or 0.0) + float(raw.get("cfSellQty") or 0.0)
+                        if tot_sell_qty > 0 and tot_sell_amt > 0:
+                            avg_price = round(tot_sell_amt / tot_sell_qty, 2)
+                    else:
+                        tot_buy_amt = float(raw.get("buyAmt") or 0.0) + float(raw.get("cfBuyAmt") or 0.0)
+                        tot_buy_qty = float(raw.get("flBuyQty") or 0.0) + float(raw.get("cfBuyQty") or 0.0)
+                        if tot_buy_qty > 0 and tot_buy_amt > 0:
+                            avg_price = round(tot_buy_amt / tot_buy_qty, 2)
+                except (ValueError, TypeError):
+                    pass
+
+            # Fallback to stkPrc or upldPrc if avg_price is still 0.0
+            if avg_price == 0.0:
+                for candidate in (raw.get("stkPrc"), raw.get("upldPrc")):
+                    if candidate is not None:
+                        try:
+                            val = float(candidate)
+                            if val > 0:
+                                avg_price = val
+                                break
+                        except (ValueError, TypeError):
+                            continue
 
             # Extract LTP (Last Traded Price)
             ltp = 0.0
@@ -241,14 +274,15 @@ class PositionManager:
                 raw.get("instrumentId")
                 or raw.get("token")
                 or raw.get("symboltoken")
-                or raw.get("sym")
-                or raw.get("Token")
+                or raw.get("symbolToken")
                 or raw.get("tok")
+                or raw.get("Token")
                 or raw.get("tp")
                 or raw.get("pSymbol")
                 or raw.get("scriptId")
                 or raw.get("scriptid")
                 or raw.get("id")
+                or raw.get("sym")
                 or ""
             )
             

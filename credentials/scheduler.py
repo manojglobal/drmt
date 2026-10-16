@@ -374,11 +374,13 @@ async def execute_market_close_email_report() -> dict:
     """Collects all configured user authentication states and sends the market-close report."""
     from database.db import get_db
     from position.blocklist import get_blocked_users, is_blocked
-    from utils.user_mapping import get_client_username
+    from utils.user_mapping import get_client_username, get_configured_client_ids
     from credentials.dynamic_loader import get_client_email
     from utils.email import send_email_notification, send_error_email
 
     await logger_system.info("📊 [MARKET CLOSE] Generating end-of-day authentication & credential report...")
+
+    configured_cids = get_configured_client_ids()
 
     async with get_db() as db:
         db.row_factory = None
@@ -386,12 +388,16 @@ async def execute_market_close_email_report() -> dict:
             SELECT broker, client_id, status, token, token_updated_at
             FROM credentials
             WHERE UPPER(broker) != 'FAKE'
+              AND status = 'working'
               AND client_id IS NOT NULL
               AND TRIM(client_id) != ''
             ORDER BY broker, client_id
         """
         async with db.execute(query) as cursor:
             rows = await cursor.fetchall()
+
+    if configured_cids:
+        rows = [r for r in rows if r[1] in configured_cids]
 
     blocked_dict = {str(b.get("client_id", "")).strip(): b for b in get_blocked_users()}
 
@@ -481,4 +487,83 @@ async def start_market_close_report_scheduler():
         except Exception as e:
             logger.error(f"❌ [SCHEDULER] Error in market-close scheduler loop: {e}")
             await asyncio.sleep(60.0)
+
+
+async def refresh_all_axis_direct_tokens() -> list[str]:
+    """
+    Silently refreshes 15-minute Axis Direct access tokens for all active accounts.
+    Runs every 13 minutes (Mon-Fri 08:30-16:00 IST) to keep tokens alive ahead of expiry.
+    """
+    from database.db import get_db
+    from models.schemas import Credential
+    from credentials.axisdirect import refresh_user_axis_direct_access_token
+    from credentials.dynamic_loader import get_dynamic_configured_cids, get_dynamic_credentials
+
+    configured_cids = get_dynamic_configured_cids()
+    refreshed_cids = []
+
+    async with get_db() as db:
+        db.row_factory = None
+        async with db.execute(
+            """
+            SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, sid, base_url, sub_account_id, public_key, refresh_token, mobile_number, mpin
+            FROM credentials
+            WHERE UPPER(broker) IN ('AXIS', 'AXIS DIRECT', 'AXISDIRECT')
+              AND status = 'working'
+            """
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+    for r in rows:
+        cid = str(r[2] or "").strip()
+        if configured_cids and cid not in configured_cids:
+            continue
+
+        dyn = get_dynamic_credentials(cid) or {}
+        mob_val = r[17] if len(r) > 17 and r[17] else dyn.get("mobile_number", "")
+        mpin_val = r[18] if len(r) > 18 and r[18] else dyn.get("mpin", "")
+
+        cred = Credential(
+            id=r[0], broker=r[1], client_id=r[2], api_key=r[3] or "", api_secret=r[4] or "",
+            totp_secret=r[5] or "", password=r[6] or "", static_ip=r[7] or "",
+            fingerprint=r[8], status=r[9], token=r[10] or "", token_updated_at=r[11],
+            sid=r[12] if len(r) > 12 else "", base_url=r[13] if len(r) > 13 else "",
+            sub_account_id=r[14] if len(r) > 14 else "", public_key=r[15] if len(r) > 15 else "", refresh_token=r[16] if len(r) > 16 else "",
+            mobile_number=mob_val, mpin=mpin_val
+        )
+
+        try:
+            ok = await refresh_user_axis_direct_access_token(cred)
+            if ok:
+                refreshed_cids.append(cid)
+                logger.info(f"⚡ [AXIS 13-MIN REFRESH] Successfully kept 15-min token alive for {cid}")
+        except Exception as e:
+            logger.error(f"❌ [AXIS 13-MIN REFRESH] Error refreshing token for {cid}: {e}")
+
+    return refreshed_cids
+
+
+async def start_axis_token_refresh_worker(interval_seconds: int = 780):
+    """
+    Background worker running every 13 minutes (interval_seconds=780).
+    Mon-Fri 09:00 - 16:00 IST: Silently keeps 15-minute Axis Direct access tokens alive.
+    """
+    await logger_system.info("⏰ [SCHEDULER] Axis Direct 13-Minute Silent Token Refresh Worker initialized (Mon-Fri 09:00-16:00 IST).")
+    while True:
+        try:
+            now_ist = datetime.now(timezone.utc).astimezone(_IST)
+            is_weekday = now_ist.weekday() < 5
+            in_window = 9 <= now_ist.hour < 16
+            if is_weekday and in_window:
+                refreshed = await refresh_all_axis_direct_tokens()
+                if refreshed:
+                    logger.info(f"⚡ [AXIS 13-MIN REFRESH] Silently refreshed {len(refreshed)} Axis account(s): {', '.join(refreshed)}")
+            await asyncio.sleep(interval_seconds)
+        except asyncio.CancelledError:
+            logger.info("🛑 [SCHEDULER] Axis Direct 13-Minute Refresh Worker stopped.")
+            break
+        except Exception as e:
+            logger.error(f"❌ [SCHEDULER] Error in Axis Direct refresh loop: {e}")
+            await asyncio.sleep(60.0)
+
 

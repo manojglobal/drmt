@@ -25,7 +25,7 @@ DEFAULT_CLIENT_NAMES: Dict[str, str] = {
     "807663": "Manoj Singh",
 }
 
-_fallback_configured_cids: Set[str] = set(DEFAULT_CLIENT_NAMES.keys())
+_fallback_configured_cids: Set[str] = set()
 
 
 def get_configured_client_ids() -> Set[str]:
@@ -33,7 +33,7 @@ def get_configured_client_ids() -> Set[str]:
     dynamic_cids = get_dynamic_configured_cids()
     if dynamic_cids:
         return dynamic_cids
-    return set(_fallback_configured_cids)
+    return set()
 
 
 def get_client_username(client_id: str) -> str:

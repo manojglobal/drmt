@@ -12,6 +12,7 @@ from position.chronos import refresh_token_with_backoff
 from execution.engine import mass_exit
 from utils.user_mapping import get_client_username, get_client_ids_for_user, get_configured_client_ids
 from position.blocklist import get_blocked_users, get_blocked_user, remove_from_blocklist
+from credentials.dynamic_loader import get_dynamic_credentials, get_credential_source_info, get_client_email
 from logger.logger import (
     logger_auth, logger_exit, logger_system, logger_monitor,
     logger_health, logger_audit, logger_api
@@ -25,7 +26,6 @@ routes = web.RouteTableDef()
 async def get_credentials_source(request: web.Request):
     """Returns the current credentials source (Dropbox vs. Local CSV)."""
     await require_auth(request)
-    from credentials.dynamic_loader import get_credential_source_info
     return web.json_response({"success": True, **get_credential_source_info()})
 
 
@@ -165,6 +165,21 @@ async def exit_positions(request: web.Request):
                 """, (pos.id, pos.broker, pos.client_id, pos.symbol, pos.token, pos.exchange, pos.product_type, pos.order_type, pos.transaction_type, pos.quantity, pos.avg_price, exit_price, pos.pnl))
         await db.commit()
         
+    # Synchronize Redis cache immediately for the exited positions
+    if core_engine.redis_pool:
+        try:
+            exited_ids = {r["position"].id for r in results if r.get("success") and r.get("position")}
+            if exited_ids:
+                redis_key = f"positions:{user.id}"
+                cached_val = await core_engine.redis_pool.get(redis_key)
+                if cached_val:
+                    cached_positions = json.loads(cached_val)
+                    if isinstance(cached_positions, list):
+                        updated_positions = [p for p in cached_positions if p.get("id") not in exited_ids]
+                        await core_engine.redis_pool.set(redis_key, json.dumps(updated_positions))
+        except Exception:
+            pass
+
     client_results = [
         {
             "id": r["position"].id if r.get("position") else "",
@@ -431,7 +446,7 @@ async def retry_blocked_user(request: web.Request):
         # Load the updated record
         db.row_factory = None
         async with db.execute(
-            "SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, sid, base_url, sub_account_id, public_key, refresh_token FROM credentials WHERE client_id = ?",
+            "SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, sid, base_url, sub_account_id, public_key, refresh_token, mobile_number, mpin FROM credentials WHERE client_id = ?",
             (client_id,)
         ) as cursor:
             row = await cursor.fetchone()
@@ -443,12 +458,16 @@ async def retry_blocked_user(request: web.Request):
             "blocked": True
         }, status=404)
         
+    dyn_data = get_dynamic_credentials(row[2]) or {}
+    mob_val = row[17] if len(row) > 17 and row[17] else dyn_data.get("mobile_number", "")
+    mpin_val = row[18] if len(row) > 18 and row[18] else dyn_data.get("mpin", "")
     cred = Credential(
         id=row[0], broker=row[1], client_id=row[2], api_key=row[3], api_secret=row[4],
         totp_secret=row[5], password=row[6], static_ip=row[7],
         fingerprint=row[8], status=row[9], token=row[10], token_updated_at=row[11],
         sid=row[12] if len(row) > 12 else "", base_url=row[13] if len(row) > 13 else "",
-        sub_account_id=row[14] if len(row) > 14 else "", public_key=row[15] if len(row) > 15 else "", refresh_token=row[16] if len(row) > 16 else ""
+        sub_account_id=row[14] if len(row) > 14 else "", public_key=row[15] if len(row) > 15 else "", refresh_token=row[16] if len(row) > 16 else "",
+        mobile_number=mob_val, mpin=mpin_val
     )
     
     # 3. Attempt single-attempt login
@@ -566,7 +585,7 @@ async def sync_dropbox_blocked_users(request: web.Request):
             # Load the updated record
             db.row_factory = None
             async with db.execute(
-                "SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, sid, base_url, sub_account_id, public_key, refresh_token FROM credentials WHERE client_id = ?",
+                "SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, sid, base_url, sub_account_id, public_key, refresh_token, mobile_number, mpin FROM credentials WHERE client_id = ?",
                 (client_id,)
             ) as cursor:
                 row = await cursor.fetchone()
@@ -575,12 +594,16 @@ async def sync_dropbox_blocked_users(request: web.Request):
             still_blocked_names.append(f"{username} ({client_id}): missing in DB")
             continue
 
+        dyn_data = get_dynamic_credentials(row[2]) or {}
+        mob_val = row[17] if len(row) > 17 and row[17] else dyn_data.get("mobile_number", "")
+        mpin_val = row[18] if len(row) > 18 and row[18] else dyn_data.get("mpin", "")
         cred = Credential(
             id=row[0], broker=row[1], client_id=row[2], api_key=row[3], api_secret=row[4],
             totp_secret=row[5], password=row[6], static_ip=row[7],
             fingerprint=row[8], status=row[9], token=row[10], token_updated_at=row[11],
             sid=row[12] if len(row) > 12 else "", base_url=row[13] if len(row) > 13 else "",
-            sub_account_id=row[14] if len(row) > 14 else "", public_key=row[15] if len(row) > 15 else "", refresh_token=row[16] if len(row) > 16 else ""
+            sub_account_id=row[14] if len(row) > 14 else "", public_key=row[15] if len(row) > 15 else "", refresh_token=row[16] if len(row) > 16 else "",
+            mobile_number=mob_val, mpin=mpin_val
         )
 
         logger.info(f"🔄 [BLOCKLIST DROPBOX SYNC] Retrying {cred.broker}:{cred.client_id} ({username}) with fresh Dropbox credentials")
@@ -635,13 +658,14 @@ async def refresh_blocked_user_token(request: web.Request):
 
     client_id = str(client_id).strip()
     username = get_client_username(client_id)
+    from credentials.dynamic_loader import get_dynamic_credentials, get_client_email
 
     # 1. Fetch credentials directly from the local SQLite database
     async with get_db() as db:
         db.row_factory = None
         async with db.execute(
             """
-            SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, sid, base_url, sub_account_id, public_key, refresh_token 
+            SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, sid, base_url, sub_account_id, public_key, refresh_token, mobile_number, mpin 
             FROM credentials 
             WHERE client_id = ?
             """,
@@ -656,12 +680,16 @@ async def refresh_blocked_user_token(request: web.Request):
             "blocked": True
         }, status=404)
 
+    dyn_data = get_dynamic_credentials(row[2]) or {}
+    mob_val = row[17] if len(row) > 17 and row[17] else dyn_data.get("mobile_number", "")
+    mpin_val = row[18] if len(row) > 18 and row[18] else dyn_data.get("mpin", "")
     cred = Credential(
         id=row[0], broker=row[1], client_id=row[2], api_key=row[3], api_secret=row[4],
         totp_secret=row[5], password=row[6], static_ip=row[7],
         fingerprint=row[8], status=row[9], token=row[10], token_updated_at=row[11],
         sid=row[12] if len(row) > 12 else "", base_url=row[13] if len(row) > 13 else "",
-        sub_account_id=row[14] if len(row) > 14 else "", public_key=row[15] if len(row) > 15 else "", refresh_token=row[16] if len(row) > 16 else ""
+        sub_account_id=row[14] if len(row) > 14 else "", public_key=row[15] if len(row) > 15 else "", refresh_token=row[16] if len(row) > 16 else "",
+        mobile_number=mob_val, mpin=mpin_val
     )
 
     logger.info(f"🔑 [TOKEN REFRESH] Attempting broker token refresh for {cred.broker}:{cred.client_id} ({username}) using local DB credentials")
@@ -675,18 +703,36 @@ async def refresh_blocked_user_token(request: web.Request):
             await db.execute(
                 """
                 UPDATE credentials 
-                SET token = ?, token_updated_at = datetime('now', 'localtime'), status = 'working' 
+                SET token = ?, token_updated_at = datetime('now', 'localtime'), status = 'working',
+                    refresh_token = CASE WHEN ? != '' THEN ? ELSE refresh_token END,
+                    public_key = CASE WHEN ? != '' THEN ? ELSE public_key END,
+                    sub_account_id = CASE WHEN ? != '' THEN ? ELSE sub_account_id END
                 WHERE client_id = ?
                 """,
-                (cred.token, client_id)
+                (
+                    cred.token,
+                    getattr(cred, "refresh_token", "") or "",
+                    getattr(cred, "refresh_token", "") or "",
+                    getattr(cred, "public_key", "") or "",
+                    getattr(cred, "public_key", "") or "",
+                    getattr(cred, "sub_account_id", "") or "",
+                    getattr(cred, "sub_account_id", "") or "",
+                    client_id,
+                )
             )
             await db.commit()
 
         # Also update in-memory dynamic credentials if present
-        from credentials.dynamic_loader import get_dynamic_credentials, get_client_email
         dyn = get_dynamic_credentials(client_id)
-        if dyn and cred.token:
-            dyn["token"] = cred.token
+        if dyn:
+            if cred.token:
+                dyn["token"] = cred.token
+            if getattr(cred, "refresh_token", None):
+                dyn["refresh_token"] = cred.refresh_token
+            if getattr(cred, "public_key", None):
+                dyn["public_key"] = cred.public_key
+            if getattr(cred, "sub_account_id", None):
+                dyn["sub_account_id"] = cred.sub_account_id
 
         remove_from_blocklist(client_id)
 

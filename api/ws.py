@@ -31,7 +31,7 @@ async def websocket_handler(request: web.Request):
     async with get_db() as db:
         db.row_factory = None
         valid_filter = "status = 'working' AND UPPER(broker) != 'FAKE' AND client_id IS NOT NULL AND TRIM(client_id) != ''"
-        async with db.execute(f"SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at FROM credentials WHERE {valid_filter}") as cursor:
+        async with db.execute(f"SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, sid, base_url, sub_account_id, public_key, refresh_token FROM credentials WHERE {valid_filter}") as cursor:
             rows = await cursor.fetchall()
             
     if not rows:
@@ -40,7 +40,10 @@ async def websocket_handler(request: web.Request):
         
     configured_cids = get_configured_client_ids()
     # Only include brokers the engine can actually poll
-    SUPPORTED_BROKERS = {"MSTOCK", "FLATTRADE", "ALICE BLUE", "ALICEBLUE", "FYERS"}
+    SUPPORTED_BROKERS = {
+        "MSTOCK", "FLATTRADE", "ALICE BLUE", "ALICEBLUE", "FYERS",
+        "KOTAK", "KOTAK NEO", "KOTAKNEO", "AXIS", "AXIS DIRECT", "AXISDIRECT"
+    }
     credentials = []
     for row in rows:
         broker_name = str(row[1] or "").strip().upper()
@@ -57,7 +60,12 @@ async def websocket_handler(request: web.Request):
         cred = Credential(
             id=row[0], broker=row[1], client_id=cid, api_key=row[3] or "", api_secret=row[4] or "",
             totp_secret=row[5] or "", password=row[6] or "", static_ip=row[7] or "",
-            fingerprint=row[8], status=row[9], token=row[10] or "", token_updated_at=row[11]
+            fingerprint=row[8], status=row[9], token=row[10] or "", token_updated_at=row[11],
+            sid=row[12] if len(row) > 12 and row[12] else "",
+            base_url=row[13] if len(row) > 13 and row[13] else "",
+            sub_account_id=row[14] if len(row) > 14 and row[14] else "",
+            public_key=row[15] if len(row) > 15 and row[15] else "",
+            refresh_token=row[16] if len(row) > 16 and row[16] else ""
         )
         credentials.append(cred)
     
