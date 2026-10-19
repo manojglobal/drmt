@@ -179,6 +179,11 @@ class PositionManager:
                 raw.get("sellAvg"),
                 raw.get("buyavgprice"),
                 raw.get("sellavgprice"),
+                raw.get("totbuyavgprc") if tran_type == "BUY" else raw.get("totsellavgprc"),
+                raw.get("daybuyavgprc") if tran_type == "BUY" else raw.get("daysellavgprc"),
+                raw.get("totbuyavgprc"),
+                raw.get("daybuyavgprc"),
+                raw.get("actualBuyAvgPrice") if tran_type == "BUY" else raw.get("actualSellAvgPrice"),
             ]
             for candidate in avg_candidates:
                 if candidate is not None:
@@ -286,6 +291,8 @@ class PositionManager:
                 or ""
             )
             
+            invested_cash = round(abs(qty) * avg_price, 2)
+            
             pos = Position(
                 id=pos_id,
                 broker=broker,
@@ -300,7 +307,9 @@ class PositionManager:
                 quantity=qty,
                 avg_price=avg_price,
                 ltp=ltp,
-                pnl=pnl
+                pnl=pnl,
+                cash=invested_cash,
+                cash_value=invested_cash,
             )
             normalized.append(pos)
             

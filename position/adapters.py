@@ -683,6 +683,8 @@ async def poll_axisdirect(cred: Credential) -> List[Position]:
                         _axis_entry_prices[cache_key] = p.avg_price
                     elif cache_key in _axis_entry_prices and _axis_entry_prices[cache_key] > 0:
                         p.avg_price = _axis_entry_prices[cache_key]
+                        p.cash = round(abs(p.quantity) * p.avg_price, 2)
+                        p.cash_value = p.cash
                     else:
                         # Initial entry price fallback: prefer previous close price, then first live LTP
                         cp = get_axis_close_price(str(p.token))
@@ -690,6 +692,8 @@ async def poll_axisdirect(cred: Credential) -> List[Position]:
                         if init_price > 0:
                             p.avg_price = round(float(init_price), 2)
                             _axis_entry_prices[cache_key] = p.avg_price
+                            p.cash = round(abs(p.quantity) * p.avg_price, 2)
+                            p.cash_value = p.cash
 
                     if p.ltp > 0 and p.avg_price > 0 and p.quantity != 0:
                         if p.transaction_type == "BUY":
@@ -709,9 +713,13 @@ async def poll_axisdirect(cred: Credential) -> List[Position]:
                         _axis_entry_prices[cache_key] = p.avg_price
                     elif cache_key in _axis_entry_prices and _axis_entry_prices[cache_key] > 0:
                         p.avg_price = _axis_entry_prices[cache_key]
+                        p.cash = round(abs(p.quantity) * p.avg_price, 2)
+                        p.cash_value = p.cash
                     elif p.ltp > 0:
                         p.avg_price = p.ltp
                         _axis_entry_prices[cache_key] = p.avg_price
+                        p.cash = round(abs(p.quantity) * p.avg_price, 2)
+                        p.cash_value = p.cash
 
                     if p.ltp > 0 and p.avg_price > 0 and p.quantity != 0:
                         if p.transaction_type == "BUY":

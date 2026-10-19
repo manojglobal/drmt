@@ -57,6 +57,8 @@ class Position(BaseModel):
     avg_price: float
     ltp: float
     pnl: float
+    cash: float = 0.0
+    cash_value: float = 0.0
 
 class ExitedPosition(Position):
     exit_price: float
