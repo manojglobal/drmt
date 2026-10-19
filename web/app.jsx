@@ -86,6 +86,7 @@ function App() {
 function Login({ onLogin }) {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
+    const [showPassword, setShowPassword] = useState(false);
     const [error, setError] = useState('');
     const [submitting, setSubmitting] = useState(false);
 
@@ -136,13 +137,35 @@ function Login({ onLogin }) {
                     </div>
                     <div className="form-group">
                         <label>Password</label>
-                        <input
-                            type="password"
-                            placeholder="Enter password"
-                            value={password}
-                            onChange={e => setPassword(e.target.value)}
-                            required
-                        />
+                        <div className="password-input-wrapper">
+                            <input
+                                type={showPassword ? "text" : "password"}
+                                placeholder="Enter password"
+                                value={password}
+                                onChange={e => setPassword(e.target.value)}
+                                required
+                            />
+                            <button
+                                type="button"
+                                className="password-toggle-btn"
+                                onClick={() => setShowPassword(prev => !prev)}
+                                title={showPassword ? "Hide password" : "Show password"}
+                                aria-label={showPassword ? "Hide password" : "Show password"}
+                                tabIndex={-1}
+                            >
+                                {showPassword ? (
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                                        <line x1="1" y1="2" x2="23" y2="23"></line>
+                                    </svg>
+                                ) : (
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                        <circle cx="12" cy="12" r="3"></circle>
+                                    </svg>
+                                )}
+                            </button>
+                        </div>
                     </div>
                     <button type="submit" disabled={submitting} className="btn-primary">
                         {submitting ? 'Authenticating...' : 'Sign In'}
@@ -804,6 +827,150 @@ function CustomFilterDropdown({ label, options, value, onChange, disabled }) {
     );
 }
 
+/* ═══════════════════════════════════════════
+   DRAGGABLE CONFIRMATION MODAL (ORIGINAL UI)
+   ═══════════════════════════════════════════ */
+function DraggableConfirmationModal({ modalConfig }) {
+    if (!modalConfig) return null;
+
+    // Draggable position state clamped to viewport
+    const [pos, setPos] = useState(() => {
+        const defaultW = 440;
+        const defaultH = 240;
+        const x = Math.max(16, Math.round((window.innerWidth - defaultW) / 2));
+        const y = Math.max(48, Math.round((window.innerHeight - defaultH) / 3));
+        return { x, y };
+    });
+
+    const [isDragging, setIsDragging] = useState(false);
+    const dragRef = useRef({ startX: 0, startY: 0, initX: 0, initY: 0 });
+    const modalRef = useRef(null);
+
+    // Keep dialog within viewport on window resize
+    useEffect(() => {
+        const handleResize = () => {
+            const el = modalRef.current;
+            const w = el ? el.offsetWidth : 440;
+            const h = el ? el.offsetHeight : 240;
+            setPos(prev => ({
+                x: Math.max(10, Math.min(window.innerWidth - w - 10, prev.x)),
+                y: Math.max(10, Math.min(window.innerHeight - h - 10, prev.y))
+            }));
+        };
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
+
+    // Mouse drag start
+    const handleMouseDown = (e) => {
+        if (e.button !== 0) return;
+        if (e.target.closest('button')) return;
+        setIsDragging(true);
+        dragRef.current = {
+            startX: e.clientX,
+            startY: e.clientY,
+            initX: pos.x,
+            initY: pos.y
+        };
+        e.preventDefault();
+    };
+
+    // Touch drag start
+    const handleTouchStart = (e) => {
+        if (e.target.closest('button')) return;
+        const t = e.touches[0];
+        setIsDragging(true);
+        dragRef.current = {
+            startX: t.clientX,
+            startY: t.clientY,
+            initX: pos.x,
+            initY: pos.y
+        };
+    };
+
+    // Drag move & end handlers
+    useEffect(() => {
+        if (!isDragging) return;
+
+        const handleMouseMove = (e) => {
+            const dx = e.clientX - dragRef.current.startX;
+            const dy = e.clientY - dragRef.current.startY;
+            const el = modalRef.current;
+            const w = el ? el.offsetWidth : 440;
+            const h = el ? el.offsetHeight : 240;
+            const maxX = Math.max(10, window.innerWidth - w - 10);
+            const maxY = Math.max(10, window.innerHeight - h - 10);
+            setPos({
+                x: Math.min(Math.max(10, dragRef.current.initX + dx), maxX),
+                y: Math.min(Math.max(10, dragRef.current.initY + dy), maxY)
+            });
+        };
+
+        const handleTouchMove = (e) => {
+            if (!e.touches[0]) return;
+            const t = e.touches[0];
+            const dx = t.clientX - dragRef.current.startX;
+            const dy = t.clientY - dragRef.current.startY;
+            const el = modalRef.current;
+            const w = el ? el.offsetWidth : 440;
+            const h = el ? el.offsetHeight : 240;
+            const maxX = Math.max(10, window.innerWidth - w - 10);
+            const maxY = Math.max(10, window.innerHeight - h - 10);
+            setPos({
+                x: Math.min(Math.max(10, dragRef.current.initX + dx), maxX),
+                y: Math.min(Math.max(10, dragRef.current.initY + dy), maxY)
+            });
+        };
+
+        const handleDragEnd = () => setIsDragging(false);
+
+        window.addEventListener('mousemove', handleMouseMove);
+        window.addEventListener('mouseup', handleDragEnd);
+        window.addEventListener('touchmove', handleTouchMove, { passive: false });
+        window.addEventListener('touchend', handleDragEnd);
+
+        return () => {
+            window.removeEventListener('mousemove', handleMouseMove);
+            window.removeEventListener('mouseup', handleDragEnd);
+            window.removeEventListener('touchmove', handleTouchMove);
+            window.removeEventListener('touchend', handleDragEnd);
+        };
+    }, [isDragging]);
+
+    return (
+        <div className="modal-overlay modal-draggable-overlay">
+            <div
+                ref={modalRef}
+                className={`modal-content draggable-modal-content ${isDragging ? 'is-dragging' : ''}`}
+                style={{ left: `${pos.x}px`, top: `${pos.y}px` }}
+            >
+                <div
+                    className="modal-header-draggable"
+                    onMouseDown={handleMouseDown}
+                    onTouchStart={handleTouchStart}
+                    title="Click and drag to move dialog"
+                >
+                    <h3>{modalConfig.title}</h3>
+                    <button
+                        type="button"
+                        className="modal-close-icon-btn"
+                        onClick={modalConfig.onCancel}
+                        title="Close"
+                        aria-label="Close"
+                    >
+                        ✕
+                    </button>
+                </div>
+                <p className="modal-message">{modalConfig.message}</p>
+                <div className="modal-actions">
+                    <button onClick={modalConfig.onCancel} className="btn-cancel">Cancel</button>
+                    <button onClick={modalConfig.onConfirm} className="btn-confirm-exit">Confirm Exit</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 function Dashboard({ user, onLogout }) {
     // CODE FLIP FOR TESTING: Change to 'true' to force 5s polling regardless of market hours or tab visibility
     const TEST_MODE_FORCE_POLL = true;
@@ -1071,10 +1238,12 @@ function Dashboard({ user, onLogout }) {
     const handleCloseAction = () => {
         if (selectedIds.size > 0) {
             const count = selectedIds.size;
+            const targetPositions = positions.filter(p => selectedIds.has(p.id));
             setModalConfig({
                 title: "Confirm Market Exit",
+                positions: targetPositions,
                 message: `Are you sure you want to Market Exit ${count} selected position${count > 1 ? 's' : ''}?\n\nThis will instantly submit Market orders to the respective broker(s) to close these positions.`,
-                onConfirm: () => executeExit(positions.filter(p => selectedIds.has(p.id))),
+                onConfirm: () => executeExit(targetPositions),
                 onCancel: () => setModalConfig(null)
             });
         } else {
@@ -1083,10 +1252,12 @@ function Dashboard({ user, onLogout }) {
                 return;
             }
             const count = filteredPositions.length;
+            const targetPositions = [...filteredPositions];
             setModalConfig({
                 title: "Confirm Close All Positions",
+                positions: targetPositions,
                 message: `⚠️ WARNING: Are you sure you want to Market Exit ALL ${count} currently displayed position${count > 1 ? 's' : ''}?\n\nThis will immediately place Market orders across all brokers to flatten these positions.`,
-                onConfirm: () => executeExit(filteredPositions),
+                onConfirm: () => executeExit(targetPositions),
                 onCancel: () => setModalConfig(null)
             });
         }
@@ -1317,18 +1488,9 @@ function Dashboard({ user, onLogout }) {
                 ))}
             </div>
 
-            {/* ── Confirmation Modal ── */}
+            {/* ── Draggable Confirmation Modal ── */}
             {modalConfig && (
-                <div className="modal-overlay">
-                    <div className="modal-content" data-aos="zoom-in" data-aos-duration="200">
-                        <h3>{modalConfig.title}</h3>
-                        <p className="modal-message">{modalConfig.message}</p>
-                        <div className="modal-actions">
-                            <button onClick={modalConfig.onCancel} className="btn-cancel">Cancel</button>
-                            <button onClick={modalConfig.onConfirm} className="btn-confirm-exit">Confirm Exit</button>
-                        </div>
-                    </div>
-                </div>
+                <DraggableConfirmationModal modalConfig={modalConfig} />
             )}
 
             {/* ══════════════════════════════════
@@ -1651,6 +1813,7 @@ function Dashboard({ user, onLogout }) {
                                                                     e.stopPropagation();
                                                                     setModalConfig({
                                                                         title: "Confirm Market Exit",
+                                                                        positions: [pos],
                                                                         message: `Are you sure you want to Market Exit this position (${pos.symbol})?\n\nThis will instantly submit a Market order to close this position.`,
                                                                         onConfirm: () => executeExit([pos]),
                                                                         onCancel: () => setModalConfig(null)

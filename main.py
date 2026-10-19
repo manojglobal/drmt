@@ -278,7 +278,14 @@ def create_app() -> web.Application:
 
 if __name__ == "__main__":
     import multiprocessing
+    import sys
     multiprocessing.freeze_support()
+
+    from utils.reloader import is_reloader_active, run_supervisor
+    if is_reloader_active():
+        run_supervisor()
+        sys.exit(0)
+
     app = create_app()
     # Disable aiohttp access logs to prevent terminal spam from constant UI polling
     web.run_app(app, host="0.0.0.0", port=settings.PORT, access_log=None, print=logger.info)

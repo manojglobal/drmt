@@ -13,6 +13,8 @@ from execution.engine import mass_exit
 from utils.user_mapping import get_client_username, get_client_ids_for_user, get_configured_client_ids
 from position.blocklist import get_blocked_users, get_blocked_user, remove_from_blocklist
 from credentials.dynamic_loader import get_dynamic_credentials, get_credential_source_info, get_client_email
+from settings import settings
+from core.engine import core_engine
 from logger.logger import (
     logger_auth, logger_exit, logger_system, logger_monitor,
     logger_health, logger_audit, logger_api
@@ -166,8 +168,9 @@ async def exit_positions(request: web.Request):
         await db.commit()
         
     # Synchronize Redis cache immediately for the exited positions
-    if core_engine.redis_pool:
-        try:
+    try:
+        from core.engine import core_engine
+        if core_engine and getattr(core_engine, "redis_pool", None):
             exited_ids = {r["position"].id for r in results if r.get("success") and r.get("position")}
             if exited_ids:
                 redis_key = f"positions:{user.id}"
@@ -177,8 +180,8 @@ async def exit_positions(request: web.Request):
                     if isinstance(cached_positions, list):
                         updated_positions = [p for p in cached_positions if p.get("id") not in exited_ids]
                         await core_engine.redis_pool.set(redis_key, json.dumps(updated_positions))
-        except Exception:
-            pass
+    except Exception as e:
+        logger.warning(f"Redis cache sync failed after exit: {e}")
 
     client_results = [
         {

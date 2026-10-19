@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     MARKET_OPEN_MINUTE: int = 15
     MARKET_CLOSE_HOUR: int = 15
     MARKET_CLOSE_MINUTE: int = 30
+    AUTO_RELOAD: bool = True
     
     model_config = SettingsConfigDict(env_file=_env_path, env_file_encoding="utf-8", extra="ignore")
 
