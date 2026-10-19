@@ -206,13 +206,12 @@ const ServerHealthMonitor = () => {
                 const isUp = data.status === 'UP';
                 const pingTime = data.query_time ? data.query_time.split(' ')[1] : '--:--:--';
                 const successTime = data.last_successful_time ? data.last_successful_time.split(' ')[1] : '--:--:--';
+                const tooltip = `${name}: ${data.status || (isUp ? 'UP' : 'DOWN')} | Ping: ${pingTime} | OK: ${successTime}`;
                 return (
-                    <div key={name} className={`health-pill ${isUp ? 'status-up' : 'status-down'}`} title={data.message || 'Status OK'}>
+                    <div key={name} className={`health-pill ${isUp ? 'status-up' : 'status-down'}`} title={tooltip}>
                         <span className="health-dot" />
-                        <div className="health-details">
-                            <span className="health-name">{name}</span>
-                            <span className="health-times">Ping: {pingTime} | OK: {successTime}</span>
-                        </div>
+                        <span className="health-name">{name}</span>
+                        <span className="health-status-badge">{isUp ? 'OK' : 'ERR'}</span>
                     </div>
                 );
             })}
@@ -293,13 +292,13 @@ const ActionLogWidget = () => {
     React.useEffect(() => {
         try {
             sessionStorage.setItem('drmt_refresh_attempts', JSON.stringify(refreshAttempts));
-        } catch {}
+        } catch { }
     }, [refreshAttempts]);
 
     React.useEffect(() => {
         try {
             sessionStorage.setItem('drmt_token_refresh_attempts', JSON.stringify(tokenRefreshAttempts));
-        } catch {}
+        } catch { }
     }, [tokenRefreshAttempts]);
 
     React.useEffect(() => {
@@ -352,7 +351,7 @@ const ActionLogWidget = () => {
             setLogs(incomingList);
             try {
                 localStorage.setItem(`drmt_logs_${tab}`, JSON.stringify(incomingList));
-            } catch {}
+            } catch { }
             return;
         }
 
@@ -378,7 +377,7 @@ const ActionLogWidget = () => {
             const capped = merged.slice(0, 150);
             try {
                 localStorage.setItem(`drmt_logs_${tab}`, JSON.stringify(capped));
-            } catch {}
+            } catch { }
             return capped;
         });
     }, []);
@@ -548,7 +547,7 @@ const ActionLogWidget = () => {
             const next = !prev;
             try {
                 localStorage.setItem('drmt_action_log_open', String(next));
-            } catch {}
+            } catch { }
             return next;
         });
     };
@@ -975,7 +974,7 @@ function Dashboard({ user, onLogout }) {
     // CODE FLIP FOR TESTING: Change to 'true' to force 5s polling regardless of market hours or tab visibility
     const TEST_MODE_FORCE_POLL = true;
 
-    const [isVisible, setIsVisible]         = useState(!document.hidden);
+    const [isVisible, setIsVisible] = useState(!document.hidden);
     const [pollingStatus, setPollingStatus] = useState('Active');
 
     useEffect(() => {
@@ -1498,24 +1497,26 @@ function Dashboard({ user, onLogout }) {
                 ══════════════════════════════════ */}
             <header className="top-nav">
                 <div className="nav-left">
-                    <h1 className="brand-title">DRMT<br />Dashboard</h1>
-
+                    {/* <h1 className="brand-title">DRMT<br />Dashboard</h1> */}
+                    <h1 className="brand-title">DRMT </h1>
                     <div className="nav-last-sync">
                         <span className="sync-label">Last Sync:</span>
                         <span className="sync-time">{lastSync || 'Waiting...'}</span>
                     </div>
+                </div>
 
+                <div className="nav-status-group">
                     <div className={`nav-connection-pill ${wsConnected ? 'connected' : 'disconnected'}`}>
                         <span className={`live-dot ${wsConnected ? 'connected' : 'disconnected'}`} />
-                        <span className="pill-text">{wsConnected ? 'Connected\n(Live)' : 'Disconnected\n(Lost)'}</span>
+                        <span className="pill-text">{wsConnected ? 'Connected (Live)' : 'Disconnected'}</span>
                     </div>
+
+                    <ServerHealthMonitor />
                 </div>
 
                 <div className="nav-right">
-                    <ServerHealthMonitor />
-
                     <button
-                        className="btn-outline"
+                        className="btn-refresh-creds"
                         title="Refresh Credentials"
                         disabled={isRefreshingCreds}
                         onClick={async (e) => {
@@ -1532,7 +1533,17 @@ function Dashboard({ user, onLogout }) {
                                 setIsRefreshingCreds(false);
                             }
                         }}
-                    >{isRefreshingCreds ? "Refreshing..." : "Refresh Credentials"}</button>
+                    >
+                        <svg className={`refresh-icon ${isRefreshingCreds ? 'spinning' : ''}`} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3" />
+                        </svg>
+                        <div className="btn-text-stacked">
+                            <span>Refresh</span>
+                            <span>Credentials</span>
+                        </div>
+                    </button>
+
+                    <div className="nav-divider" />
 
                     <button
                         className="icon-btn"
@@ -1562,17 +1573,24 @@ function Dashboard({ user, onLogout }) {
                         <ActionLogWidget />
                     </div>
 
-                    <div className="user-profile" title={`Logged in as ${user.username}`}>
-                        <div className="avatar-circle">{adminInitial}</div>
-                        <button
-                            className="logout-link-btn"
-                            disabled={isActionLocked}
-                            onClick={async () => { setIsLoggingOut(true); await handleLogout(); setIsLoggingOut(false); }}
-                            title="Sign Out"
-                        >
-                            Sign Out
-                        </button>
-                    </div>
+                    <div className="avatar-circle" title={`Logged in as ${user.username}`}>{adminInitial}</div>
+
+                    <button
+                        className="btn-signout"
+                        disabled={isActionLocked}
+                        onClick={async () => { setIsLoggingOut(true); await handleLogout(); setIsLoggingOut(false); }}
+                        title="Sign Out"
+                    >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                            <polyline points="16 17 21 12 16 7" />
+                            <line x1="21" y1="12" x2="9" y2="12" />
+                        </svg>
+                        <div className="btn-text-stacked">
+                            <span>Sign</span>
+                            <span>Out</span>
+                        </div>
+                    </button>
                 </div>
             </header>
 
