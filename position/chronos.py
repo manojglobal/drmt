@@ -33,7 +33,7 @@ def _get_client_auth_lock(client_id: str) -> asyncio.Lock:
         _AUTH_CLIENT_LOCKS[cid_str] = asyncio.Lock()
     return _AUTH_CLIENT_LOCKS[cid_str]
 
-async def refresh_token_with_backoff(cred: Credential) -> bool:
+async def refresh_token_with_backoff(cred: Credential, send_email: bool = True) -> bool:
     """Attempts single-attempt credential login guarded by a per-client lock. If it fails, adds user to blocklist with zero auto-retries."""
     lock = _get_client_auth_lock(cred.client_id)
     if lock.locked():
@@ -70,7 +70,8 @@ async def refresh_token_with_backoff(cred: Credential) -> bool:
                 await logger_auth.warn(f"⚠️  Transient network error authenticating {cred.broker}:{cred.client_id} ({username}): {e} (skipping blocklist)")
                 return False
 
-            await logger_auth.error(f"❌ Auth failed for {cred.broker}:{cred.client_id} ({username}): {e}")
+            # Suppress generic raw error email from logger_auth so duplicate format emails are not sent
+            await logger_auth.error(f"❌ Auth failed for {cred.broker}:{cred.client_id} ({username}): {e}", notify_email=False)
             sig = ""
             try:
                 from credentials.dynamic_loader import compute_credential_signature, get_dynamic_credentials
@@ -85,22 +86,23 @@ async def refresh_token_with_backoff(cred: Credential) -> bool:
                 reason=err_msg,
                 signature=sig
             )
-            # Dispatch failure alert email
-            try:
-                from utils.email import send_auth_failed_email
-                from credentials.dynamic_loader import get_client_email
-                asyncio.create_task(
-                    send_auth_failed_email(
-                        broker=cred.broker,
-                        client_id=cred.client_id,
-                        username=username,
-                        reason=err_msg,
-                        user_email=get_client_email(cred.client_id)
-                    ),
-                    name=f"email_auth_failed_{cred.client_id}"
-                )
-            except Exception:
-                pass
+            # Dispatch single table failure alert email only when send_email is True (e.g. single retry / runtime)
+            if send_email:
+                try:
+                    from utils.email import send_auth_failed_email
+                    from credentials.dynamic_loader import get_client_email
+                    asyncio.create_task(
+                        send_auth_failed_email(
+                            broker=cred.broker,
+                            client_id=cred.client_id,
+                            username=username,
+                            reason=err_msg,
+                            user_email=get_client_email(cred.client_id)
+                        ),
+                        name=f"email_auth_failed_{cred.client_id}"
+                    )
+                except Exception:
+                    pass
             return False
 
 async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: list[Credential], engine) -> None:

@@ -1,4 +1,5 @@
 import asyncio
+import html
 import logging
 import smtplib
 import time
@@ -238,3 +239,88 @@ async def send_credentials_restored_email(broker: str, client_id: str, username:
     </div>
     """
     await send_email_notification(subject, plain_body, html_body=html_body)
+
+
+async def send_consolidated_auth_failed_email(
+    failed_accounts: list[dict],
+    total_configured: int = 0,
+    source: str = "Process Restart"
+) -> None:
+    """Dispatches a single consolidated failure email containing all failed accounts in a clean HTML table.
+    
+    Prevents flooding the operator mailbox with individual failure alerts when multiple accounts fail.
+    """
+    if not failed_accounts:
+        return
+
+    failed_count = len(failed_accounts)
+    total_acc = total_configured if total_configured > 0 else failed_count
+    ready_count = max(0, total_acc - failed_count)
+
+    subject = f"{source}: {failed_count} Credential(s) Failed Authentication"
+
+    plain_lines = [
+        f"Credential Authentication Alert — {source}",
+        f"Failed: {failed_count}",
+        "",
+        f"{'Broker':<14} | {'Client ID':<12} | {'Username':<22} | {'User Email':<28} | Failure Reason",
+        "-" * 110,
+    ]
+
+    table_rows = []
+    for acc in failed_accounts:
+        broker_str = str(acc.get("broker", "")).strip()
+        client_id_str = str(acc.get("client_id", "")).strip()
+        username_str = str(acc.get("username", "")).strip()
+        email_str = str(acc.get("user_email", "")).strip()
+        reason_str = str(acc.get("reason", "Authentication failed")).strip()
+
+        plain_lines.append(
+            f"{broker_str:<14} | {client_id_str:<12} | {username_str:<22} | {email_str:<28} | {reason_str}"
+        )
+
+        b_esc = html.escape(broker_str)
+        cid_esc = html.escape(client_id_str)
+        un_esc = html.escape(username_str)
+        em_esc = html.escape(email_str)
+        re_esc = html.escape(reason_str)
+
+        table_rows.append(f"""    <tr>
+      <td style="padding: 8px 10px; border: 1px solid #d1d5db; font-weight: 600;">{b_esc}</td>
+      <td style="padding: 8px 10px; border: 1px solid #d1d5db; font-family: monospace;">{cid_esc}</td>
+      <td style="padding: 8px 10px; border: 1px solid #d1d5db;">{un_esc}</td>
+      <td style="padding: 8px 10px; border: 1px solid #d1d5db;">{em_esc}</td>
+      <td style="padding: 8px 10px; border: 1px solid #d1d5db; color: #dc2626; font-size: 12px;">{re_esc}</td>
+    </tr>""")
+
+    plain_body = "\n".join(plain_lines)
+
+    rows_html = "\n".join(table_rows)
+    source_esc = html.escape(source)
+    html_body = f"""
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 13.5px; color: #1f2937;">
+      <div style="margin-bottom: 16px; border-bottom: 2px solid #e5e7eb; padding-bottom: 12px;">
+        <h3 style="margin: 0 0 8px 0; color: #991b1b; font-size: 17px; font-weight: 700;">❌ Credential Authentication Alert — {source_esc}</h3>
+        <div>
+          <span style="display: inline-block; padding: 4px 10px; background: #fef2f2; border-radius: 4px; font-size: 12px; font-weight: 600; color: #dc2626;">Failed: {failed_count}</span>
+        </div>
+      </div>
+
+      <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border: 1px solid #d1d5db; font-size: 12.5px; margin-bottom: 20px;">
+        <thead>
+          <tr style="background-color: #fef2f2; text-align: left; color: #991b1b;">
+            <th style="padding: 8px 10px; border: 1px solid #d1d5db;">Broker</th>
+            <th style="padding: 8px 10px; border: 1px solid #d1d5db;">Client ID</th>
+            <th style="padding: 8px 10px; border: 1px solid #d1d5db;">Username</th>
+            <th style="padding: 8px 10px; border: 1px solid #d1d5db;">User Email</th>
+            <th style="padding: 8px 10px; border: 1px solid #d1d5db;">Failure Reason</th>
+          </tr>
+        </thead>
+        <tbody>
+{rows_html}
+        </tbody>
+      </table>
+    </div>
+    """
+
+    await send_error_email(subject, plain_body, html_body=html_body)

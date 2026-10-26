@@ -173,7 +173,7 @@ async def run_blocked_credentials_check_iteration() -> int:
         user_email = get_client_email(client_id)
 
         try:
-            ok = await refresh_token_with_backoff(cred)
+            ok = await refresh_token_with_backoff(cred, send_email=False)
             if ok:
                 # ── SUCCESS ──
                 unblocked_count += 1
@@ -213,7 +213,7 @@ async def run_blocked_credentials_check_iteration() -> int:
         except Exception as auth_err:
             err_str = str(auth_err)
             update_blocked_user_signature(client_id, new_sig, reason=err_str)
-            await logger_auth.error(f"❌ [CREDENTIALS WATCHER] Exception testing credentials for {broker}:{client_id}: {err_str}")
+            await logger_auth.error(f"❌ [CREDENTIALS WATCHER] Exception testing credentials for {broker}:{client_id}: {err_str}", notify_email=False)
             asyncio.create_task(
                 send_auth_failed_email(
                     broker=broker,

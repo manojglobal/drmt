@@ -8,6 +8,7 @@ block_cipher = None
 datas = [
     ('web', 'web'),
     ('migrations', 'migrations'),
+    ('static', 'static'),
 ]
 
 # Explicit hidden imports for C-extensions, async drivers, and dynamic imports

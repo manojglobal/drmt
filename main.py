@@ -68,8 +68,13 @@ async def display_configured_credentials():
     else:
         await logger_system.info("⚠️  No active broker credentials configured.")
 
-async def authenticate_configured_credentials():
-    """Authenticates configured broker accounts on startup."""
+async def authenticate_configured_credentials(send_individual_emails: bool = False):
+    """Authenticates configured broker accounts on startup or scheduled refresh.
+    
+    Args:
+        send_individual_emails: When False, suppresses individual failure emails so a
+                                single consolidated email can be sent after batch completion.
+    """
     from position.chronos import refresh_token_with_backoff
     from models.schemas import Credential
     from credentials.dynamic_loader import get_dynamic_credentials
@@ -124,13 +129,15 @@ async def authenticate_configured_credentials():
             )
             acc_label = f"{cred.broker}:{cred.client_id}"
             user_email = get_client_email(cred.client_id)
+            username = get_client_username(cred.client_id)
             try:
-                ok = await refresh_token_with_backoff(cred)
+                ok = await refresh_token_with_backoff(cred, send_email=send_individual_emails)
                 if ok:
                     succeeded.append(acc_label)
                     auth_results.append({
                         "broker": cred.broker,
                         "client_id": cred.client_id,
+                        "username": username,
                         "user_email": user_email,
                         "refreshed": True,
                         "reason": "",
@@ -142,6 +149,7 @@ async def authenticate_configured_credentials():
                     auth_results.append({
                         "broker": cred.broker,
                         "client_id": cred.client_id,
+                        "username": username,
                         "user_email": user_email,
                         "refreshed": False,
                         "reason": reason_str,
@@ -152,6 +160,7 @@ async def authenticate_configured_credentials():
                 auth_results.append({
                     "broker": cred.broker,
                     "client_id": cred.client_id,
+                    "username": username,
                     "user_email": user_email,
                     "refreshed": False,
                     "reason": reason_str,
@@ -184,8 +193,22 @@ async def on_startup(app: web.Application):
     
     # 7. Initial One-Time Credential Verification & Authentication at Startup
     await logger_system.info("🔐 Performing initial one-time credential check and authentication...")
-    succeeded, failed, auth_results = await authenticate_configured_credentials()
+    succeeded, failed, auth_results = await authenticate_configured_credentials(send_individual_emails=False)
     await logger_system.info(f"🔐 Initial startup check complete: {len(succeeded)} ready, {len(failed)} failed/blocked.")
+    
+    # Dispatch single consolidated failure email if any accounts failed on restart/startup
+    failed_accounts = [r for r in auth_results if not r.get("refreshed", False)]
+    if failed_accounts:
+        try:
+            from utils.email import send_consolidated_auth_failed_email
+            await send_consolidated_auth_failed_email(
+                failed_accounts=failed_accounts,
+                total_configured=len(auth_results),
+                source="Process Restart"
+            )
+            await logger_system.info(f"📧 Consolidated failure email dispatched for {len(failed_accounts)} account(s).")
+        except Exception as mail_err:
+            await logger_system.error(f"Failed sending consolidated startup failure email: {mail_err}", notify_email=False)
     
     # 8. Start Health Monitor
     await health_monitor.start()
@@ -196,25 +219,18 @@ async def on_startup(app: web.Application):
     # 10. Start Daily Morning Credential Refresh Scheduler (09:10 AM IST)
     from credentials.scheduler import (
         start_daily_credential_scheduler,
-        start_market_close_report_scheduler,
         start_axis_token_refresh_worker,
     )
     app["daily_scheduler_task"] = asyncio.create_task(start_daily_credential_scheduler(), name="daily_credential_scheduler")
     
-    # 11. Start Market-Close Email Report Scheduler (03:30 PM IST)
-    app["market_close_scheduler_task"] = asyncio.create_task(
-        start_market_close_report_scheduler(),
-        name="market_close_report_scheduler"
-    )
-    
-    # 12. Start Blocked Credentials Recheck Worker (1-2 minutes during market hours)
+    # 11. Start Blocked Credentials Recheck Worker (1-2 minutes during market hours)
     from credentials.watcher import start_blocked_credentials_watcher
     app["blocked_watcher_task"] = asyncio.create_task(
         start_blocked_credentials_watcher(interval_seconds=settings.BLOCKED_RECHECK_INTERVAL_SEC),
         name="blocked_credentials_watcher"
     )
 
-    # 13. Start Axis Direct 13-Minute Silent Token Refresh Worker (Mon-Fri 08:30-16:00 IST)
+    # 12. Start Axis Direct 13-Minute Silent Token Refresh Worker (Mon-Fri 08:30-16:00 IST)
     app["axis_refresh_task"] = asyncio.create_task(
         start_axis_token_refresh_worker(interval_seconds=780),
         name="axis_token_refresh_worker"
@@ -236,15 +252,11 @@ async def on_cleanup(app: web.Application):
     if "daily_scheduler_task" in app and not app["daily_scheduler_task"].done():
         app["daily_scheduler_task"].cancel()
 
-    # 4. Stop Market Close Scheduler Task
-    if "market_close_scheduler_task" in app and not app["market_close_scheduler_task"].done():
-        app["market_close_scheduler_task"].cancel()
-        
-    # 5. Stop Blocked Credentials Watcher Task
+    # 4. Stop Blocked Credentials Watcher Task
     if "blocked_watcher_task" in app and not app["blocked_watcher_task"].done():
         app["blocked_watcher_task"].cancel()
 
-    # 6. Stop Axis Token Refresh Worker Task
+    # 5. Stop Axis Token Refresh Worker Task
     if "axis_refresh_task" in app and not app["axis_refresh_task"].done():
         app["axis_refresh_task"].cancel()
     

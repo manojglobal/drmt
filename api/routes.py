@@ -771,18 +771,18 @@ async def refresh_blocked_user_token(request: web.Request):
 
 @routes.post('/api/reports/market-close')
 async def trigger_market_close_report(request: web.Request):
-    """Triggers the Market-Close email report on demand."""
+    """Retrieves Market-Close statistics on demand (email report disabled)."""
     await require_auth(request)
     from credentials.scheduler import execute_market_close_email_report
     try:
         report_data = await execute_market_close_email_report()
         return web.json_response({
             "success": True,
-            "message": f"Market-close report sent successfully ({report_data.get('successful_count', 0)} successful, {report_data.get('failed_count', 0)} failed).",
+            "message": f"Market-close statistics generated ({report_data.get('successful_count', 0)} successful, {report_data.get('failed_count', 0)} failed). Email notification is disabled.",
             "data": report_data
         })
     except Exception as e:
-        logger.error(f"❌ Error triggering market-close email report: {e}", exc_info=True)
+        logger.error(f"❌ Error generating market-close statistics: {e}", exc_info=True)
         return web.json_response({"success": False, "message": f"Failed to send market-close report: {e}"}, status=500)
 
 

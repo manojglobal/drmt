@@ -166,18 +166,19 @@ class ServiceLogger:
         # Logs a warning message to the console and file.
         await self._log("WARN", msg)
 
-    async def error(self, msg: str) -> None:
+    async def error(self, msg: str, notify_email: bool = True) -> None:
         """Log ERROR and fire a best-effort async email notification."""
         module = self._caller_module()
         await self._log("ERROR", msg, module_override=module)
         # Fire-and-forget: never blocks, never raises to caller
-        try:
-            asyncio.create_task(
-                send_error_email(f"DRMT ERROR [{self.name}]: {module}", msg),
-                name=f"err_email_{self.name}",
-            )
-        except RuntimeError:
-            pass  # No running event loop (e.g. during unit tests)
+        if notify_email:
+            try:
+                asyncio.create_task(
+                    send_error_email(f"DRMT ERROR [{self.name}]: {module}", msg),
+                    name=f"err_email_{self.name}",
+                )
+            except RuntimeError:
+                pass  # No running event loop (e.g. during unit tests)
 
     def get_history(self) -> List[LogEntry]:
         """Return a shallow copy of the history list (newest first)."""

@@ -439,19 +439,11 @@ async def execute_market_close_email_report() -> dict:
                 "reason": f"Status '{db_status}' without active token"
             })
 
-    plain_report, html_report = build_market_close_report_html(successful_accounts, failed_accounts)
-
-    th, tm = _get_market_close_time()
-    time_label = _format_target_time_str(th, tm)
-    subject = f"Market-Close Authentication Report: {len(successful_accounts)} Successful, {len(failed_accounts)} Failed ({time_label})"
-    try:
-        if failed_accounts:
-            await send_error_email(subject, plain_report, html_body=html_report)
-        else:
-            await send_email_notification(subject, plain_report, html_body=html_report)
-        await logger_system.info(f"📧 [MARKET CLOSE] Dispatched market-close report email ({len(successful_accounts)} successful, {len(failed_accounts)} failed).")
-    except Exception as e:
-        await logger_system.error(f"❌ [MARKET CLOSE] Failed sending report email: {e}")
+    await logger_system.info(
+        f"📊 [MARKET CLOSE] End of market session status: {len(successful_accounts)} successful, "
+        f"{len(failed_accounts)} failed out of {len(successful_accounts) + len(failed_accounts)} configured account(s). "
+        f"(Email notification removed per user request)"
+    )
 
     return {
         "successful_count": len(successful_accounts),

@@ -1158,6 +1158,41 @@ This section documents the chronological history of identified issues, root caus
 
 ---
 
+### Issue 22: Consolidated Failure Email on Process Restart & Dual-Format Duplication Elimination
+* **Date/Time:** 2026-10-22 15:00:00 IST
+* **Bug in Previous System:**
+  1. On process boot/restart, `authenticate_configured_credentials()` called `refresh_token_with_backoff(cred)` sequentially for all configured accounts. If multiple credentials failed (e.g., expired passwords, bad TOTP), an individual email was fired for each failure ($N$ separate emails).
+  2. For every failure, two separate emails were dispatched in different formats: a structured HTML table from `send_auth_failed_email` and a redundant raw plain-text email automatically dispatched by `logger_auth.error` via `ServiceLogger.error`.
+* **Root Cause:**
+  1. `refresh_token_with_backoff` lacked a batch-mode toggle to suppress individual email dispatch during startup/restart.
+  2. `ServiceLogger.error` in `logger/logger.py` fired `send_error_email` unconditionally on all `ERROR` logs without a `notify_email=False` option.
+  3. `main.py` lacked a consolidated failure aggregation handler on startup.
+* **Fix Implemented in Current System:**
+  1. Added `notify_email: bool = True` parameter to `ServiceLogger.error` in `logger/logger.py`. In `position/chronos.py` and `credentials/watcher.py`, auth failure logs pass `notify_email=False`, completely eliminating the raw plain-text duplicate email.
+  2. Added `send_email: bool = True` parameter to `refresh_token_with_backoff(cred, send_email=True)`.
+  3. Added `send_individual_emails: bool = False` to `authenticate_configured_credentials` in `main.py` and populated `"username"` in `auth_results`.
+  4. Built `send_consolidated_auth_failed_email` in `utils/email.py` formatting a single, responsive HTML table with summary badges (Total, Ready, Failed), Broker, Client ID, Username, Email, and Failure Reason.
+  5. Wired single consolidated email dispatch into `on_startup` in `main.py` whenever failures exist.
+* **Current Behavior:**
+  - On process restart with failures: Exactly one single consolidated email is sent in clean table format.
+  - On process restart with zero failures: No failure emails are sent.
+  - On single-account retries: Only one email is sent (structured table format), with zero duplicate plain-text emails.
+* **Status:** Resolved.
+
+---
+
+### Issue 23: Market-Close Credential Status Email Notification Removal
+* **Date/Time:** 2026-10-22 18:25:00 IST
+* **Requirement:** Remove the automated email notification previously sent after market close (03:30 PM IST) reporting the count of successful and failed credentials.
+* **Fix Implemented in Current System:**
+  1. Disabled `market_close_scheduler_task` in `main.py` startup (`on_startup`) and shutdown (`on_cleanup`).
+  2. Removed `send_error_email` and `send_email_notification` from `execute_market_close_email_report` in `credentials/scheduler.py`, logging the end-of-day summary to system logs only.
+  3. Updated `POST /api/reports/market-close` in `api/routes.py` to return JSON status without dispatching any SMTP emails.
+* **Current Behavior:** Zero email notifications are dispatched at market close. Morning pre-market refresh (09:10 AM) and restart failure consolidation remain fully active.
+* **Status:** Resolved.
+
+---
+
 ## 20. Comprehensive Go vs. Python Migration Analysis & Architectural Comparison
 
 This section provides an exhaustive comparative analysis between the legacy **Go 1.25** implementation and the current **Python 3.11+ (`asyncio` / `aiohttp.web`)** architecture, detailing known bugs, root causes, implementation fixes, performance benchmarks, and architectural tradeoffs.
