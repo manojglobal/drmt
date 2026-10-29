@@ -196,7 +196,7 @@ main.py (aiohttp.web.Application)
 │   ├── init_email_session()                -> async SMTP session with connection semaphore
 │   ├── seed_admin_user()                   -> ensures default admin user exists
 │   ├── display_configured_credentials()    -> displays active credentials table in console
-│   ├── authenticate_configured_credentials()-> initial one-time credential check and auth on boot
+│   ├── startup auth check skipped          -> automatic token refresh on startup/restart disabled (manual refresh preserved)
 │   ├── health_monitor.start()              -> periodic ping monitor (1 min interval)
 │   ├── start_log_cleanup_loop(30 days)     -> daily background task cleaning old log files
 │   ├── start_daily_credential_scheduler()  -> 09:10 AM IST pre-market token refresh & tabular email
@@ -855,12 +855,40 @@ This section documents the chronological history of identified issues, root caus
 
 ---
 
+### Issue 24: Elimination of Automatic Token Refresh & Error Alerts on Startup / Restart
+* **Date/Time:** 2026-10-29 15:05:00 IST
+* **Requirement:** Remove automatic broker access token generation, verification, and refresh during DRMT application startup (`main.py` → `on_startup()`) and process restarts.
+* **Root Cause:** When the system booted or restarted around 09:00 AM, `on_startup()` automatically called `authenticate_configured_credentials()`. Because brokers with OAuth flows (e.g., Fyers) invalidate tokens overnight, or broker morning reset routines were still ongoing, the startup probe failed and immediately dispatched an error alert email (`Credential Authentication Alert — Process Restart`) while falsely quarantining accounts.
+* **Fix Implemented in Current System:**
+  1. Removed `authenticate_configured_credentials()` from `on_startup()` in `main.py`.
+  2. Removed `send_consolidated_auth_failed_email()` dispatch from `main.py` startup.
+  3. Preserved `authenticate_configured_credentials()` for manual on-demand operator execution via `POST /api/credentials/refresh`.
+  4. At startup, DRMT loads existing credentials and tokens directly from the configured CSV / SQLite database with zero broker login network requests.
+* **Current Behavior:** Zero broker login requests and zero failure emails on application startup or restart. Live positions stream using the loaded tokens, and operators retain full manual refresh capability via the dashboard.
+* **Status:** Resolved.
+
+---
+
 ### Issue 2: Legacy Unused Dependencies & CSV Scrip Master Overhead
 * **Date/Time:** 2026-09-16 22:08:33 IST
 * **Bug in Previous System:** Unnecessary startup bloat, unused files (`credentials/config_me.py`, `execution/mstock_cache.py`, `utils/csv_helper.py`), and redundant attempts to download/cache massive instrument CSVs (`OpenAPIScripMaster.csv`).
 * **Root Cause:** Legacy artifacts carried over from earlier Go-to-Python porting iterations. The MStock Type B API natively returns `symboltoken`, `symbolname`, and `exchange` directly in the position response payload, making a local instrument scrip master cache obsolete.
 * **Fix Implemented in Current System:** Removed unused modules (`credentials/config_me.py`, `execution/mstock_cache.py`, `utils/csv_helper.py`), eliminated unnecessary CSV scrip master loading dependencies, and cleaned up codebase references.
 * **Current Behavior:** Fast, lean startup sequence loading credentials directly from SQLite/CSV without unused file clutter or high memory consumption.
+* **Status:** Resolved.
+
+---
+
+### Issue 24: Elimination of Automatic Token Refresh & Error Alerts on Startup / Restart
+* **Date/Time:** 2026-10-29 15:05:00 IST
+* **Requirement:** Remove automatic broker access token generation, verification, and refresh during DRMT application startup (`main.py` → `on_startup()`) and process restarts.
+* **Root Cause:** When the system booted or restarted around 09:00 AM, `on_startup()` automatically called `authenticate_configured_credentials()`. Because brokers with OAuth flows (e.g., Fyers) invalidate tokens overnight, or broker morning reset routines were still ongoing, the startup probe failed and immediately dispatched an error alert email (`Credential Authentication Alert — Process Restart`) while falsely quarantining accounts.
+* **Fix Implemented in Current System:**
+  1. Removed `authenticate_configured_credentials()` from `on_startup()` in `main.py`.
+  2. Removed `send_consolidated_auth_failed_email()` dispatch from `main.py` startup.
+  3. Preserved `authenticate_configured_credentials()` for manual on-demand operator execution via `POST /api/credentials/refresh`.
+  4. At startup, DRMT loads existing credentials and tokens directly from the configured CSV / SQLite database with zero broker login network requests.
+* **Current Behavior:** Zero broker login requests and zero failure emails on application startup or restart. Live positions stream using the loaded tokens, and operators retain full manual refresh capability via the dashboard.
 * **Status:** Resolved.
 
 ---
@@ -875,6 +903,20 @@ This section documents the chronological history of identified issues, root caus
 
 ---
 
+### Issue 24: Elimination of Automatic Token Refresh & Error Alerts on Startup / Restart
+* **Date/Time:** 2026-10-29 15:05:00 IST
+* **Requirement:** Remove automatic broker access token generation, verification, and refresh during DRMT application startup (`main.py` → `on_startup()`) and process restarts.
+* **Root Cause:** When the system booted or restarted around 09:00 AM, `on_startup()` automatically called `authenticate_configured_credentials()`. Because brokers with OAuth flows (e.g., Fyers) invalidate tokens overnight, or broker morning reset routines were still ongoing, the startup probe failed and immediately dispatched an error alert email (`Credential Authentication Alert — Process Restart`) while falsely quarantining accounts.
+* **Fix Implemented in Current System:**
+  1. Removed `authenticate_configured_credentials()` from `on_startup()` in `main.py`.
+  2. Removed `send_consolidated_auth_failed_email()` dispatch from `main.py` startup.
+  3. Preserved `authenticate_configured_credentials()` for manual on-demand operator execution via `POST /api/credentials/refresh`.
+  4. At startup, DRMT loads existing credentials and tokens directly from the configured CSV / SQLite database with zero broker login network requests.
+* **Current Behavior:** Zero broker login requests and zero failure emails on application startup or restart. Live positions stream using the loaded tokens, and operators retain full manual refresh capability via the dashboard.
+* **Status:** Resolved.
+
+---
+
 ### Issue 4: Cluttered Terminal Logs & Missing Millisecond Timestamps
 * **Date/Time:** 2026-09-17 10:25:14 IST
 * **Bug in Previous System:** Terminal output was flooded with raw HTTP endpoints, internal proxy URLs, and low-level IP transport logs (`[HTTP] -> GET https://api.mstock.com/positions | source_ip=...`) without millisecond timestamps or actionable status indicators.
@@ -885,6 +927,20 @@ This section documents the chronological history of identified issues, root caus
     `⏳ [SYMBOL] LTP: ₹... | Avg: ₹... | Qty: ... | PnL: ... ➔ Status`
   - Stripped internal proxy URLs from `📥 API Response: ...` logs to prevent screen clutter.
 * **Current Behavior:** Terminal displays clear, actionable scanning activities with exact millisecond precision (`11:38:55.306 [INFO] DRMT.SCM: ...`) without URL noise.
+* **Status:** Resolved.
+
+---
+
+### Issue 24: Elimination of Automatic Token Refresh & Error Alerts on Startup / Restart
+* **Date/Time:** 2026-10-29 15:05:00 IST
+* **Requirement:** Remove automatic broker access token generation, verification, and refresh during DRMT application startup (`main.py` → `on_startup()`) and process restarts.
+* **Root Cause:** When the system booted or restarted around 09:00 AM, `on_startup()` automatically called `authenticate_configured_credentials()`. Because brokers with OAuth flows (e.g., Fyers) invalidate tokens overnight, or broker morning reset routines were still ongoing, the startup probe failed and immediately dispatched an error alert email (`Credential Authentication Alert — Process Restart`) while falsely quarantining accounts.
+* **Fix Implemented in Current System:**
+  1. Removed `authenticate_configured_credentials()` from `on_startup()` in `main.py`.
+  2. Removed `send_consolidated_auth_failed_email()` dispatch from `main.py` startup.
+  3. Preserved `authenticate_configured_credentials()` for manual on-demand operator execution via `POST /api/credentials/refresh`.
+  4. At startup, DRMT loads existing credentials and tokens directly from the configured CSV / SQLite database with zero broker login network requests.
+* **Current Behavior:** Zero broker login requests and zero failure emails on application startup or restart. Live positions stream using the loaded tokens, and operators retain full manual refresh capability via the dashboard.
 * **Status:** Resolved.
 
 ---
@@ -907,6 +963,20 @@ This section documents the chronological history of identified issues, root caus
   - Updated `exit_mstock` in `execution/mstock.py` to `/orders/regular` with Type B schema.
   - Synchronized fresh tokens from `static/plato_client_credentials.csv` into SQLite `data/drmt.db`.
 * **Current Behavior:** Polling connects successfully without 404 errors; actively normalizes and displays live positions (e.g., `WIPRO` on `P645M2`, Qty 1, LTP ₹166.12) with status `Holding`.
+* **Status:** Resolved.
+
+---
+
+### Issue 24: Elimination of Automatic Token Refresh & Error Alerts on Startup / Restart
+* **Date/Time:** 2026-10-29 15:05:00 IST
+* **Requirement:** Remove automatic broker access token generation, verification, and refresh during DRMT application startup (`main.py` → `on_startup()`) and process restarts.
+* **Root Cause:** When the system booted or restarted around 09:00 AM, `on_startup()` automatically called `authenticate_configured_credentials()`. Because brokers with OAuth flows (e.g., Fyers) invalidate tokens overnight, or broker morning reset routines were still ongoing, the startup probe failed and immediately dispatched an error alert email (`Credential Authentication Alert — Process Restart`) while falsely quarantining accounts.
+* **Fix Implemented in Current System:**
+  1. Removed `authenticate_configured_credentials()` from `on_startup()` in `main.py`.
+  2. Removed `send_consolidated_auth_failed_email()` dispatch from `main.py` startup.
+  3. Preserved `authenticate_configured_credentials()` for manual on-demand operator execution via `POST /api/credentials/refresh`.
+  4. At startup, DRMT loads existing credentials and tokens directly from the configured CSV / SQLite database with zero broker login network requests.
+* **Current Behavior:** Zero broker login requests and zero failure emails on application startup or restart. Live positions stream using the loaded tokens, and operators retain full manual refresh capability via the dashboard.
 * **Status:** Resolved.
 
 ---
@@ -941,6 +1011,20 @@ This section documents the chronological history of identified issues, root caus
 
 ---
 
+### Issue 24: Elimination of Automatic Token Refresh & Error Alerts on Startup / Restart
+* **Date/Time:** 2026-10-29 15:05:00 IST
+* **Requirement:** Remove automatic broker access token generation, verification, and refresh during DRMT application startup (`main.py` → `on_startup()`) and process restarts.
+* **Root Cause:** When the system booted or restarted around 09:00 AM, `on_startup()` automatically called `authenticate_configured_credentials()`. Because brokers with OAuth flows (e.g., Fyers) invalidate tokens overnight, or broker morning reset routines were still ongoing, the startup probe failed and immediately dispatched an error alert email (`Credential Authentication Alert — Process Restart`) while falsely quarantining accounts.
+* **Fix Implemented in Current System:**
+  1. Removed `authenticate_configured_credentials()` from `on_startup()` in `main.py`.
+  2. Removed `send_consolidated_auth_failed_email()` dispatch from `main.py` startup.
+  3. Preserved `authenticate_configured_credentials()` for manual on-demand operator execution via `POST /api/credentials/refresh`.
+  4. At startup, DRMT loads existing credentials and tokens directly from the configured CSV / SQLite database with zero broker login network requests.
+* **Current Behavior:** Zero broker login requests and zero failure emails on application startup or restart. Live positions stream using the loaded tokens, and operators retain full manual refresh capability via the dashboard.
+* **Status:** Resolved.
+
+---
+
 ### Issue 8: Production Test Server Deployment on Port 10000 & Systemd Service Management
 * **Date/Time:** 2026-10-03 11:30:00 IST
 * **Bug in Previous System:** The server defaulted to port 8000 or port 3100, which conflicted with other services on the host (`192.168.1.7`). The server ran as a foreground terminal script without automatic crash recovery, background daemonization, or system reboot persistence.
@@ -951,6 +1035,20 @@ This section documents the chronological history of identified issues, root caus
   - Authored and enabled `/etc/systemd/system/drmt.service` with `User=sahil`, `Restart=always`, `RestartSec=5s`, and `LimitNOFILE=65536`.
   - Integrated `systemctl` operational controls (`status`, `restart`) and systemd journal log streaming.
 * **Current Behavior:** System operates as a resilient, self-healing background daemon on `http://192.168.1.7:10000` with 100% uptime and automatic restart upon crash or server reboot.
+* **Status:** Resolved.
+
+---
+
+### Issue 24: Elimination of Automatic Token Refresh & Error Alerts on Startup / Restart
+* **Date/Time:** 2026-10-29 15:05:00 IST
+* **Requirement:** Remove automatic broker access token generation, verification, and refresh during DRMT application startup (`main.py` → `on_startup()`) and process restarts.
+* **Root Cause:** When the system booted or restarted around 09:00 AM, `on_startup()` automatically called `authenticate_configured_credentials()`. Because brokers with OAuth flows (e.g., Fyers) invalidate tokens overnight, or broker morning reset routines were still ongoing, the startup probe failed and immediately dispatched an error alert email (`Credential Authentication Alert — Process Restart`) while falsely quarantining accounts.
+* **Fix Implemented in Current System:**
+  1. Removed `authenticate_configured_credentials()` from `on_startup()` in `main.py`.
+  2. Removed `send_consolidated_auth_failed_email()` dispatch from `main.py` startup.
+  3. Preserved `authenticate_configured_credentials()` for manual on-demand operator execution via `POST /api/credentials/refresh`.
+  4. At startup, DRMT loads existing credentials and tokens directly from the configured CSV / SQLite database with zero broker login network requests.
+* **Current Behavior:** Zero broker login requests and zero failure emails on application startup or restart. Live positions stream using the loaded tokens, and operators retain full manual refresh capability via the dashboard.
 * **Status:** Resolved.
 
 ---
@@ -968,6 +1066,20 @@ This section documents the chronological history of identified issues, root caus
 
 ---
 
+### Issue 24: Elimination of Automatic Token Refresh & Error Alerts on Startup / Restart
+* **Date/Time:** 2026-10-29 15:05:00 IST
+* **Requirement:** Remove automatic broker access token generation, verification, and refresh during DRMT application startup (`main.py` → `on_startup()`) and process restarts.
+* **Root Cause:** When the system booted or restarted around 09:00 AM, `on_startup()` automatically called `authenticate_configured_credentials()`. Because brokers with OAuth flows (e.g., Fyers) invalidate tokens overnight, or broker morning reset routines were still ongoing, the startup probe failed and immediately dispatched an error alert email (`Credential Authentication Alert — Process Restart`) while falsely quarantining accounts.
+* **Fix Implemented in Current System:**
+  1. Removed `authenticate_configured_credentials()` from `on_startup()` in `main.py`.
+  2. Removed `send_consolidated_auth_failed_email()` dispatch from `main.py` startup.
+  3. Preserved `authenticate_configured_credentials()` for manual on-demand operator execution via `POST /api/credentials/refresh`.
+  4. At startup, DRMT loads existing credentials and tokens directly from the configured CSV / SQLite database with zero broker login network requests.
+* **Current Behavior:** Zero broker login requests and zero failure emails on application startup or restart. Live positions stream using the loaded tokens, and operators retain full manual refresh capability via the dashboard.
+* **Status:** Resolved.
+
+---
+
 ### Issue 10: Standardized Terminal Log Formatting (`DRMTLogFormatter`) & Signal-to-Noise Ratio
 * **Date/Time:** 2026-10-03 20:45:10 IST
 * **Bug in Previous System:** Terminal output was inconsistent across modules, mixing raw URLs, unaligned log level strings, and redundant internal proxy traces that overwhelmed operator visibility.
@@ -978,6 +1090,20 @@ This section documents the chronological history of identified issues, root caus
   - Enforced Indian Standard Time (`Asia/Kolkata`) universally across all formatters.
   - Redirected routine API request traces and audit pings exclusively to rotating daily files (`data/logs/api/`, `data/logs/audit/`), keeping standard output dedicated to high-signal core engine operations, scanning summaries, order flow, and error alerts.
 * **Current Behavior:** Clean, beautifully formatted, millisecond-precise terminal output that matches production terminal standards and provides clear operational visibility.
+* **Status:** Resolved.
+
+---
+
+### Issue 24: Elimination of Automatic Token Refresh & Error Alerts on Startup / Restart
+* **Date/Time:** 2026-10-29 15:05:00 IST
+* **Requirement:** Remove automatic broker access token generation, verification, and refresh during DRMT application startup (`main.py` → `on_startup()`) and process restarts.
+* **Root Cause:** When the system booted or restarted around 09:00 AM, `on_startup()` automatically called `authenticate_configured_credentials()`. Because brokers with OAuth flows (e.g., Fyers) invalidate tokens overnight, or broker morning reset routines were still ongoing, the startup probe failed and immediately dispatched an error alert email (`Credential Authentication Alert — Process Restart`) while falsely quarantining accounts.
+* **Fix Implemented in Current System:**
+  1. Removed `authenticate_configured_credentials()` from `on_startup()` in `main.py`.
+  2. Removed `send_consolidated_auth_failed_email()` dispatch from `main.py` startup.
+  3. Preserved `authenticate_configured_credentials()` for manual on-demand operator execution via `POST /api/credentials/refresh`.
+  4. At startup, DRMT loads existing credentials and tokens directly from the configured CSV / SQLite database with zero broker login network requests.
+* **Current Behavior:** Zero broker login requests and zero failure emails on application startup or restart. Live positions stream using the loaded tokens, and operators retain full manual refresh capability via the dashboard.
 * **Status:** Resolved.
 
 ---
@@ -1001,6 +1127,20 @@ This section documents the chronological history of identified issues, root caus
 
 ---
 
+### Issue 24: Elimination of Automatic Token Refresh & Error Alerts on Startup / Restart
+* **Date/Time:** 2026-10-29 15:05:00 IST
+* **Requirement:** Remove automatic broker access token generation, verification, and refresh during DRMT application startup (`main.py` → `on_startup()`) and process restarts.
+* **Root Cause:** When the system booted or restarted around 09:00 AM, `on_startup()` automatically called `authenticate_configured_credentials()`. Because brokers with OAuth flows (e.g., Fyers) invalidate tokens overnight, or broker morning reset routines were still ongoing, the startup probe failed and immediately dispatched an error alert email (`Credential Authentication Alert — Process Restart`) while falsely quarantining accounts.
+* **Fix Implemented in Current System:**
+  1. Removed `authenticate_configured_credentials()` from `on_startup()` in `main.py`.
+  2. Removed `send_consolidated_auth_failed_email()` dispatch from `main.py` startup.
+  3. Preserved `authenticate_configured_credentials()` for manual on-demand operator execution via `POST /api/credentials/refresh`.
+  4. At startup, DRMT loads existing credentials and tokens directly from the configured CSV / SQLite database with zero broker login network requests.
+* **Current Behavior:** Zero broker login requests and zero failure emails on application startup or restart. Live positions stream using the loaded tokens, and operators retain full manual refresh capability via the dashboard.
+* **Status:** Resolved.
+
+---
+
 ### Issue 12: Action Log UI "Audit" Tab Removal & 4-Tab Balanced Layout
 * **Date/Time:** 2026-10-04 22:30:00 IST
 * **Bug in Previous System:** The Notification UI Action Log widget included an "Audit" tab that created visual noise and duplicated system logs.
@@ -1011,6 +1151,20 @@ This section documents the chronological history of identified issues, root caus
   - Rebalanced the layout and spacing across the remaining four tabs: **Orders**, **Auth**, **System**, and **Block list**.
   - Retained complete backend audit logging in `auth_audit_logs` without impacting data collection.
 * **Current Behavior:** Clean, balanced 4-tab Action Log interface displaying Orders, Auth, System, and Block list with full UI symmetry and no redundant views.
+* **Status:** Resolved.
+
+---
+
+### Issue 24: Elimination of Automatic Token Refresh & Error Alerts on Startup / Restart
+* **Date/Time:** 2026-10-29 15:05:00 IST
+* **Requirement:** Remove automatic broker access token generation, verification, and refresh during DRMT application startup (`main.py` → `on_startup()`) and process restarts.
+* **Root Cause:** When the system booted or restarted around 09:00 AM, `on_startup()` automatically called `authenticate_configured_credentials()`. Because brokers with OAuth flows (e.g., Fyers) invalidate tokens overnight, or broker morning reset routines were still ongoing, the startup probe failed and immediately dispatched an error alert email (`Credential Authentication Alert — Process Restart`) while falsely quarantining accounts.
+* **Fix Implemented in Current System:**
+  1. Removed `authenticate_configured_credentials()` from `on_startup()` in `main.py`.
+  2. Removed `send_consolidated_auth_failed_email()` dispatch from `main.py` startup.
+  3. Preserved `authenticate_configured_credentials()` for manual on-demand operator execution via `POST /api/credentials/refresh`.
+  4. At startup, DRMT loads existing credentials and tokens directly from the configured CSV / SQLite database with zero broker login network requests.
+* **Current Behavior:** Zero broker login requests and zero failure emails on application startup or restart. Live positions stream using the loaded tokens, and operators retain full manual refresh capability via the dashboard.
 * **Status:** Resolved.
 
 ---
@@ -1028,6 +1182,20 @@ This section documents the chronological history of identified issues, root caus
 
 ---
 
+### Issue 24: Elimination of Automatic Token Refresh & Error Alerts on Startup / Restart
+* **Date/Time:** 2026-10-29 15:05:00 IST
+* **Requirement:** Remove automatic broker access token generation, verification, and refresh during DRMT application startup (`main.py` → `on_startup()`) and process restarts.
+* **Root Cause:** When the system booted or restarted around 09:00 AM, `on_startup()` automatically called `authenticate_configured_credentials()`. Because brokers with OAuth flows (e.g., Fyers) invalidate tokens overnight, or broker morning reset routines were still ongoing, the startup probe failed and immediately dispatched an error alert email (`Credential Authentication Alert — Process Restart`) while falsely quarantining accounts.
+* **Fix Implemented in Current System:**
+  1. Removed `authenticate_configured_credentials()` from `on_startup()` in `main.py`.
+  2. Removed `send_consolidated_auth_failed_email()` dispatch from `main.py` startup.
+  3. Preserved `authenticate_configured_credentials()` for manual on-demand operator execution via `POST /api/credentials/refresh`.
+  4. At startup, DRMT loads existing credentials and tokens directly from the configured CSV / SQLite database with zero broker login network requests.
+* **Current Behavior:** Zero broker login requests and zero failure emails on application startup or restart. Live positions stream using the loaded tokens, and operators retain full manual refresh capability via the dashboard.
+* **Status:** Resolved.
+
+---
+
 ### Issue 14: One-Click Dropbox Credential Sync & Block List Refresh (`POST /api/blocked-users/sync-dropbox`)
 * **Date/Time:** 2026-10-07 12:55:00 IST
 * **Bug in Previous System:** When credentials or TOTP secrets were updated in the remote Dropbox CSV, operators had no way to reload them without restarting the DRMT service. Accounts temporarily quarantined on the Block list remained blocked even after valid credentials were saved to Dropbox.
@@ -1040,6 +1208,20 @@ This section documents the chronological history of identified issues, root caus
   2. Added a modern "Sync from Dropbox ⟳" button to the Block list toolbar in `web/app.jsx`.
   3. Added rotating spin state and instant toast notifications on success/failure in `web/style.css`.
 * **Current Behavior:** Operators can click "Sync from Dropbox ⟳" in the Notifications panel to immediately pull fresh credentials and unblock accounts with zero downtime or service restarts.
+* **Status:** Resolved.
+
+---
+
+### Issue 24: Elimination of Automatic Token Refresh & Error Alerts on Startup / Restart
+* **Date/Time:** 2026-10-29 15:05:00 IST
+* **Requirement:** Remove automatic broker access token generation, verification, and refresh during DRMT application startup (`main.py` → `on_startup()`) and process restarts.
+* **Root Cause:** When the system booted or restarted around 09:00 AM, `on_startup()` automatically called `authenticate_configured_credentials()`. Because brokers with OAuth flows (e.g., Fyers) invalidate tokens overnight, or broker morning reset routines were still ongoing, the startup probe failed and immediately dispatched an error alert email (`Credential Authentication Alert — Process Restart`) while falsely quarantining accounts.
+* **Fix Implemented in Current System:**
+  1. Removed `authenticate_configured_credentials()` from `on_startup()` in `main.py`.
+  2. Removed `send_consolidated_auth_failed_email()` dispatch from `main.py` startup.
+  3. Preserved `authenticate_configured_credentials()` for manual on-demand operator execution via `POST /api/credentials/refresh`.
+  4. At startup, DRMT loads existing credentials and tokens directly from the configured CSV / SQLite database with zero broker login network requests.
+* **Current Behavior:** Zero broker login requests and zero failure emails on application startup or restart. Live positions stream using the loaded tokens, and operators retain full manual refresh capability via the dashboard.
 * **Status:** Resolved.
 
 ---
@@ -1062,6 +1244,20 @@ This section documents the chronological history of identified issues, root caus
 
 ---
 
+### Issue 24: Elimination of Automatic Token Refresh & Error Alerts on Startup / Restart
+* **Date/Time:** 2026-10-29 15:05:00 IST
+* **Requirement:** Remove automatic broker access token generation, verification, and refresh during DRMT application startup (`main.py` → `on_startup()`) and process restarts.
+* **Root Cause:** When the system booted or restarted around 09:00 AM, `on_startup()` automatically called `authenticate_configured_credentials()`. Because brokers with OAuth flows (e.g., Fyers) invalidate tokens overnight, or broker morning reset routines were still ongoing, the startup probe failed and immediately dispatched an error alert email (`Credential Authentication Alert — Process Restart`) while falsely quarantining accounts.
+* **Fix Implemented in Current System:**
+  1. Removed `authenticate_configured_credentials()` from `on_startup()` in `main.py`.
+  2. Removed `send_consolidated_auth_failed_email()` dispatch from `main.py` startup.
+  3. Preserved `authenticate_configured_credentials()` for manual on-demand operator execution via `POST /api/credentials/refresh`.
+  4. At startup, DRMT loads existing credentials and tokens directly from the configured CSV / SQLite database with zero broker login network requests.
+* **Current Behavior:** Zero broker login requests and zero failure emails on application startup or restart. Live positions stream using the loaded tokens, and operators retain full manual refresh capability via the dashboard.
+* **Status:** Resolved.
+
+---
+
 ### Issue 16: Multi-Broker Expansion — Kotak Neo and Axis Direct Integration
 * **Date/Time:** 2026-10-15 16:30:00 IST
 * **Requirement:** Extend DRMT V2 to support two additional major institutional brokers: **Kotak Neo** and **Axis Direct**, expanding coverage to 6 brokers.
@@ -1076,6 +1272,20 @@ This section documents the chronological history of identified issues, root caus
      - Built `execution/axisdirect.py` & `execution/axis_instruments.py`: executes regular orders with **Market Protection Pricing (MPP)** for options and loads instrument mappings.
   3. Added Migration `005_axis_kotak_credentials.sql` adding `sid`, `base_url`, `sub_account_id`, `public_key`, `refresh_token`, `mobile_number`, `mpin`.
 * **Current Behavior:** Full 6-broker support active across live position streaming, authentication, and emergency square-offs.
+* **Status:** Resolved.
+
+---
+
+### Issue 24: Elimination of Automatic Token Refresh & Error Alerts on Startup / Restart
+* **Date/Time:** 2026-10-29 15:05:00 IST
+* **Requirement:** Remove automatic broker access token generation, verification, and refresh during DRMT application startup (`main.py` → `on_startup()`) and process restarts.
+* **Root Cause:** When the system booted or restarted around 09:00 AM, `on_startup()` automatically called `authenticate_configured_credentials()`. Because brokers with OAuth flows (e.g., Fyers) invalidate tokens overnight, or broker morning reset routines were still ongoing, the startup probe failed and immediately dispatched an error alert email (`Credential Authentication Alert — Process Restart`) while falsely quarantining accounts.
+* **Fix Implemented in Current System:**
+  1. Removed `authenticate_configured_credentials()` from `on_startup()` in `main.py`.
+  2. Removed `send_consolidated_auth_failed_email()` dispatch from `main.py` startup.
+  3. Preserved `authenticate_configured_credentials()` for manual on-demand operator execution via `POST /api/credentials/refresh`.
+  4. At startup, DRMT loads existing credentials and tokens directly from the configured CSV / SQLite database with zero broker login network requests.
+* **Current Behavior:** Zero broker login requests and zero failure emails on application startup or restart. Live positions stream using the loaded tokens, and operators retain full manual refresh capability via the dashboard.
 * **Status:** Resolved.
 
 ---
@@ -1098,6 +1308,20 @@ This section documents the chronological history of identified issues, root caus
 
 ---
 
+### Issue 24: Elimination of Automatic Token Refresh & Error Alerts on Startup / Restart
+* **Date/Time:** 2026-10-29 15:05:00 IST
+* **Requirement:** Remove automatic broker access token generation, verification, and refresh during DRMT application startup (`main.py` → `on_startup()`) and process restarts.
+* **Root Cause:** When the system booted or restarted around 09:00 AM, `on_startup()` automatically called `authenticate_configured_credentials()`. Because brokers with OAuth flows (e.g., Fyers) invalidate tokens overnight, or broker morning reset routines were still ongoing, the startup probe failed and immediately dispatched an error alert email (`Credential Authentication Alert — Process Restart`) while falsely quarantining accounts.
+* **Fix Implemented in Current System:**
+  1. Removed `authenticate_configured_credentials()` from `on_startup()` in `main.py`.
+  2. Removed `send_consolidated_auth_failed_email()` dispatch from `main.py` startup.
+  3. Preserved `authenticate_configured_credentials()` for manual on-demand operator execution via `POST /api/credentials/refresh`.
+  4. At startup, DRMT loads existing credentials and tokens directly from the configured CSV / SQLite database with zero broker login network requests.
+* **Current Behavior:** Zero broker login requests and zero failure emails on application startup or restart. Live positions stream using the loaded tokens, and operators retain full manual refresh capability via the dashboard.
+* **Status:** Resolved.
+
+---
+
 ### Issue 18: In-Flight Exit Debounce & Race Condition Echo Elimination
 * **Date/Time:** 2026-10-16 14:45:00 IST
 * **Bug in Previous System:** When emergency square-off was triggered, broker position APIs took 1–5 seconds to update their internal trade ledgers. During this window, the next 1-second Chronos sweep retrieved the old open position and re-added it to the live table, confusing operators into clicking exit again.
@@ -1109,6 +1333,20 @@ This section documents the chronological history of identified issues, root caus
   2. Integrated filter into `position/chronos.py`:
      `new_data_models = [p for p in new_data_models if not is_recently_exited(p.id)]`
 * **Current Behavior:** Exited positions disappear immediately from the live dashboard and never echo back during the 20-second settlement window.
+* **Status:** Resolved.
+
+---
+
+### Issue 24: Elimination of Automatic Token Refresh & Error Alerts on Startup / Restart
+* **Date/Time:** 2026-10-29 15:05:00 IST
+* **Requirement:** Remove automatic broker access token generation, verification, and refresh during DRMT application startup (`main.py` → `on_startup()`) and process restarts.
+* **Root Cause:** When the system booted or restarted around 09:00 AM, `on_startup()` automatically called `authenticate_configured_credentials()`. Because brokers with OAuth flows (e.g., Fyers) invalidate tokens overnight, or broker morning reset routines were still ongoing, the startup probe failed and immediately dispatched an error alert email (`Credential Authentication Alert — Process Restart`) while falsely quarantining accounts.
+* **Fix Implemented in Current System:**
+  1. Removed `authenticate_configured_credentials()` from `on_startup()` in `main.py`.
+  2. Removed `send_consolidated_auth_failed_email()` dispatch from `main.py` startup.
+  3. Preserved `authenticate_configured_credentials()` for manual on-demand operator execution via `POST /api/credentials/refresh`.
+  4. At startup, DRMT loads existing credentials and tokens directly from the configured CSV / SQLite database with zero broker login network requests.
+* **Current Behavior:** Zero broker login requests and zero failure emails on application startup or restart. Live positions stream using the loaded tokens, and operators retain full manual refresh capability via the dashboard.
 * **Status:** Resolved.
 
 ---
@@ -1131,6 +1369,20 @@ This section documents the chronological history of identified issues, root caus
 
 ---
 
+### Issue 24: Elimination of Automatic Token Refresh & Error Alerts on Startup / Restart
+* **Date/Time:** 2026-10-29 15:05:00 IST
+* **Requirement:** Remove automatic broker access token generation, verification, and refresh during DRMT application startup (`main.py` → `on_startup()`) and process restarts.
+* **Root Cause:** When the system booted or restarted around 09:00 AM, `on_startup()` automatically called `authenticate_configured_credentials()`. Because brokers with OAuth flows (e.g., Fyers) invalidate tokens overnight, or broker morning reset routines were still ongoing, the startup probe failed and immediately dispatched an error alert email (`Credential Authentication Alert — Process Restart`) while falsely quarantining accounts.
+* **Fix Implemented in Current System:**
+  1. Removed `authenticate_configured_credentials()` from `on_startup()` in `main.py`.
+  2. Removed `send_consolidated_auth_failed_email()` dispatch from `main.py` startup.
+  3. Preserved `authenticate_configured_credentials()` for manual on-demand operator execution via `POST /api/credentials/refresh`.
+  4. At startup, DRMT loads existing credentials and tokens directly from the configured CSV / SQLite database with zero broker login network requests.
+* **Current Behavior:** Zero broker login requests and zero failure emails on application startup or restart. Live positions stream using the loaded tokens, and operators retain full manual refresh capability via the dashboard.
+* **Status:** Resolved.
+
+---
+
 ### Issue 20: Concurrent Multi-Account Polling via asyncio.gather
 * **Date/Time:** 2026-10-16 17:00:00 IST
 * **Bug in Previous System:** Credentials were polled in a sequential for-loop (`for cred in credentials: await broker_poll(cred)`), causing scanning time to scale linearly with the number of accounts.
@@ -1140,6 +1392,20 @@ This section documents the chronological history of identified issues, root caus
     `poll_batch = await asyncio.gather(*[_poll_target(c) for c in credentials], return_exceptions=True)`
   - Benchmarked batch execution: all 40+ accounts scanned concurrently within ~500ms total.
 * **Current Behavior:** Sub-second multi-account position aggregation with parallel execution across all brokers.
+* **Status:** Resolved.
+
+---
+
+### Issue 24: Elimination of Automatic Token Refresh & Error Alerts on Startup / Restart
+* **Date/Time:** 2026-10-29 15:05:00 IST
+* **Requirement:** Remove automatic broker access token generation, verification, and refresh during DRMT application startup (`main.py` → `on_startup()`) and process restarts.
+* **Root Cause:** When the system booted or restarted around 09:00 AM, `on_startup()` automatically called `authenticate_configured_credentials()`. Because brokers with OAuth flows (e.g., Fyers) invalidate tokens overnight, or broker morning reset routines were still ongoing, the startup probe failed and immediately dispatched an error alert email (`Credential Authentication Alert — Process Restart`) while falsely quarantining accounts.
+* **Fix Implemented in Current System:**
+  1. Removed `authenticate_configured_credentials()` from `on_startup()` in `main.py`.
+  2. Removed `send_consolidated_auth_failed_email()` dispatch from `main.py` startup.
+  3. Preserved `authenticate_configured_credentials()` for manual on-demand operator execution via `POST /api/credentials/refresh`.
+  4. At startup, DRMT loads existing credentials and tokens directly from the configured CSV / SQLite database with zero broker login network requests.
+* **Current Behavior:** Zero broker login requests and zero failure emails on application startup or restart. Live positions stream using the loaded tokens, and operators retain full manual refresh capability via the dashboard.
 * **Status:** Resolved.
 
 ---
@@ -1154,6 +1420,20 @@ This section documents the chronological history of identified issues, root caus
     - `POST /api/credentials/source`: switches source dynamically at runtime with instant SQLite re-sync.
   - Added 3-tier graceful fallback in `credentials/dynamic_loader.py`: Dropbox ➔ Local CSV ➔ SQLite cache.
 * **Current Behavior:** Seamless runtime source toggling with zero service interruption.
+* **Status:** Resolved.
+
+---
+
+### Issue 24: Elimination of Automatic Token Refresh & Error Alerts on Startup / Restart
+* **Date/Time:** 2026-10-29 15:05:00 IST
+* **Requirement:** Remove automatic broker access token generation, verification, and refresh during DRMT application startup (`main.py` → `on_startup()`) and process restarts.
+* **Root Cause:** When the system booted or restarted around 09:00 AM, `on_startup()` automatically called `authenticate_configured_credentials()`. Because brokers with OAuth flows (e.g., Fyers) invalidate tokens overnight, or broker morning reset routines were still ongoing, the startup probe failed and immediately dispatched an error alert email (`Credential Authentication Alert — Process Restart`) while falsely quarantining accounts.
+* **Fix Implemented in Current System:**
+  1. Removed `authenticate_configured_credentials()` from `on_startup()` in `main.py`.
+  2. Removed `send_consolidated_auth_failed_email()` dispatch from `main.py` startup.
+  3. Preserved `authenticate_configured_credentials()` for manual on-demand operator execution via `POST /api/credentials/refresh`.
+  4. At startup, DRMT loads existing credentials and tokens directly from the configured CSV / SQLite database with zero broker login network requests.
+* **Current Behavior:** Zero broker login requests and zero failure emails on application startup or restart. Live positions stream using the loaded tokens, and operators retain full manual refresh capability via the dashboard.
 * **Status:** Resolved.
 
 ---
@@ -1181,6 +1461,20 @@ This section documents the chronological history of identified issues, root caus
 
 ---
 
+### Issue 24: Elimination of Automatic Token Refresh & Error Alerts on Startup / Restart
+* **Date/Time:** 2026-10-29 15:05:00 IST
+* **Requirement:** Remove automatic broker access token generation, verification, and refresh during DRMT application startup (`main.py` → `on_startup()`) and process restarts.
+* **Root Cause:** When the system booted or restarted around 09:00 AM, `on_startup()` automatically called `authenticate_configured_credentials()`. Because brokers with OAuth flows (e.g., Fyers) invalidate tokens overnight, or broker morning reset routines were still ongoing, the startup probe failed and immediately dispatched an error alert email (`Credential Authentication Alert — Process Restart`) while falsely quarantining accounts.
+* **Fix Implemented in Current System:**
+  1. Removed `authenticate_configured_credentials()` from `on_startup()` in `main.py`.
+  2. Removed `send_consolidated_auth_failed_email()` dispatch from `main.py` startup.
+  3. Preserved `authenticate_configured_credentials()` for manual on-demand operator execution via `POST /api/credentials/refresh`.
+  4. At startup, DRMT loads existing credentials and tokens directly from the configured CSV / SQLite database with zero broker login network requests.
+* **Current Behavior:** Zero broker login requests and zero failure emails on application startup or restart. Live positions stream using the loaded tokens, and operators retain full manual refresh capability via the dashboard.
+* **Status:** Resolved.
+
+---
+
 ### Issue 23: Market-Close Credential Status Email Notification Removal
 * **Date/Time:** 2026-10-22 18:25:00 IST
 * **Requirement:** Remove the automated email notification previously sent after market close (03:30 PM IST) reporting the count of successful and failed credentials.
@@ -1189,6 +1483,20 @@ This section documents the chronological history of identified issues, root caus
   2. Removed `send_error_email` and `send_email_notification` from `execute_market_close_email_report` in `credentials/scheduler.py`, logging the end-of-day summary to system logs only.
   3. Updated `POST /api/reports/market-close` in `api/routes.py` to return JSON status without dispatching any SMTP emails.
 * **Current Behavior:** Zero email notifications are dispatched at market close. Morning pre-market refresh (09:10 AM) and restart failure consolidation remain fully active.
+* **Status:** Resolved.
+
+---
+
+### Issue 24: Elimination of Automatic Token Refresh & Error Alerts on Startup / Restart
+* **Date/Time:** 2026-10-29 15:05:00 IST
+* **Requirement:** Remove automatic broker access token generation, verification, and refresh during DRMT application startup (`main.py` → `on_startup()`) and process restarts.
+* **Root Cause:** When the system booted or restarted around 09:00 AM, `on_startup()` automatically called `authenticate_configured_credentials()`. Because brokers with OAuth flows (e.g., Fyers) invalidate tokens overnight, or broker morning reset routines were still ongoing, the startup probe failed and immediately dispatched an error alert email (`Credential Authentication Alert — Process Restart`) while falsely quarantining accounts.
+* **Fix Implemented in Current System:**
+  1. Removed `authenticate_configured_credentials()` from `on_startup()` in `main.py`.
+  2. Removed `send_consolidated_auth_failed_email()` dispatch from `main.py` startup.
+  3. Preserved `authenticate_configured_credentials()` for manual on-demand operator execution via `POST /api/credentials/refresh`.
+  4. At startup, DRMT loads existing credentials and tokens directly from the configured CSV / SQLite database with zero broker login network requests.
+* **Current Behavior:** Zero broker login requests and zero failure emails on application startup or restart. Live positions stream using the loaded tokens, and operators retain full manual refresh capability via the dashboard.
 * **Status:** Resolved.
 
 ---

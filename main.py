@@ -191,24 +191,8 @@ async def on_startup(app: web.Application):
     # 6. Display Configured Credentials
     await display_configured_credentials()
     
-    # 7. Initial One-Time Credential Verification & Authentication at Startup
-    await logger_system.info("🔐 Performing initial one-time credential check and authentication...")
-    succeeded, failed, auth_results = await authenticate_configured_credentials(send_individual_emails=False)
-    await logger_system.info(f"🔐 Initial startup check complete: {len(succeeded)} ready, {len(failed)} failed/blocked.")
-    
-    # Dispatch single consolidated failure email if any accounts failed on restart/startup
-    failed_accounts = [r for r in auth_results if not r.get("refreshed", False)]
-    if failed_accounts:
-        try:
-            from utils.email import send_consolidated_auth_failed_email
-            await send_consolidated_auth_failed_email(
-                failed_accounts=failed_accounts,
-                total_configured=len(auth_results),
-                source="Process Restart"
-            )
-            await logger_system.info(f"📧 Consolidated failure email dispatched for {len(failed_accounts)} account(s).")
-        except Exception as mail_err:
-            await logger_system.error(f"Failed sending consolidated startup failure email: {mail_err}", notify_email=False)
+    # 7. Startup Credential Authentication Skipped (Automatic token refresh on startup/restart is disabled)
+    await logger_system.info("🔐 Startup auto-refresh disabled. Accounts and tokens loaded directly from credentials source.")
     
     # 8. Start Health Monitor
     await health_monitor.start()
