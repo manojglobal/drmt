@@ -1,9 +1,11 @@
+import json
 import logging
 from datetime import datetime
 from models.schemas import Credential
 from credentials.crypto import totp_now
 from credentials.httpclient import proxy_request
 from credentials.dedup import save_working_credential
+from logger.logger import logger_auth
 
 logger = logging.getLogger("DRMT.SCM")
 
@@ -25,6 +27,8 @@ async def login_mstock(cred: Credential) -> str:
     }
     
     resp1 = await proxy_request("POST", login_url, str(cred.static_ip), headers=login_headers, json_data=login_payload)
+    resp1_str = json.dumps(resp1, default=str) if isinstance(resp1, (dict, list)) else str(resp1)
+    await logger_auth.info(f"📥 [mStock Login Step 1 Response] ({cred.client_id}): {resp1_str}")
     data1 = resp1.get("data") if isinstance(resp1, dict) and isinstance(resp1.get("data"), dict) else resp1
     refresh_token = data1.get("refreshToken") if isinstance(data1, dict) else None
     if not refresh_token and isinstance(resp1, dict):
@@ -44,6 +48,8 @@ async def login_mstock(cred: Credential) -> str:
     totp_payload = {"refreshToken": refresh_token, "totp": totp}
     
     resp2 = await proxy_request("POST", totp_url, str(cred.static_ip), headers=totp_headers, json_data=totp_payload)
+    resp2_str = json.dumps(resp2, default=str) if isinstance(resp2, (dict, list)) else str(resp2)
+    await logger_auth.info(f"📥 [mStock VerifyTOTP Step 2 Response] ({cred.client_id}): {resp2_str}")
     data2 = resp2.get("data") if isinstance(resp2, dict) and isinstance(resp2.get("data"), dict) else resp2
     jwt_token = data2.get("jwtToken") if isinstance(data2, dict) else None
     if not jwt_token and isinstance(resp2, dict):

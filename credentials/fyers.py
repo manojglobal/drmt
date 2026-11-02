@@ -68,6 +68,9 @@ async def login_fyers(cred: Credential) -> str:
             except Exception:
                 resp = {}
 
+        resp_str = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else str(resp)
+        await logger_auth.info(f"📥 [Fyers Profile Response] ({cred.client_id}): {resp_str}")
+
         if not isinstance(resp, dict):
             raise ValueError(f"Fyers login failed for {cred.client_id}: unexpected response {resp}")
 

@@ -68,6 +68,8 @@ SENSITIVE_PATTERNS = [
     # Flattrade jKey/susertoken
     (re.compile(r'([\"\']?jKey[\"\']?\s*[:=]\s*[\"\']?)([^\"\'\s,;}{]+)([\"\']?)', re.IGNORECASE), r'\g<1>***\g<3>'),
     (re.compile(r'([\"\']?susertoken[\"\']?\s*[:=]\s*[\"\']?)([^\"\'\s,;}{]+)([\"\']?)', re.IGNORECASE), r'\g<1>***\g<3>'),
+    # Refresh tokens, JWT tokens, and broker user sessions
+    (re.compile(r'([\"\']?(?:refreshToken|jwtToken|userSession)[\"\']?\s*[:=]\s*[\"\']?)([^\"\'\s,;}{]+)([\"\']?)', re.IGNORECASE), r'\g<1>***\g<3>'),
 ]
 
 def sanitize_log_message(msg: str) -> str:

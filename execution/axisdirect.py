@@ -72,6 +72,9 @@ async def exit_axisdirect(pos: Position, cred: Credential) -> bool:
             body=order_values,
         )
 
+        resp_str = json.dumps(porder_resp, default=str) if isinstance(porder_resp, (dict, list)) else str(porder_resp)
+        await logger_exit.info(f"📥 [Axis Direct Exit Order Response] ({cred.client_id}) {pos.symbol}: {resp_str}")
+
         data = porder_resp.get("data", {}) if isinstance(porder_resp, dict) else porder_resp
         oms_order_id = data.get("omsOrderId") if isinstance(data, dict) else None
 
@@ -101,6 +104,8 @@ async def exit_axisdirect(pos: Position, cred: Credential) -> bool:
                     public_key=cred.public_key,
                     body=order_values,
                 )
+                retry_str = json.dumps(retry_resp, default=str) if isinstance(retry_resp, (dict, list)) else str(retry_resp)
+                await logger_exit.info(f"📥 [Axis Direct Exit Order Retry Response] ({cred.client_id}) {pos.symbol}: {retry_str}")
                 retry_data = retry_resp.get("data", {}) if isinstance(retry_resp, dict) else retry_resp
                 retry_oms = retry_data.get("omsOrderId") if isinstance(retry_data, dict) else None
                 if retry_oms:

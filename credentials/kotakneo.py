@@ -105,6 +105,9 @@ async def generate_user_kotak_neo_access_token(
             except Exception:
                 resp1 = {"raw": resp1}
 
+        resp1_str = json.dumps(resp1, default=str) if isinstance(resp1, (dict, list)) else str(resp1)
+        await logger_auth.info(f"📥 [Kotak Neo tradeApiLogin Step 1 Response] ({client_id}): {resp1_str}")
+
         data1 = resp1.get("data") if isinstance(resp1, dict) and isinstance(resp1.get("data"), dict) else resp1
         temp_token = data1.get("token") if isinstance(data1, dict) else None
         sid = data1.get("sid") if isinstance(data1, dict) else None
@@ -137,6 +140,9 @@ async def generate_user_kotak_neo_access_token(
                 resp2 = json.loads(resp2)
             except Exception:
                 resp2 = {"raw": resp2}
+
+        resp2_str = json.dumps(resp2, default=str) if isinstance(resp2, (dict, list)) else str(resp2)
+        await logger_auth.info(f"📥 [Kotak Neo tradeApiValidate Step 2 Response] ({client_id}): {resp2_str}")
 
         data2 = resp2.get("data") if isinstance(resp2, dict) and isinstance(resp2.get("data"), dict) else resp2
         trade_token = data2.get("token") if isinstance(data2, dict) else None

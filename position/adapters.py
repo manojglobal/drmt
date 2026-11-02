@@ -24,7 +24,7 @@ from execution.kotak_instruments import (
 )
 from execution.flattrade_instruments import ensure_flattrade_instruments_cached
 from execution.alice_instruments import ensure_alice_instruments_cached
-from logger.logger import logger_system, logger_monitor
+from logger.logger import logger_system, logger_monitor, logger_api
 
 logger = logging.getLogger("DRMT.SCM")
 
@@ -58,13 +58,10 @@ async def poll_mstock(cred: Credential) -> List[Position]:
         else:
             data = []
 
-        if data:
-            payload_str = json.dumps(data, default=str)
-            if _last_raw_payloads.get(f"mstock:{cred.client_id}") != payload_str:
-                _last_raw_payloads[f"mstock:{cred.client_id}"] = payload_str
-                await logger_monitor.info(f"📥 [mStock Positions Payload] ({cred.client_id}): {payload_str}")
-        else:
-            _last_raw_payloads.pop(f"mstock:{cred.client_id}", None)
+        raw_resp_str = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else str(resp)
+        if _last_raw_payloads.get(f"mstock:{cred.client_id}") != raw_resp_str:
+            _last_raw_payloads[f"mstock:{cred.client_id}"] = raw_resp_str
+            await logger_monitor.info(f"📥 [mStock Positions Response] ({cred.client_id}): {raw_resp_str}")
 
         positions = PositionManager.normalize_positions(data, cred.broker, cred.client_id)
         
@@ -101,6 +98,10 @@ async def poll_mstock(cred: Credential) -> List[Position]:
                     timeout=2.0
                 )
                 data_obj = quote_resp.get("data") if isinstance(quote_resp, dict) else None
+                quote_str = json.dumps(quote_resp, default=str) if isinstance(quote_resp, (dict, list)) else str(quote_resp)
+                if _last_raw_payloads.get(f"mstock:quote:{cred.client_id}") != quote_str:
+                    _last_raw_payloads[f"mstock:quote:{cred.client_id}"] = quote_str
+                    await logger_monitor.info(f"📥 [mStock Quotes Response] ({cred.client_id}): {quote_str}")
                 fetched = (data_obj.get("fetched") or []) if isinstance(data_obj, dict) else []
                 ltp_map = {str(item.get("symbolToken")): float(item.get("ltp", 0)) for item in fetched}
 
@@ -151,41 +152,47 @@ async def poll_flattrade(cred: Credential) -> List[Position]:
             except Exception:
                 resp = {}
         
-        # EmergeAPI schema: {"status": "S"|"I"|"E", "errMsg": "...", "positionBookArr": [...]}
+        raw_resp_str = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else str(resp)
+        if _last_raw_payloads.get(f"flattrade:{cred.client_id}") != raw_resp_str:
+            _last_raw_payloads[f"flattrade:{cred.client_id}"] = raw_resp_str
+            await logger_monitor.info(f"📥 [Flattrade Positions Response] ({cred.client_id}): {raw_resp_str}")
+
+        # EmergeAPI schema: {"status": "S"|"I"|"E", "errMsg": "...", "positionBookArr": [...], "segmentCount": [...]}
         if isinstance(resp, dict):
             status = str(resp.get("status", "")).upper()
             stat = str(resp.get("stat", "")).lower()
             emsg = str(resp.get("errMsg", "") or resp.get("emsg", "")).lower()
-            if (
-                status in ("I", "E")
-                or stat == "not_ok"
-                or any(x in emsg for x in ("invalid session", "session expired", "invalid key", "not logged in", "user not logged in"))
-            ):
+
+            # 1. Genuine Auth/Session Failures -> Raise PermissionError to trigger quarantine/re-auth
+            if any(x in emsg for x in ("invalid session", "session expired", "invalid key", "not logged in", "user not logged in", "token expired")):
                 raise PermissionError(
                     f"Flattrade Auth Error: Invalid/Expired session (status={status}, msg={resp.get('errMsg') or resp.get('emsg')})"
                 )
-            
-            if status != "S" and "positionBookArr" not in resp:
-                raise PermissionError(
-                    f"Flattrade Auth Error: Unexpected response (status={status}, msg={resp.get('errMsg') or resp.get('emsg')})"
-                )
-            
+
+            # 2. Extract positions from positionBookArr or segmentCount fallback
             raw_list = resp.get("positionBookArr") or []
+            if not raw_list and "segmentCount" in resp and isinstance(resp.get("segmentCount"), list):
+                for seg in resp["segmentCount"]:
+                    if isinstance(seg, dict) and seg.get("positionSegArr"):
+                        raw_list.extend(seg["positionSegArr"])
+
             if not isinstance(raw_list, list):
                 raw_list = [raw_list] if raw_list else []
+
+            # 3. Informational or Empty Position Books ("I" or "no data") -> Healthy empty positions, do NOT block
+            if not raw_list and (status == "I" or "no data" in emsg or "no records" in emsg or "no order" in emsg):
+                return []
+
+            # 4. Broker Error Responses -> Transient error, do NOT blacklist account
+            if status == "E" or (stat == "not_ok" and status != "S"):
+                raise RuntimeError(
+                    f"Flattrade Poll Error: status={status}, msg={resp.get('errMsg') or resp.get('emsg')}"
+                )
         elif isinstance(resp, list):
             raw_list = resp
         else:
             raw_list = []
 
-        if raw_list:
-            payload_str = json.dumps(raw_list, default=str)
-            if _last_raw_payloads.get(f"flattrade:{cred.client_id}") != payload_str:
-                _last_raw_payloads[f"flattrade:{cred.client_id}"] = payload_str
-                await logger_monitor.info(f"📥 [Flattrade Positions Payload] ({cred.client_id}): {payload_str}")
-        else:
-            _last_raw_payloads.pop(f"flattrade:{cred.client_id}", None)
-            
         asyncio.create_task(ensure_flattrade_instruments_cached(cred))
         return PositionManager.normalize_positions(raw_list, cred.broker, cred.client_id)
     except Exception as e:
@@ -211,6 +218,11 @@ async def poll_aliceblue(cred: Credential) -> List[Position]:
                 raise PermissionError(f"AliceBlue Auth Error: HTTP {resp.status}")
             resp.raise_for_status()
             data = await resp.json(content_type=None)
+            raw_data_str = json.dumps(data, default=str) if isinstance(data, (dict, list)) else str(data)
+            await logger_api.info(f"📥 [DIRECT RESP] GET {url} -> HTTP {resp.status} | Body: {raw_data_str}")
+            if _last_raw_payloads.get(f"aliceblue:{cred.client_id}") != raw_data_str:
+                _last_raw_payloads[f"aliceblue:{cred.client_id}"] = raw_data_str
+                await logger_monitor.info(f"📥 [AliceBlue Positions Response] ({cred.client_id}): {raw_data_str}")
             
             # Check for error or session expiration in 200 OK responses (both stat and status keys)
             stat = str(data.get("stat") or data.get("status") or "").lower()
@@ -219,21 +231,12 @@ async def poll_aliceblue(cred: Credential) -> List[Position]:
             if stat == "not_ok":
                 # Rule: AliceBlue EC920 means no positions, not an error.
                 if "ec920" in emsg.lower():
-                    _last_raw_payloads.pop(f"aliceblue:{cred.client_id}", None)
                     return []
                 if any(x in emsg.lower() for x in ("login", "session", "token", "unauthorized", "expired")):
                     raise PermissionError(f"AliceBlue Auth Error: {emsg}")
                 raise RuntimeError(f"AliceBlue Poll Error: {emsg}")
                 
             result = data.get("result", [])
-            if isinstance(result, list) and result:
-                payload_str = json.dumps(result, default=str)
-                if _last_raw_payloads.get(f"aliceblue:{cred.client_id}") != payload_str:
-                    _last_raw_payloads[f"aliceblue:{cred.client_id}"] = payload_str
-                    await logger_monitor.info(f"📥 [AliceBlue Positions Payload] ({cred.client_id}): {payload_str}")
-            else:
-                _last_raw_payloads.pop(f"aliceblue:{cred.client_id}", None)
-
             asyncio.create_task(ensure_alice_instruments_cached(cred))
             if isinstance(result, list):
                 return PositionManager.normalize_positions(result, cred.broker, cred.client_id)
@@ -293,13 +296,10 @@ async def poll_fyers(cred: Credential) -> List[Position]:
         else:
             raw_list = []
 
-        if raw_list:
-            payload_str = json.dumps(raw_list, default=str)
-            if _last_raw_payloads.get(f"fyers:{cred.client_id}") != payload_str:
-                _last_raw_payloads[f"fyers:{cred.client_id}"] = payload_str
-                await logger_monitor.info(f"📥 [Fyers Positions Payload] ({cred.client_id}): {payload_str}")
-        else:
-            _last_raw_payloads.pop(f"fyers:{cred.client_id}", None)
+        raw_resp_str = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else str(resp)
+        if _last_raw_payloads.get(f"fyers:{cred.client_id}") != raw_resp_str:
+            _last_raw_payloads[f"fyers:{cred.client_id}"] = raw_resp_str
+            await logger_monitor.info(f"📥 [Fyers Positions Response] ({cred.client_id}): {raw_resp_str}")
 
         return PositionManager.normalize_positions(raw_list, cred.broker, cred.client_id)
     except Exception as e:
@@ -352,13 +352,10 @@ async def poll_kotakneo(cred: Credential) -> List[Position]:
         else:
             raw_list = []
 
-        if raw_list:
-            payload_str = json.dumps(raw_list, default=str)
-            if _last_raw_payloads.get(f"kotak:{cred.client_id}") != payload_str:
-                _last_raw_payloads[f"kotak:{cred.client_id}"] = payload_str
-                await logger_monitor.info(f"📥 [Kotak Neo Positions Payload] ({cred.client_id}): {payload_str}")
-        else:
-            _last_raw_payloads.pop(f"kotak:{cred.client_id}", None)
+        raw_resp_str = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else str(resp)
+        if _last_raw_payloads.get(f"kotak:{cred.client_id}") != raw_resp_str:
+            _last_raw_payloads[f"kotak:{cred.client_id}"] = raw_resp_str
+            await logger_monitor.info(f"📥 [Kotak Neo Positions Response] ({cred.client_id}): {raw_resp_str}")
 
         positions = PositionManager.normalize_positions(raw_list, cred.broker, cred.client_id)
         if not positions:
@@ -394,6 +391,11 @@ async def poll_kotakneo(cred: Credential) -> List[Position]:
                             quote_resp = await qr.json(content_type=None)
                     else:
                         quote_resp = None
+
+                quote_str = json.dumps(quote_resp, default=str) if isinstance(quote_resp, (dict, list)) else str(quote_resp)
+                if _last_raw_payloads.get(f"kotak:quote:{cred.client_id}") != quote_str:
+                    _last_raw_payloads[f"kotak:quote:{cred.client_id}"] = quote_str
+                    await logger_monitor.info(f"📥 [Kotak Neo Quotes Response] ({cred.client_id}): {quote_str}")
 
                 items = quote_resp if isinstance(quote_resp, list) else (quote_resp.get("data") if isinstance(quote_resp, dict) else [])
                 if isinstance(items, list):
@@ -650,13 +652,10 @@ async def poll_axisdirect(cred: Credential) -> List[Position]:
                     p["tradingSymbol"] = real_sym
                     p["symbol"] = real_sym
 
-        if positions_to_normalize:
-            payload_str = json.dumps(positions_to_normalize, default=str)
-            if _last_raw_payloads.get(f"axis:{cred.client_id}") != payload_str:
-                _last_raw_payloads[f"axis:{cred.client_id}"] = payload_str
-                await logger_monitor.info(f"📥 [Axis Direct Positions Payload] ({cred.client_id}): {payload_str}")
-        else:
-            _last_raw_payloads.pop(f"axis:{cred.client_id}", None)
+        payload_str = json.dumps(positions_to_normalize, default=str)
+        if _last_raw_payloads.get(f"axis:{cred.client_id}") != payload_str:
+            _last_raw_payloads[f"axis:{cred.client_id}"] = payload_str
+            await logger_monitor.info(f"📥 [Axis Direct Positions Response] ({cred.client_id}): {payload_str}")
 
         positions = PositionManager.normalize_positions(positions_to_normalize, cred.broker, cred.client_id)
 
@@ -668,6 +667,10 @@ async def poll_axisdirect(cred: Credential) -> List[Position]:
                     fetch_axis_quotes(token_ids, cred),
                     timeout=2.0
                 )
+                quote_str = json.dumps(ltp_map, default=str) if isinstance(ltp_map, (dict, list)) else str(ltp_map)
+                if _last_raw_payloads.get(f"axis:quote:{cred.client_id}") != quote_str:
+                    _last_raw_payloads[f"axis:quote:{cred.client_id}"] = quote_str
+                    await logger_monitor.info(f"📥 [Axis Direct Quotes Response] ({cred.client_id}): {quote_str}")
                 for p in positions:
                     ltp_val = ltp_map.get(str(p.token))
                     if not ltp_val or ltp_val <= 0:

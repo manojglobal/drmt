@@ -99,11 +99,11 @@ async def _proxy_request_inner(
                         pass
 
                 resp_str = json.dumps(broker_body, default=str) if isinstance(broker_body, (dict, list)) else str(broker_body)
-                if len(resp_str) > 2000:
-                    resp_str = resp_str[:2000] + "... [truncated]"
+                if len(resp_str) > 5000:
+                    resp_str = resp_str[:5000] + "... [truncated]"
                 sanitized_resp = sanitize_log_message(resp_str)
                 logger.debug(f"📥 API Response ({elapsed_ms:.1f}ms): {sanitized_resp}")
-                await logger_api.info(f"📥 [PROXY RESP] {method} {safe_url} -> HTTP {target_sc} in {elapsed_ms:.1f}ms")
+                await logger_api.info(f"📥 [PROXY RESP] {method} {safe_url} -> HTTP {target_sc} in {elapsed_ms:.1f}ms | Body: {sanitized_resp}")
 
                 if target_sc in (401, 403):
                     raise PermissionError(f"Broker Auth Error (HTTP {target_sc}): {broker_body}")
@@ -113,11 +113,11 @@ async def _proxy_request_inner(
                 return broker_body
             else:
                 resp_str = json.dumps(resp_data, default=str)
-                if len(resp_str) > 2000:
-                    resp_str = resp_str[:2000] + "... [truncated]"
+                if len(resp_str) > 5000:
+                    resp_str = resp_str[:5000] + "... [truncated]"
                 sanitized_resp = sanitize_log_message(resp_str)
                 logger.debug(f"📥 API Response ({elapsed_ms:.1f}ms): {sanitized_resp}")
-                await logger_api.info(f"📥 [PROXY RESP] {method} {safe_url} -> HTTP {resp.status} in {elapsed_ms:.1f}ms")
+                await logger_api.info(f"📥 [PROXY RESP] {method} {safe_url} -> HTTP {resp.status} in {elapsed_ms:.1f}ms | Body: {sanitized_resp}")
                 return resp_data
         except aiohttp.ContentTypeError:
             elapsed_ms = (time.monotonic() - t0) * 1000
@@ -128,9 +128,9 @@ async def _proxy_request_inner(
                 logger.warning(f"⚠️  [PROXY 500] {method} {safe_url} ({elapsed_ms:.1f}ms) — retrying without source_ip={source_ip}")
                 return await _proxy_request_inner(method, url, "", headers, json_data, data, _is_retry=True)
 
-            sanitized_text = sanitize_log_message(resp_text[:500])
+            sanitized_text = sanitize_log_message(resp_text[:2000])
             logger.debug(f"📥 API Response ({elapsed_ms:.1f}ms): {sanitized_text}")
-            await logger_api.info(f"📥 [PROXY RESP] {method} {safe_url} -> HTTP {resp.status} (text) in {elapsed_ms:.1f}ms")
+            await logger_api.info(f"📥 [PROXY RESP] {method} {safe_url} -> HTTP {resp.status} (text) in {elapsed_ms:.1f}ms | Body: {sanitized_text}")
             resp.raise_for_status()
             return resp_text
         except Exception as e:

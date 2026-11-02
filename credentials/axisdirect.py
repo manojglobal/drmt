@@ -107,6 +107,9 @@ async def get_axis_public_key(api_client_id: str, authorization_key: str, static
             except Exception:
                 resp = {}
 
+        resp_str = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else str(resp)
+        await logger_auth.info(f"📥 [Axis Direct Handshake Response] ({cid}): {resp_str}")
+
         if isinstance(resp, dict):
             data = resp.get("data") if isinstance(resp.get("data"), dict) else resp
             pub_key = (
@@ -278,12 +281,17 @@ async def send_axis_api_request(
                     decrypted_raw = decrypt_data(payload_str, secret_key)
                     try:
                         decrypted_obj = json.loads(decrypted_raw)
-                        return sc, decrypted_obj
+                        final_res = decrypted_obj
                     except Exception:
-                        return sc, decrypted_raw
+                        final_res = decrypted_raw
+                    log_str = json.dumps(final_res, default=str) if isinstance(final_res, (dict, list)) else str(final_res)
+                    await logger_auth.info(f"📥 [Axis Direct Decrypted Response] ({cid}) {url.split('/')[-1]}: {log_str}")
+                    return sc, final_res
                 except Exception as e:
                     logger.warning(f"Failed to decrypt Axis response payload: {e}")
 
+        resp_log = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else str(resp)
+        await logger_auth.info(f"📥 [Axis Direct Response] ({cid}) {url.split('/')[-1]}: {resp_log}")
         return sc, resp
     except PermissionError as pe:
         # Proxy identified 401 or 403

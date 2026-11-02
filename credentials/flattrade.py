@@ -1,3 +1,4 @@
+import json
 import logging
 import uuid
 from datetime import datetime
@@ -6,6 +7,7 @@ from credentials.crypto import sha256_hex, totp_now
 from credentials.httpclient import proxy_request
 from credentials.dedup import save_working_credential
 from core.engine import core_engine
+from logger.logger import logger_auth
 
 logger = logging.getLogger("DRMT.SCM")
 
@@ -45,6 +47,9 @@ async def login_flattrade(cred: Credential) -> str:
             raise RuntimeError("HTTP session not initialized")
         async with session.post(login_url, json=payload, headers=headers) as r:
             resp = await r.json(content_type=None)
+            
+    resp_str = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else str(resp)
+    await logger_auth.info(f"📥 [Flattrade QuickAuth Response] ({cred.client_id}): {resp_str}")
             
     data = resp.get("data") if isinstance(resp, dict) and isinstance(resp.get("data"), dict) else resp
     quickauth = data.get("quickauthresp", {}) if isinstance(data, dict) else {}

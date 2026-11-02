@@ -11,6 +11,7 @@ Steps:
   6. Get User Details (checksum = sha256(client_id + auth_code + api_secret))
 """
 
+import json
 import logging
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
@@ -19,6 +20,7 @@ from models.schemas import Credential
 from credentials.crypto import sha256_hex, encrypt_password_alice, totp_now, md5_hex
 from core.engine import core_engine
 from credentials.dedup import save_working_credential
+from logger.logger import logger_api, logger_auth
 
 logger = logging.getLogger("DRMT.SCM")
 
@@ -75,7 +77,11 @@ async def login_aliceblue(cred: Credential) -> str:
         if auth_header:
             headers["Authorization"] = auth_header
         async with session.post(url, json=payload, headers=headers) as resp:
-            return await resp.json(content_type=None)
+            data = await resp.json(content_type=None)
+            resp_str = json.dumps(data, default=str) if isinstance(data, (dict, list)) else str(data)
+            await logger_api.info(f"📥 [DIRECT RESP] POST {url} -> HTTP {resp.status} | Body: {resp_str}")
+            await logger_auth.info(f"📥 [AliceBlue Login Step Response] ({cred.client_id}) {url.split('/')[-1]}: {resp_str}")
+            return data
 
     # ── Step 1: Verify User ──────────────────────────────────────────────────
     resp = await post_json(ALICE_VERIFY_USER, {"userId": cred.client_id})

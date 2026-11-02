@@ -52,6 +52,8 @@ async def exit_kotakneo(pos: Position, cred: Credential) -> bool:
 
     try:
         resp = await _send_kotak_order(url, form_data, headers, cred.static_ip)
+        resp_str = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else str(resp)
+        await logger_exit.info(f"📥 [Kotak Neo Exit Order Response] ({cred.client_id}) {pos.symbol}: {resp_str}")
         success, order_id, err_msg, st_code = _parse_kotak_order_response(resp)
 
         # In-flight token renewal retry on session invalidation
@@ -63,6 +65,8 @@ async def exit_kotakneo(pos: Position, cred: Credential) -> bool:
                     headers = get_kotak_headers(cred)
                     headers["Content-Type"] = "application/x-www-form-urlencoded"
                     resp = await _send_kotak_order(url, form_data, headers, cred.static_ip)
+                    retry_str = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else str(resp)
+                    await logger_exit.info(f"📥 [Kotak Neo Exit Order Retry Response] ({cred.client_id}) {pos.symbol}: {retry_str}")
                     success, order_id, err_msg, st_code = _parse_kotak_order_response(resp)
             except Exception as renew_err:
                 await logger_exit.error(f"In-flight token renewal failed for {cred.client_id}: {renew_err}")
