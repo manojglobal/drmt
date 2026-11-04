@@ -1,6 +1,8 @@
 import asyncio
+from datetime import datetime
 import logging
 import os
+import zoneinfo
 from aiohttp import web
 
 from settings import settings
@@ -191,8 +193,55 @@ async def on_startup(app: web.Application):
     # 6. Display Configured Credentials
     await display_configured_credentials()
     
-    # 7. Startup Credential Authentication Skipped (Automatic token refresh on startup/restart is disabled)
-    await logger_system.info("🔐 Startup auto-refresh disabled. Accounts and tokens loaded directly from credentials source.")
+    # 7. Passive Token Freshness Quarantine (No auto-refresh — accounts with expired or missing tokens appear in Failed Auth)
+    from position.blocklist import add_to_blocklist
+    from credentials.dynamic_loader import get_dynamic_credentials, compute_credential_signature
+    from utils.user_mapping import get_client_username
+    import zoneinfo
+    _ist_zone = zoneinfo.ZoneInfo("Asia/Kolkata")
+    _today_ist = datetime.now(tz=_ist_zone).date()
+
+    quarantined_count = 0
+    for cid in get_configured_client_ids():
+        d_cred = get_dynamic_credentials(cid)
+        if not d_cred:
+            continue
+        token_val = (d_cred.get("token") or "").strip()
+        broker_name = d_cred.get("broker") or ""
+        uname = get_client_username(cid)
+        sig = compute_credential_signature(d_cred)
+        if not token_val:
+            add_to_blocklist(
+                client_id=cid,
+                broker=broker_name,
+                username=uname,
+                reason="Missing access token — Please use Refresh Token on the dashboard.",
+                signature=sig
+            )
+            quarantined_count += 1
+            await logger_auth.warn(f"⛔ [STARTUP QUARANTINE] {broker_name}:{cid} ({uname}) has no access token. Added to Failed Auth.")
+        else:
+            token_created_str = (d_cred.get("token_created_at") or "").strip()
+            if token_created_str:
+                try:
+                    t_date = datetime.fromisoformat(token_created_str).date() if "T" in token_created_str else datetime.strptime(token_created_str[:10], "%Y-%m-%d").date()
+                    if t_date < _today_ist:
+                        add_to_blocklist(
+                            client_id=cid,
+                            broker=broker_name,
+                            username=uname,
+                            reason=f"Session token expired (Issued on {t_date.strftime('%Y-%m-%d')}) — Please use Refresh Token on the dashboard.",
+                            signature=sig
+                        )
+                        quarantined_count += 1
+                        await logger_auth.warn(f"⛔ [STARTUP QUARANTINE] {broker_name}:{cid} ({uname}) token expired (issued {t_date}). Added to Failed Auth.")
+                except Exception:
+                    pass
+
+    if quarantined_count > 0:
+        await logger_system.warn(f"⛔ [STARTUP QUARANTINE] {quarantined_count} account(s) quarantined in Failed Auth (missing/expired tokens).")
+    else:
+        await logger_system.info("🔐 Startup check complete: All configured accounts have today's active session tokens.")
     
     # 8. Start Health Monitor
     await health_monitor.start()

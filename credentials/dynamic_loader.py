@@ -289,7 +289,7 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
             upsert_query = """
                 INSERT INTO credentials 
                 (broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, user_id, sid, base_url, sub_account_id, public_key, refresh_token, mobile_number, mpin)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working', ?, datetime('now', 'localtime'), ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working', ?, COALESCE(?, datetime('now', 'localtime')), ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(fingerprint) DO UPDATE SET
                     status = 'working',
                     token = CASE 
@@ -324,6 +324,7 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
                 rec["static_ip"],
                 fingerprint,
                 rec["token"],
+                rec.get("token_created_at") or None,
                 rec["user_id"],
                 rec.get("sid", ""),
                 rec.get("base_url", ""),

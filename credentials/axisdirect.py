@@ -24,7 +24,7 @@ from credentials.httpclient import proxy_request
 from core.engine import core_engine
 from credentials.dedup import save_working_credential
 from credentials.crypto import totp_now
-from logger.logger import logger_auth, sanitize_log_message
+from logger.logger import logger_auth, logger_api, sanitize_log_message
 
 logger = logging.getLogger("DRMT.SCM")
 
@@ -108,7 +108,7 @@ async def get_axis_public_key(api_client_id: str, authorization_key: str, static
                 resp = {}
 
         resp_str = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else str(resp)
-        await logger_auth.info(f"📥 [Axis Direct Handshake Response] ({cid}): {resp_str}")
+        await logger_api.info(f"📥 [Axis Direct Handshake Response] ({cid}): {resp_str}")
 
         if isinstance(resp, dict):
             data = resp.get("data") if isinstance(resp.get("data"), dict) else resp
@@ -285,13 +285,13 @@ async def send_axis_api_request(
                     except Exception:
                         final_res = decrypted_raw
                     log_str = json.dumps(final_res, default=str) if isinstance(final_res, (dict, list)) else str(final_res)
-                    await logger_auth.info(f"📥 [Axis Direct Decrypted Response] ({cid}) {url.split('/')[-1]}: {log_str}")
+                    await logger_api.info(f"📥 [Axis Direct Decrypted Response] ({cid}) {url.split('/')[-1]}: {log_str}")
                     return sc, final_res
                 except Exception as e:
                     logger.warning(f"Failed to decrypt Axis response payload: {e}")
 
         resp_log = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else str(resp)
-        await logger_auth.info(f"📥 [Axis Direct Response] ({cid}) {url.split('/')[-1]}: {resp_log}")
+        await logger_api.info(f"📥 [Axis Direct Response] ({cid}) {url.split('/')[-1]}: {resp_log}")
         return sc, resp
     except PermissionError as pe:
         # Proxy identified 401 or 403
@@ -846,4 +846,5 @@ async def login_axisdirect(cred: Credential) -> str:
     await save_working_credential(cred)
     masked = f"{cred.token[:8]}...{cred.token[-8:]}" if len(cred.token) > 16 else cred.token
     logger.info(f"🔑 Validated Axis Direct session token for {cred.client_id}: {masked}")
+    await logger_api.info(f"🔑 [Axis Direct Auth Verified] ({cred.client_id}): Active session confirmed ({masked})")
     return cred.token

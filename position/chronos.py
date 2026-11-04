@@ -1,9 +1,11 @@
 import asyncio
+from datetime import datetime
 import json
 import logging
 import random
 import time
 from typing import Optional, Dict, Tuple
+import zoneinfo
 
 from aiohttp import web
 from models.schemas import Credential
@@ -19,6 +21,8 @@ from position.blocklist import add_to_blocklist, remove_from_blocklist, is_block
 from utils.user_mapping import get_client_username
 
 logger = logging.getLogger(__name__)
+
+_IST = zoneinfo.ZoneInfo("Asia/Kolkata")
 
 # Track poll errors to throttle repeated console logs for persistent failures
 _POLL_ERROR_THROTTLE_SEC = 30.0
@@ -172,15 +176,44 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                         pass
 
                     try:
+                        # 4a. Validate access token presence
+                        if not c.token or not str(c.token).strip():
+                            raise PermissionError(f"Missing access token for {c.broker}:{c.client_id} — Please use Refresh Token on the dashboard.")
+
+                        # 4b. Validate access token calendar-day freshness
+                        t_created = getattr(c, "token_created_at", None)
+                        if not t_created:
+                            try:
+                                from credentials.dynamic_loader import get_dynamic_credentials
+                                fresh_d = get_dynamic_credentials(c.client_id)
+                                t_created = fresh_d.get("token_created_at") if fresh_d else None
+                            except Exception:
+                                t_created = None
+                        if not t_created and c.token_updated_at:
+                            t_created = str(c.token_updated_at)
+
+                        if t_created:
+                            try:
+                                t_created_str = str(t_created).strip()
+                                t_date = datetime.fromisoformat(t_created_str).date() if "T" in t_created_str else datetime.strptime(t_created_str[:10], "%Y-%m-%d").date()
+                                now_ist_date = datetime.now(tz=_IST).date()
+                                if t_date < now_ist_date:
+                                    raise PermissionError(f"Session token expired (Issued on {t_date.strftime('%Y-%m-%d')}) — Please use Refresh Token on the dashboard.")
+                            except PermissionError:
+                                raise
+                            except Exception:
+                                pass
+
                         res = await broker_poll(c)
                         if c.client_id in _last_poll_errors:
                             _last_poll_errors.pop(c.client_id, None)
                             await logger_system.info(f"✅ Connection restored for {c.broker}:{c.client_id}")
                         return res
-                    except PermissionError:
+                    except PermissionError as e:
                         username = get_client_username(c.client_id)
+                        err_reason = str(e).strip() if str(e).strip() else "Session token expired — on-demand auto-refresh is disabled."
                         await logger_auth.warn(
-                            f"🔑 [CHRONOS] Session token expired/invalid for {c.broker}:{c.client_id} ({username}). "
+                            f"🔑 [CHRONOS] Session token expired/invalid for {c.broker}:{c.client_id} ({username}): {err_reason}. "
                             f"Quarantining account in Block list (on-demand auto-refresh is disabled)."
                         )
                         # 1. Immediately quarantine into Block list with signature so future scans skip it
@@ -195,13 +228,14 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                             client_id=c.client_id,
                             broker=c.broker,
                             username=username,
-                            reason="Session token expired (HTTP 401/403) — on-demand auto-refresh is disabled.",
+                            reason=err_reason,
                             signature=sig
                         )
                         # 2. Dispatch alert email to operator asynchronously (non-blocking)
                         from utils.email import send_error_email
                         email_body = (
-                            f"Account {c.broker}:{c.client_id} ({username}) encountered an expired or invalid session token (HTTP 401/403) during live scanning.\n\n"
+                            f"Account {c.broker}:{c.client_id} ({username}) encountered an expired or invalid session token during live scanning.\n"
+                            f"Reason: {err_reason}\n\n"
                             f"On-demand auto-refresh is disabled during live scans to prevent broker account lockouts.\n"
                             f"The account has been placed in the Block list and live scanning has paused for this account.\n\n"
                             f"To restore authentication, please use the 'Refresh Token' feature on the dashboard or update credentials in the remote CSV."

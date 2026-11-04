@@ -1,7 +1,7 @@
 import logging
 import json
 import uuid
-from logger.logger import logger_exit
+from logger.logger import logger_exit, logger_api
 from models.schemas import Credential, Position
 from core.engine import core_engine
 from credentials.httpclient import proxy_request
@@ -26,7 +26,8 @@ async def exit_flattrade(pos: Position, cred: Credential) -> bool:
     }
     
     try:
-        await logger_exit.info(f"📤 [Flattrade Exit Order Payload] ({cred.client_id}) {pos.symbol}: {json.dumps(payload)}")
+        await logger_api.info(f"📤 [Flattrade Exit Order Payload] ({cred.client_id}) {pos.symbol}: {json.dumps(payload)}")
+        await logger_exit.info(f"📤 Placing Flattrade exit order for {pos.symbol} Qty={abs(pos.quantity)} ({cred.client_id})")
         if cred.static_ip:
             data = await proxy_request("POST", url, str(cred.static_ip), headers=headers, json_data=payload)
         else:
@@ -43,13 +44,15 @@ async def exit_flattrade(pos: Position, cred: Credential) -> bool:
                 pass
                 
         data_str = json.dumps(data, default=str) if isinstance(data, (dict, list)) else str(data)
-        await logger_exit.info(f"📥 [Flattrade Exit Order Response] ({cred.client_id}) {pos.symbol}: {data_str}")
+        await logger_api.info(f"📥 [Flattrade Exit Order Response] ({cred.client_id}) {pos.symbol}: {data_str}")
                 
         data_obj = data[0] if isinstance(data, list) and len(data) > 0 else data
         if isinstance(data_obj, dict):
             status = str(data_obj.get("status", "")).upper()
             stat = str(data_obj.get("stat", "")).lower()
             if status == "S" or stat == "ok" or "norenordno" in data_obj or "orderid" in data_obj:
+                order_id = data_obj.get("norenordno") or data_obj.get("orderid") or "CONFIRMED"
+                await logger_api.info(f"✅ [Flattrade Exit Success] ({cred.client_id}) {pos.symbol}: order_id={order_id}")
                 return True
                 
             emsg = str(data_obj.get("errMsg", "") or data_obj.get("emsg", "") or "").lower()
@@ -71,18 +74,23 @@ async def exit_flattrade(pos: Position, cred: Credential) -> bool:
                             except Exception:
                                 pass
                         data_str = json.dumps(data, default=str) if isinstance(data, (dict, list)) else str(data)
-                        await logger_exit.info(f"📥 [Flattrade Exit Order Retry Response] ({cred.client_id}) {pos.symbol}: {data_str}")
+                        await logger_api.info(f"📥 [Flattrade Exit Order Retry Response] ({cred.client_id}) {pos.symbol}: {data_str}")
                         data_obj = data[0] if isinstance(data, list) and len(data) > 0 else data
                         if isinstance(data_obj, dict):
                             status = str(data_obj.get("status", "")).upper()
                             stat = str(data_obj.get("stat", "")).lower()
                             if status == "S" or stat == "ok" or "norenordno" in data_obj or "orderid" in data_obj:
+                                order_id = data_obj.get("norenordno") or data_obj.get("orderid") or "CONFIRMED"
+                                await logger_api.info(f"✅ [Flattrade Exit Retry Success] ({cred.client_id}) {pos.symbol}: order_id={order_id}")
                                 return True
                 except Exception as retry_err:
+                    await logger_api.error(f"❌ [Flattrade Exit Re-Auth Failed] ({cred.client_id}): {retry_err}")
                     await logger_exit.error(f"Flattrade exit re-auth retry failed: {retry_err}")
 
-        await logger_exit.error(f"Flattrade exit failed for {pos.symbol} ({cred.client_id}) | Full Response: {data_str}")
+        await logger_api.error(f"❌ [Flattrade Exit Failed] ({cred.client_id}) {pos.symbol}: {data_str}")
+        await logger_exit.error(f"Flattrade exit failed for {pos.symbol} ({cred.client_id})")
         return False
     except Exception as e:
+        await logger_api.error(f"❌ [Flattrade Exit Exception] ({cred.client_id}) {pos.symbol}: {e}")
         await logger_exit.error(f"Flattrade exit error for {pos.symbol}: {e}")
         return False

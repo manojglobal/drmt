@@ -8,7 +8,7 @@ from models.schemas import Credential, Position
 from credentials.httpclient import proxy_request
 from core.engine import core_engine
 from credentials.kotakneo import get_kotak_base_url, get_kotak_headers, login_kotakneo
-from logger.logger import logger_exit, sanitize_log_message
+from logger.logger import logger_exit, logger_api, sanitize_log_message
 
 logger = logging.getLogger("DRMT.SCM")
 
@@ -46,6 +46,9 @@ async def exit_kotakneo(pos: Position, cred: Credential) -> bool:
 
     url = f"{base_url}/quick/order/rule/ms/place"
 
+    await logger_api.info(
+        f"📤 [Kotak Neo Exit Order Payload] ({cred.client_id}) {pos.symbol} | Side: {kotak_txn} | Qty: {qty} | Seg: {exch_seg} | Prod: {product_code} | Form: {form_data}"
+    )
     await logger_exit.info(
         f"🚨 [KOTAK ORDER DISPATCH] {pos.symbol} | Side: {kotak_txn} | Qty: {qty} | Seg: {exch_seg} | Prod: {product_code} | Target: {cred.client_id}"
     )
@@ -53,7 +56,7 @@ async def exit_kotakneo(pos: Position, cred: Credential) -> bool:
     try:
         resp = await _send_kotak_order(url, form_data, headers, cred.static_ip)
         resp_str = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else str(resp)
-        await logger_exit.info(f"📥 [Kotak Neo Exit Order Response] ({cred.client_id}) {pos.symbol}: {resp_str}")
+        await logger_api.info(f"📥 [Kotak Neo Exit Order Response] ({cred.client_id}) {pos.symbol}: {resp_str}")
         success, order_id, err_msg, st_code = _parse_kotak_order_response(resp)
 
         # In-flight token renewal retry on session invalidation
@@ -66,19 +69,23 @@ async def exit_kotakneo(pos: Position, cred: Credential) -> bool:
                     headers["Content-Type"] = "application/x-www-form-urlencoded"
                     resp = await _send_kotak_order(url, form_data, headers, cred.static_ip)
                     retry_str = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else str(resp)
-                    await logger_exit.info(f"📥 [Kotak Neo Exit Order Retry Response] ({cred.client_id}) {pos.symbol}: {retry_str}")
+                    await logger_api.info(f"📥 [Kotak Neo Exit Order Retry Response] ({cred.client_id}) {pos.symbol}: {retry_str}")
                     success, order_id, err_msg, st_code = _parse_kotak_order_response(resp)
             except Exception as renew_err:
+                await logger_api.error(f"❌ [Kotak Neo Re-Auth Failed] ({cred.client_id}): {renew_err}")
                 await logger_exit.error(f"In-flight token renewal failed for {cred.client_id}: {renew_err}")
 
         if success and order_id:
+            await logger_api.info(f"✅ [Kotak Neo Exit Confirmed] ({cred.client_id}) {pos.symbol}: order_id={order_id}")
             await logger_exit.info(f"✅ [KOTAK EXIT CONFIRMED] {pos.symbol} (nOrdNo: {order_id}) for {cred.client_id}")
             return True
         else:
+            await logger_api.error(f"❌ [Kotak Neo Exit Rejected] ({cred.client_id}) {pos.symbol}: {err_msg} | Full Response: {resp_str}")
             await logger_exit.error(f"❌ [KOTAK EXIT REJECTED] {pos.symbol} for {cred.client_id}: {err_msg}")
             return False
 
     except Exception as e:
+        await logger_api.error(f"❌ [Kotak Neo Exit Exception] ({cred.client_id}) {pos.symbol}: {e}")
         await logger_exit.error(f"❌ [KOTAK EXIT EXCEPTION] {pos.symbol} for {cred.client_id}: {e}")
         return False
 

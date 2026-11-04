@@ -8,7 +8,7 @@ from credentials.httpclient import proxy_request
 from core.engine import core_engine
 from credentials.dedup import save_working_credential
 from credentials.crypto import totp_now
-from logger.logger import logger_auth, sanitize_log_message
+from logger.logger import logger_auth, logger_api, sanitize_log_message
 
 logger = logging.getLogger("DRMT.SCM")
 
@@ -98,6 +98,7 @@ async def generate_user_kotak_neo_access_token(
         }
 
         logger.info(f"🔑 Initiating Kotak Neo Step 1 (tradeApiLogin) for {client_id} ({clean_mobile})")
+        await logger_api.info(f"📤 [Kotak Neo Step 1 Request] ({client_id}) -> POST {login_url} | mobile: {clean_mobile}, static_ip: {static_ip}")
         resp1 = await proxy_request("POST", login_url, static_ip, headers=login_headers, json_data=login_payload)
         if isinstance(resp1, str):
             try:
@@ -106,7 +107,7 @@ async def generate_user_kotak_neo_access_token(
                 resp1 = {"raw": resp1}
 
         resp1_str = json.dumps(resp1, default=str) if isinstance(resp1, (dict, list)) else str(resp1)
-        await logger_auth.info(f"📥 [Kotak Neo tradeApiLogin Step 1 Response] ({client_id}): {resp1_str}")
+        await logger_api.info(f"📥 [Kotak Neo tradeApiLogin Step 1 Response] ({client_id}): {resp1_str}")
 
         data1 = resp1.get("data") if isinstance(resp1, dict) and isinstance(resp1.get("data"), dict) else resp1
         temp_token = data1.get("token") if isinstance(data1, dict) else None
@@ -114,6 +115,7 @@ async def generate_user_kotak_neo_access_token(
 
         if not temp_token or not sid:
             err_detail = resp1.get("message") or resp1.get("errMsg") or str(resp1)
+            await logger_api.error(f"❌ [Kotak Neo Step 1 Error] ({client_id}): {err_detail} | Full Response: {resp1_str}")
             return {"status": False, "msg": f"Kotak login Step 1 failed for {client_id}: {err_detail}"}
 
         logger.info(f"🔑 Kotak Neo Step 1 successful for {client_id}. Initiating Step 2 (tradeApiValidate)")
@@ -128,6 +130,7 @@ async def generate_user_kotak_neo_access_token(
         }
         validate_payload = {"mpin": mpin}
 
+        await logger_api.info(f"📤 [Kotak Neo Step 2 Request] ({client_id}) -> POST {validate_url}")
         try:
             resp2 = await proxy_request("POST", validate_url, static_ip, headers=validate_headers, json_data=validate_payload)
         except Exception:
@@ -142,7 +145,7 @@ async def generate_user_kotak_neo_access_token(
                 resp2 = {"raw": resp2}
 
         resp2_str = json.dumps(resp2, default=str) if isinstance(resp2, (dict, list)) else str(resp2)
-        await logger_auth.info(f"📥 [Kotak Neo tradeApiValidate Step 2 Response] ({client_id}): {resp2_str}")
+        await logger_api.info(f"📥 [Kotak Neo tradeApiValidate Step 2 Response] ({client_id}): {resp2_str}")
 
         data2 = resp2.get("data") if isinstance(resp2, dict) and isinstance(resp2.get("data"), dict) else resp2
         trade_token = data2.get("token") if isinstance(data2, dict) else None
@@ -150,6 +153,8 @@ async def generate_user_kotak_neo_access_token(
         base_url = data2.get("baseUrl") if isinstance(data2, dict) else None
 
         if trade_token:
+            masked = f"{trade_token[:8]}...{trade_token[-8:]}" if len(trade_token) > 16 else trade_token
+            await logger_api.info(f"🔑 [Kotak Neo Auth Success] ({client_id}): Token acquired ({masked}), sid: {trade_sid or sid}")
             return {
                 "status": True,
                 "token": trade_token,
@@ -158,6 +163,7 @@ async def generate_user_kotak_neo_access_token(
             }
         else:
             err_detail = resp2.get("message") or resp2.get("errMsg") or str(resp2)
+            await logger_api.error(f"❌ [Kotak Neo Step 2 Error] ({client_id}): {err_detail} | Full Response: {resp2_str}")
             return {"status": False, "msg": f"Kotak MPIN validate Step 2 failed for {client_id}: {err_detail}"}
     except Exception as e:
         return {"status": False, "msg": f"Kotak headless login exception for {client_id}: {e}"}
@@ -225,6 +231,8 @@ async def _probe_kotak_session(cred: Credential) -> Tuple[int, Any]:
                 resp = json.loads(resp)
             except Exception:
                 resp = {"raw": resp}
+        probe_str = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else str(resp)
+        await logger_api.info(f"📥 [Kotak Neo Session Probe Response] ({cred.client_id}) -> HTTP {sc} | Body: {probe_str}")
         return sc, resp
     except PermissionError as pe:
         return 401, {"error": str(pe)}
@@ -276,4 +284,5 @@ async def login_kotakneo(cred: Credential) -> str:
     await save_working_credential(cred)
     masked = f"{cred.token[:8]}...{cred.token[-8:]}" if len(cred.token) > 16 else cred.token
     logger.info(f"🔑 Validated Kotak Neo session token for {cred.client_id}: {masked}")
+    await logger_api.info(f"🔑 [Kotak Neo Auth Verified] ({cred.client_id}): Active session confirmed ({masked})")
     return cred.token

@@ -4,7 +4,7 @@ import uuid
 
 from credentials.httpclient import proxy_request
 from execution.mstock_instruments import get_mstock_trading_symbol
-from logger.logger import logger_exit
+from logger.logger import logger_exit, logger_api
 from models.schemas import Credential, Position
 
 logger = logging.getLogger(__name__)
@@ -34,10 +34,11 @@ async def exit_mstock(pos: Position, cred: Credential) -> bool:
     }
     
     try:
-        await logger_exit.info(f"📤 [mStock Exit Order Payload] ({cred.client_id}) {pos.symbol}: {json.dumps(payload)}")
+        await logger_api.info(f"📤 [mStock Exit Order Payload] ({cred.client_id}) {pos.symbol}: {json.dumps(payload)}")
+        await logger_exit.info(f"📤 Placing mStock exit order for {pos.symbol} Qty={abs(pos.quantity)} ({cred.client_id})")
         resp = await proxy_request("POST", url, str(cred.static_ip), headers=headers, json_data=payload)
         resp_str = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else str(resp)
-        await logger_exit.info(f"📥 [mStock Exit Order Response] ({cred.client_id}) {pos.symbol}: {resp_str}")
+        await logger_api.info(f"📥 [mStock Exit Order Response] ({cred.client_id}) {pos.symbol}: {resp_str}")
         # Check if response implies success. mStock can return dict or list of dicts.
         resp_obj = resp[0] if isinstance(resp, list) and len(resp) > 0 else resp
         if isinstance(resp_obj, dict):
@@ -49,9 +50,13 @@ async def exit_mstock(pos: Position, cred: Credential) -> bool:
                 or msg_val == "SUCCESS"
                 or (isinstance(data_val, dict) and "orderid" in data_val)
             ):
+                order_id = data_val.get("orderid") if isinstance(data_val, dict) else "SUCCESS"
+                await logger_api.info(f"✅ [mStock Exit Success] ({cred.client_id}) {pos.symbol}: order_id={order_id}")
                 return True
-        await logger_exit.error(f"MStock exit failed for {pos.symbol} ({cred.client_id}) | Full Response: {resp_str}")
+        await logger_api.error(f"❌ [mStock Exit Failed] ({cred.client_id}) {pos.symbol}: {resp_str}")
+        await logger_exit.error(f"MStock exit failed for {pos.symbol} ({cred.client_id})")
         return False
     except Exception as e:
+        await logger_api.error(f"❌ [mStock Exit Exception] ({cred.client_id}) {pos.symbol}: {e}")
         await logger_exit.error(f"MStock exit error for {pos.symbol}: {e}")
         return False

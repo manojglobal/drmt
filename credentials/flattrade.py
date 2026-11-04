@@ -7,7 +7,7 @@ from credentials.crypto import sha256_hex, totp_now
 from credentials.httpclient import proxy_request
 from credentials.dedup import save_working_credential
 from core.engine import core_engine
-from logger.logger import logger_auth
+from logger.logger import logger_auth, logger_api
 
 logger = logging.getLogger("DRMT.SCM")
 
@@ -39,6 +39,7 @@ async def login_flattrade(cred: Credential) -> str:
         "source": "WEB"
     }
     
+    await logger_api.info(f"📤 [Flattrade Auth Request] ({cred.client_id}) -> POST {login_url} | uid: {cred.client_id}, source: WEB, static_ip: {cred.static_ip}")
     if cred.static_ip:
         resp = await proxy_request("POST", login_url, str(cred.static_ip), headers=headers, json_data=payload)
     else:
@@ -49,7 +50,7 @@ async def login_flattrade(cred: Credential) -> str:
             resp = await r.json(content_type=None)
             
     resp_str = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else str(resp)
-    await logger_auth.info(f"📥 [Flattrade QuickAuth Response] ({cred.client_id}): {resp_str}")
+    await logger_api.info(f"📥 [Flattrade QuickAuth Response] ({cred.client_id}): {resp_str}")
             
     data = resp.get("data") if isinstance(resp, dict) and isinstance(resp.get("data"), dict) else resp
     quickauth = data.get("quickauthresp", {}) if isinstance(data, dict) else {}
@@ -63,10 +64,12 @@ async def login_flattrade(cred: Credential) -> str:
             if isinstance(quickauth, dict)
             else (data.get("errmsg") if isinstance(data, dict) else "Unknown login error")
         )
+        await logger_api.error(f"❌ [Flattrade Auth Error] ({cred.client_id}): {emsg} | Full Response: {resp_str}")
         raise ValueError(f"Flattrade login failed for {cred.client_id}: {emsg}")
         
     token = quickauth.get("susertoken")
     if not token:
+        await logger_api.error(f"❌ [Flattrade Auth Error] ({cred.client_id}): no susertoken in response | Full Response: {resp_str}")
         raise ValueError(f"Flattrade login failed for {cred.client_id}: no susertoken in response")
         
     cred.token = token
@@ -75,5 +78,6 @@ async def login_flattrade(cred: Credential) -> str:
     
     masked = f"{token[:10]}...{token[-10:]}" if len(token) > 20 else token
     logger.info(f"🔑 Loaded dynamic auth token: {masked}")
+    await logger_api.info(f"🔑 [Flattrade Auth Success] ({cred.client_id}): Token acquired ({masked})")
     
     return token

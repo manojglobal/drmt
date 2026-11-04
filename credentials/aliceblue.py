@@ -79,8 +79,7 @@ async def login_aliceblue(cred: Credential) -> str:
         async with session.post(url, json=payload, headers=headers) as resp:
             data = await resp.json(content_type=None)
             resp_str = json.dumps(data, default=str) if isinstance(data, (dict, list)) else str(data)
-            await logger_api.info(f"📥 [DIRECT RESP] POST {url} -> HTTP {resp.status} | Body: {resp_str}")
-            await logger_auth.info(f"📥 [AliceBlue Login Step Response] ({cred.client_id}) {url.split('/')[-1]}: {resp_str}")
+            await logger_api.info(f"📥 [AliceBlue Login Step] ({cred.client_id}) {url.split('/')[-1]} -> HTTP {resp.status} | Body: {resp_str}")
             return data
 
     # ── Step 1: Verify User ──────────────────────────────────────────────────
@@ -152,4 +151,5 @@ async def login_aliceblue(cred: Credential) -> str:
     await save_working_credential(cred)
     masked = f"{user_session[:10]}...{user_session[-10:]}" if len(user_session) > 20 else user_session
     logger.info(f"🔑 Loaded dynamic auth token: {masked}")
+    await logger_api.info(f"🔑 [AliceBlue Auth Success] ({cred.client_id}): Token acquired ({masked})")
     return user_session

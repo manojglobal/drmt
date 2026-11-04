@@ -5,7 +5,7 @@ from datetime import datetime
 from core.engine import core_engine
 from credentials.dedup import save_working_credential
 from credentials.httpclient import proxy_request
-from logger.logger import logger_auth, sanitize_log_message
+from logger.logger import logger_auth, logger_api, sanitize_log_message
 from models.schemas import Credential
 
 logger = logging.getLogger("DRMT.SCM")
@@ -51,6 +51,7 @@ async def login_fyers(cred: Credential) -> str:
     }
 
     try:
+        await logger_api.info(f"📤 [Fyers Auth Check Request] ({cred.client_id}) -> GET {FYERS_PROFILE_URL} | static_ip: {cred.static_ip}")
         if cred.static_ip:
             resp = await proxy_request("GET", FYERS_PROFILE_URL, str(cred.static_ip), headers=headers)
         else:
@@ -69,9 +70,10 @@ async def login_fyers(cred: Credential) -> str:
                 resp = {}
 
         resp_str = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else str(resp)
-        await logger_auth.info(f"📥 [Fyers Profile Response] ({cred.client_id}): {resp_str}")
+        await logger_api.info(f"📥 [Fyers Profile Response] ({cred.client_id}): {resp_str}")
 
         if not isinstance(resp, dict):
+            await logger_api.error(f"❌ [Fyers Profile Error] ({cred.client_id}): unexpected response format | Full Response: {resp_str}")
             raise ValueError(f"Fyers login failed for {cred.client_id}: unexpected response {resp}")
 
         # Check response status
@@ -89,15 +91,17 @@ async def login_fyers(cred: Credential) -> str:
                 else sanitize_log_message(cred.token)
             )
             logger.info(f"🔑 Loaded dynamic auth token for FYERS:{cred.client_id}: {masked}")
-            await logger_auth.info(f"✅ Fyers profile verified for {cred.client_id} [token: {masked}]")
+            await logger_api.info(f"✅ [Fyers Auth Success] ({cred.client_id}): Profile verified [token: {masked}]")
             return cred.token
         else:
+            await logger_api.error(f"❌ [Fyers Auth Error] ({cred.client_id}): code={code_val}, message='{msg}' | Full Response: {resp_str}")
             raise ValueError(
                 f"Fyers authentication failed for {cred.client_id} (code={code_val}, message='{msg}'). "
                 "Token expired or invalid — please refresh access_token in CSV."
             )
 
     except PermissionError as pe:
+        await logger_api.error(f"❌ [Fyers Auth Error] ({cred.client_id}): {pe}")
         raise ValueError(
             f"Fyers token expired or unauthorized for {cred.client_id}: {pe}. "
             "Please update access_token in credentials CSV."
@@ -105,4 +109,5 @@ async def login_fyers(cred: Credential) -> str:
     except ValueError:
         raise
     except Exception as e:
+        await logger_api.error(f"❌ [Fyers Auth Exception] ({cred.client_id}): {e}")
         raise ValueError(f"Fyers login check error for {cred.client_id}: {e}")

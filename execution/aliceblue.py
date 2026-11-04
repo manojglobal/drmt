@@ -6,7 +6,7 @@ import uuid
 
 from core.engine import core_engine
 from credentials.httpclient import proxy_request
-from logger.logger import logger_exit
+from logger.logger import logger_exit, logger_api
 from models.schemas import Credential, Position
 from settings import settings
 
@@ -95,7 +95,8 @@ async def exit_aliceblue(pos: Position, cred: Credential) -> bool:
         flow_label = "Web"
 
     try:
-        await logger_exit.info(f"📤 [AliceBlue {flow_label} Exit Payload] ({cred.client_id}) {pos.symbol}: {json.dumps(payload)}")
+        await logger_api.info(f"📤 [AliceBlue {flow_label} Exit Payload] ({cred.client_id}) {pos.symbol}: {json.dumps(payload)}")
+        await logger_exit.info(f"📤 Placing AliceBlue ({flow_label}) exit order for {pos.symbol} Qty={abs(pos.quantity)} ({cred.client_id})")
         if cred.static_ip:
             data = await proxy_request("POST", url, str(cred.static_ip), headers=headers, json_data=payload)
         else:
@@ -112,10 +113,11 @@ async def exit_aliceblue(pos: Position, cred: Credential) -> bool:
                 pass
 
         data_str = json.dumps(data, default=str) if isinstance(data, (dict, list)) else str(data)
-        await logger_exit.info(f"📥 [AliceBlue {flow_label} Exit Response] ({cred.client_id}) {pos.symbol}: {data_str}")
+        await logger_api.info(f"📥 [AliceBlue {flow_label} Exit Response] ({cred.client_id}) {pos.symbol}: {data_str}")
 
         is_ok, status_msg = _check_order_success(data, flow_mode)
         if is_ok:
+            await logger_api.info(f"✅ [AliceBlue Exit Success] ({cred.client_id}) {pos.symbol}: {status_msg}")
             return True
 
         # Check if auth expired, attempt 1 re-auth retry if possible
@@ -143,16 +145,20 @@ async def exit_aliceblue(pos: Position, cred: Credential) -> bool:
                             except Exception:
                                 pass
                         data_str = json.dumps(data, default=str) if isinstance(data, (dict, list)) else str(data)
-                        await logger_exit.info(f"📥 [AliceBlue {flow_label} Exit Retry Response] ({cred.client_id}) {pos.symbol}: {data_str}")
+                        await logger_api.info(f"📥 [AliceBlue {flow_label} Exit Retry Response] ({cred.client_id}) {pos.symbol}: {data_str}")
                         is_ok_retry, retry_msg = _check_order_success(data, flow_mode)
                         if is_ok_retry:
+                            await logger_api.info(f"✅ [AliceBlue Exit Retry Success] ({cred.client_id}) {pos.symbol}: {retry_msg}")
                             return True
                         status_msg = retry_msg
                 except Exception as retry_err:
+                    await logger_api.error(f"❌ [AliceBlue Exit Re-Auth Failed] ({cred.client_id}): {retry_err}")
                     await logger_exit.error(f"AliceBlue {flow_label.lower()} exit re-auth retry failed: {retry_err}")
 
-        await logger_exit.error(f"AliceBlue {flow_label.lower()} exit failed for {pos.symbol} ({cred.client_id}) | Status: {status_msg} | Full Response: {data_str}")
+        await logger_api.error(f"❌ [AliceBlue {flow_label} Exit Failed] ({cred.client_id}) {pos.symbol} | Status: {status_msg} | Full Response: {data_str}")
+        await logger_exit.error(f"AliceBlue {flow_label.lower()} exit failed for {pos.symbol} ({cred.client_id}) | Status: {status_msg}")
         return False
     except Exception as e:
+        await logger_api.error(f"❌ [AliceBlue {flow_label} Exit Exception] ({cred.client_id}) {pos.symbol}: {e}")
         await logger_exit.error(f"AliceBlue {flow_label.lower()} exit error for {pos.symbol}: {e}")
         return False

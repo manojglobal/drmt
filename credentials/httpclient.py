@@ -62,8 +62,10 @@ async def _proxy_request_inner(
     t0 = time.monotonic()
     safe_url = sanitize_log_message(url)
     retry_tag = " [no-ip retry]" if _is_retry else ""
+    req_body_str = json.dumps(json_data or data or {}, default=str) if (json_data is not None or data is not None) else "{}"
+    sanitized_req = sanitize_log_message(req_body_str)
     logger.debug(f"📤 [PROXY REQ] {method} {safe_url} (source_ip={source_ip}){retry_tag}")
-    await logger_api.info(f"📤 [PROXY REQ] {method} {safe_url} (source_ip={source_ip}){retry_tag}")
+    await logger_api.info(f"📤 [PROXY REQ] {method} {safe_url} (source_ip={source_ip}){retry_tag} | Payload: {sanitized_req}")
 
     async with session.post(settings.DRMT_PROXY_URL, json=payload) as resp:
         try:
@@ -99,15 +101,17 @@ async def _proxy_request_inner(
                         pass
 
                 resp_str = json.dumps(broker_body, default=str) if isinstance(broker_body, (dict, list)) else str(broker_body)
-                if len(resp_str) > 5000:
-                    resp_str = resp_str[:5000] + "... [truncated]"
+                if len(resp_str) > 50000:
+                    resp_str = resp_str[:50000] + "... [truncated]"
                 sanitized_resp = sanitize_log_message(resp_str)
                 logger.debug(f"📥 API Response ({elapsed_ms:.1f}ms): {sanitized_resp}")
                 await logger_api.info(f"📥 [PROXY RESP] {method} {safe_url} -> HTTP {target_sc} in {elapsed_ms:.1f}ms | Body: {sanitized_resp}")
 
                 if target_sc in (401, 403):
+                    await logger_api.error(f"❌ [BROKER AUTH FAIL] {method} {safe_url} -> HTTP {target_sc} | Body: {sanitized_resp}")
                     raise PermissionError(f"Broker Auth Error (HTTP {target_sc}): {broker_body}")
                 elif target_sc and target_sc >= 400:
+                    await logger_api.error(f"❌ [BROKER HTTP ERR] {method} {safe_url} -> HTTP {target_sc} | Body: {sanitized_resp}")
                     raise RuntimeError(f"Broker HTTP {target_sc} Error: {broker_body}")
 
                 return broker_body
