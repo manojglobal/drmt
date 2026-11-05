@@ -3,6 +3,7 @@ from datetime import datetime
 import json
 import logging
 import random
+import re
 import time
 from typing import Optional, Dict, Tuple
 import zoneinfo
@@ -63,12 +64,23 @@ async def refresh_token_with_backoff(cred: Credential, send_email: bool = True) 
             remove_from_blocklist(cred.client_id)
             return True
         except Exception as e:
-            err_msg = str(e)
-            # Transient network / gateway errors (500, 502, 503, 504, Timeout) should NOT trigger blocklist
-            is_transient = any(
-                code in err_msg
-                for code in ("500", "502", "503", "504", "Bad Gateway", "Gateway Timeout", "Timeout", "Connection reset", "Connection refused", "IA500", "Internal Server Error")
-            ) or isinstance(e, (asyncio.TimeoutError, ConnectionError))
+            try:
+                err_msg = str(e)
+            except Exception:
+                err_msg = type(e).__name__
+            # Differentiate genuine network / gateway errors from broker authentication errors
+            # Only treat as transient if it's a socket/network timeout or HTTP 5xx/429 without auth rejection
+            is_net_exc = isinstance(e, (asyncio.TimeoutError, ConnectionError))
+            has_5xx = bool(re.search(r"\b(500|502|503|504|429|IA500)\b", err_msg))
+            has_net_phrase = any(
+                p in err_msg.lower()
+                for p in ("bad gateway", "gateway timeout", "service unavailable", "connection reset", "connection refused", "internal server error")
+            )
+            is_auth_phrase = any(
+                a in err_msg.lower()
+                for a in ("session", "token", "password", "totp", "mpin", "unauthorized", "invalid key", "invalid client", "auth error", "auth fail")
+            )
+            is_transient = (is_net_exc or has_5xx or has_net_phrase) and not is_auth_phrase
 
             if is_transient:
                 await logger_auth.warn(f"⚠️  Transient network error authenticating {cred.broker}:{cred.client_id} ({username}): {e} (skipping blocklist)")
@@ -195,7 +207,15 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                         if t_created:
                             try:
                                 t_created_str = str(t_created).strip()
-                                t_date = datetime.fromisoformat(t_created_str).date() if "T" in t_created_str else datetime.strptime(t_created_str[:10], "%Y-%m-%d").date()
+                                if "T" in t_created_str:
+                                    t_date = datetime.fromisoformat(t_created_str).date()
+                                elif "-" in t_created_str:
+                                    t_date = datetime.strptime(t_created_str[:10], "%Y-%m-%d").date()
+                                elif "/" in t_created_str:
+                                    t_date = datetime.strptime(t_created_str[:10], "%d/%m/%Y").date()
+                                else:
+                                    t_date = datetime.strptime(t_created_str[:10], "%Y%m%d").date()
+
                                 now_ist_date = datetime.now(tz=_IST).date()
                                 if t_date < now_ist_date:
                                     raise PermissionError(f"Session token expired (Issued on {t_date.strftime('%Y-%m-%d')}) — Please use Refresh Token on the dashboard.")
@@ -251,6 +271,38 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                         return []
                     except Exception as e:
                         err_str = str(e)
+                        is_auth_error = any(
+                            k in err_str.lower()
+                            for k in (
+                                "unauthorized", "invalid token", "token expired", "session expired",
+                                "invalid session", "forbidden", "auth error", "broker auth fail",
+                                "401", "403", "-17", "100022", "1004", "invalid jwt", "invalid key",
+                                "token is expired", "jwt token", "invalid user", "access denied"
+                            )
+                        )
+                        if is_auth_error:
+                            username = get_client_username(c.client_id)
+                            err_reason = err_str.strip() if err_str.strip() else "Session token expired / invalid"
+                            await logger_auth.warn(
+                                f"🔑 [CHRONOS] Session token rejected for {c.broker}:{c.client_id} ({username}): {err_reason}. "
+                                f"Quarantining account in Block list."
+                            )
+                            sig = ""
+                            try:
+                                from credentials.dynamic_loader import compute_credential_signature, get_dynamic_credentials
+                                fresh_d = get_dynamic_credentials(c.client_id)
+                                sig = compute_credential_signature(fresh_d or c.dict())
+                            except Exception:
+                                pass
+                            add_to_blocklist(
+                                client_id=c.client_id,
+                                broker=c.broker,
+                                username=username,
+                                reason=err_reason,
+                                signature=sig
+                            )
+                            return []
+
                         is_transient = any(
                             code in err_str
                             for code in ("500", "502", "503", "504", "Bad Gateway", "Gateway Timeout", "Timeout", "Connection reset", "Connection refused", "IA500", "Internal Server Error")

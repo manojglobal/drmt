@@ -20,6 +20,7 @@ TEST_SUITES = [
     ("Database & CRUD", "tests.test_database"),
     ("Position Normalization", "tests.test_position_manager"),
     ("Broker Adapters", "tests.test_position_adapters"),
+    ("Failed Auth & Zero-Pos Safety", "tests.test_failed_auth_adapters"),
     ("Chronos & Blocklist", "tests.test_chronos_blocklist"),
     ("Credentials & Dynamic Loader", "tests.test_credentials_loader"),
     ("Execution & Payloads", "tests.test_execution_payloads"),

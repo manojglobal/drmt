@@ -30,7 +30,7 @@ async def websocket_handler(request: web.Request):
     # We need to fetch the user's active credentials to pass to the polling loop.
     async with get_db() as db:
         db.row_factory = None
-        valid_filter = "status = 'working' AND UPPER(broker) != 'FAKE' AND client_id IS NOT NULL AND TRIM(client_id) != ''"
+        valid_filter = "status != 'archived' AND UPPER(broker) != 'FAKE' AND client_id IS NOT NULL AND TRIM(client_id) != ''"
         async with db.execute(f"SELECT id, broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, sid, base_url, sub_account_id, public_key, refresh_token FROM credentials WHERE {valid_filter}") as cursor:
             rows = await cursor.fetchall()
             

@@ -49,6 +49,13 @@ async def poll_mstock(cred: Credential) -> List[Position]:
     try:
         resp = await proxy_request("GET", url, str(cred.static_ip), headers=headers)
         if isinstance(resp, dict):
+            # Check for explicit auth or error response in mStock OpenAPI
+            st_val = str(resp.get("status") or resp.get("stat") or "").lower()
+            err_msg = str(resp.get("message") or resp.get("errMsg") or resp.get("error") or "")
+            if st_val in ("error", "failed", "fail") or any(x in err_msg.lower() for x in ("invalid token", "token expired", "unauthorized", "jwt", "session expired", "invalid session", "user not logged in")):
+                await logger_api.error(f"❌ [mStock Auth Expired] ({cred.client_id}): status={st_val}, msg={err_msg}")
+                raise PermissionError(f"mStock Auth Error for {cred.client_id}: {err_msg or 'Session expired / invalid token'}")
+
             if "data" in resp:
                 data = resp.get("data") or []
             elif "json" in resp and isinstance(resp["json"], dict):
@@ -134,7 +141,7 @@ async def poll_mstock(cred: Credential) -> List[Position]:
             await logger_api.info(f"✅ [mStock Active Open Positions] ({cred.client_id}): Total={len(positions)} | {'; '.join(norm_details)}")
         return positions
     except Exception as e:
-        if "401" in str(e) or "403" in str(e):
+        if "401" in str(e) or "403" in str(e) or isinstance(e, PermissionError) or any(x in str(e).lower() for x in ("invalid token", "token expired", "unauthorized", "jwt", "session expired", "invalid session", "auth error")):
             await logger_api.error(f"❌ [mStock Auth Error] ({cred.client_id}): {e}")
             raise PermissionError(f"MStock Auth Error: {e}")
         await logger_api.error(f"❌ [mStock Poll Error] ({cred.client_id}): {e}")
@@ -186,7 +193,7 @@ async def poll_flattrade(cred: Credential) -> List[Position]:
             emsg = str(resp.get("errMsg", "") or resp.get("emsg", "")).lower()
 
             # 1. Genuine Auth/Session Failures -> Raise PermissionError to trigger quarantine/re-auth
-            if any(x in emsg for x in ("invalid session", "session expired", "invalid key", "not logged in", "user not logged in", "token expired")):
+            if any(x in emsg for x in ("invalid session", "session expired", "invalid key", "not logged in", "user not logged in", "token expired", "unauthorized", "invalid token", "forbidden", "session revoked", "user blocked", "account locked", "invalid user", "access denied")):
                 await logger_api.error(f"❌ [Flattrade Auth Expired] ({cred.client_id}) status={status}, msg={resp.get('errMsg') or resp.get('emsg')}")
                 raise PermissionError(
                     f"Flattrade Auth Error: Invalid/Expired session (status={status}, msg={resp.get('errMsg') or resp.get('emsg')})"
@@ -253,7 +260,15 @@ async def poll_flattrade(cred: Credential) -> List[Position]:
                     raw_tc = (dyn.get("token_created_at") if dyn else None) or (str(cred.token_updated_at) if cred.token_updated_at else "")
                     if raw_tc:
                         t_str = str(raw_tc).strip()
-                        t_date = datetime.fromisoformat(t_str).date() if "T" in t_str else datetime.strptime(t_str[:10], "%Y-%m-%d").date()
+                        if "T" in t_str:
+                            t_date = datetime.fromisoformat(t_str).date()
+                        elif "-" in t_str:
+                            t_date = datetime.strptime(t_str[:10], "%Y-%m-%d").date()
+                        elif "/" in t_str:
+                            t_date = datetime.strptime(t_str[:10], "%d/%m/%Y").date()
+                        else:
+                            t_date = datetime.strptime(t_str[:10], "%Y%m%d").date()
+
                         if t_date < today_ist:
                             raise PermissionError(
                                 f"Flattrade Auth Error: Session token expired (issued on {t_date.strftime('%Y-%m-%d')}). Requires Token Refresh."
@@ -264,8 +279,13 @@ async def poll_flattrade(cred: Credential) -> List[Position]:
                     pass
                 return []
 
-            # 4. Broker Error Responses -> Transient error, do NOT blacklist account
+            # 4. Broker Error Responses -> Transient error, do NOT blacklist account unless explicitly auth failed
             if status == "E" or (stat == "not_ok" and status != "S"):
+                if any(x in emsg for x in ("invalid session", "session expired", "invalid key", "not logged in", "user not logged in", "token expired", "unauthorized", "invalid token", "forbidden", "session revoked", "user blocked", "account locked", "invalid user", "access denied")):
+                    await logger_api.error(f"❌ [Flattrade Auth Expired] ({cred.client_id}) status={status}, msg={resp.get('errMsg') or resp.get('emsg')}")
+                    raise PermissionError(
+                        f"Flattrade Auth Error: Invalid/Expired session (status={status}, msg={resp.get('errMsg') or resp.get('emsg')})"
+                    )
                 await logger_api.error(f"❌ [Flattrade Broker Error] ({cred.client_id}): status={status}, msg={resp.get('errMsg') or resp.get('emsg')}")
                 raise RuntimeError(
                     f"Flattrade Poll Error: status={status}, msg={resp.get('errMsg') or resp.get('emsg')}"
@@ -285,7 +305,7 @@ async def poll_flattrade(cred: Credential) -> List[Position]:
             await logger_api.info(f"✅ [Flattrade Active Open Positions] ({cred.client_id}): Total={len(normalized)} | {'; '.join(norm_details)}")
         return normalized
     except Exception as e:
-        if "401" in str(e) or "403" in str(e) or isinstance(e, PermissionError):
+        if "401" in str(e) or "403" in str(e) or isinstance(e, PermissionError) or any(x in str(e).lower() for x in ("invalid session", "session expired", "invalid key", "not logged in", "token expired", "unauthorized", "invalid token", "forbidden", "account locked")):
             await logger_api.error(f"❌ [Flattrade Auth Error] ({cred.client_id}): {e}")
             raise PermissionError(f"Flattrade Auth Error: {e}")
         await logger_api.error(f"❌ [Flattrade Poll Error] ({cred.client_id}): {e}")
@@ -324,7 +344,7 @@ async def poll_aliceblue(cred: Credential) -> List[Position]:
                 if "ec920" in emsg.lower():
                     await logger_api.info(f"📋 [AliceBlue Position Book] ({cred.client_id}): 0 positions (EC920: No open positions)")
                     return []
-                if any(x in emsg.lower() for x in ("login", "session", "token", "unauthorized", "expired")):
+                if any(x in emsg.lower() for x in ("login", "session", "token", "unauthorized", "expired", "invalid user", "access denied", "forbidden", "authentication failed", "user not found")):
                     await logger_api.error(f"❌ [AliceBlue Auth Failed] ({cred.client_id}): {emsg}")
                     raise PermissionError(f"AliceBlue Auth Error: {emsg}")
                 await logger_api.error(f"❌ [AliceBlue Broker Error] ({cred.client_id}): {emsg}")
@@ -353,7 +373,7 @@ async def poll_aliceblue(cred: Credential) -> List[Position]:
         raise
     except Exception as e:
         await logger_api.error(f"❌ [AliceBlue Poll Exception] ({cred.client_id}): {e}")
-        if "401" in str(e) or "403" in str(e):
+        if "401" in str(e) or "403" in str(e) or any(x in str(e).lower() for x in ("login", "session", "token", "unauthorized", "expired", "invalid user", "access denied", "forbidden", "auth")):
             raise PermissionError(f"AliceBlue Auth Error: {e}")
         raise RuntimeError(f"AliceBlue Poll Error: {e}")
 
@@ -394,7 +414,7 @@ async def poll_fyers(cred: Credential) -> List[Position]:
             s_val = str(resp.get("s", "")).lower()
             msg = str(resp.get("message") or resp.get("errMsg") or "").lower()
 
-            if code_val in (401, 403) or any(x in msg for x in ("token expired", "invalid token", "unauthorized", "session expired")):
+            if code_val in (401, 403, -17, -50) or (s_val == "error" and any(x in msg for x in ("token expired", "invalid token", "unauthorized", "session expired", "authenticate", "invalid", "forbidden", "user"))):
                 await logger_api.error(f"❌ [Fyers Auth Expired] ({cred.client_id}): code={code_val}, msg={msg}")
                 raise PermissionError(f"Fyers Auth Error for {cred.client_id}: {msg} (code={code_val})")
 
@@ -430,7 +450,7 @@ async def poll_fyers(cred: Credential) -> List[Position]:
         return normalized
     except Exception as e:
         await logger_api.error(f"❌ [Fyers Poll Exception] ({cred.client_id}): {e}")
-        if "401" in str(e) or "403" in str(e) or isinstance(e, PermissionError):
+        if "401" in str(e) or "403" in str(e) or "-17" in str(e) or isinstance(e, PermissionError) or any(x in str(e).lower() for x in ("token", "session", "unauthorized", "forbidden", "authenticate")):
             raise PermissionError(f"Fyers Auth Error: {e}")
         raise
 
@@ -466,8 +486,16 @@ async def poll_kotakneo(cred: Credential) -> List[Position]:
             stat = str(resp.get("stat") or "").strip().lower()
             st_code = resp.get("stCode")
             err_msg = str(resp.get("errMsg") or resp.get("message") or "")
+            err_obj = resp.get("error")
+            if isinstance(err_obj, list) and err_obj and isinstance(err_obj[0], dict):
+                err_msg = err_msg or str(err_obj[0].get("message") or "")
+                st_code = st_code or err_obj[0].get("code")
+            elif isinstance(err_obj, dict):
+                err_msg = err_msg or str(err_obj.get("message") or "")
+                st_code = st_code or err_obj.get("code")
+
             is_no_data = "no data" in err_msg.lower() or "no data" in stat
-            if not is_no_data and (st_code in (100010, 401, 100008, 403, 1037) or stat == "not_ok"):
+            if not is_no_data and (st_code in (100010, 100022, 100008, 100014, 100015, 100003, 401, 403, 1037) or stat == "not_ok" or any(x in err_msg.lower() for x in ("session expired", "invalid token", "token expired", "unauthorized", "not logged in"))):
                 raise PermissionError(
                     f"Kotak Neo Auth Error: Invalid/Expired session (stCode={st_code}, msg={err_msg or 'Session expired'})"
                 )
@@ -577,7 +605,7 @@ async def poll_kotakneo(cred: Credential) -> List[Position]:
         return positions
     except Exception as e:
         await logger_api.error(f"❌ [Kotak Neo Poll Exception] ({cred.client_id}): {e}")
-        if "401" in str(e) or "403" in str(e) or "100010" in str(e) or isinstance(e, PermissionError):
+        if "401" in str(e) or "403" in str(e) or "100010" in str(e) or "100022" in str(e) or "100008" in str(e) or isinstance(e, PermissionError) or any(x in str(e).lower() for x in ("session", "token", "unauthorized", "not logged in")):
             raise PermissionError(f"Kotak Neo Auth Error: {e}")
         raise
 
@@ -617,12 +645,16 @@ async def poll_axisdirect(cred: Credential) -> List[Position]:
 
             err_dict = resp.get("error", {}) if isinstance(resp, dict) else {}
             err_code = str(err_dict.get("code") or "")
-            if status_code in (401, 403) or err_code in ("1081", "1082", "1200", "1002", "1003"):
+            err_msg_axis = str(err_dict.get("message") or "")
+            if status_code in (401, 403) or err_code in ("1001", "1002", "1003", "1004", "1005", "1010", "1081", "1082", "1090", "1091", "1200") or any(x in err_msg_axis.lower() for x in ("session", "token", "unauthorized", "invalid user", "expired")):
                 raise PermissionError(
                     f"Axis Direct Auth Error for {cred.client_id} (code={err_code or status_code}): {err_dict.get('message', 'Session expired')}"
                 )
 
-            data = resp.get("data") if isinstance(resp, dict) else resp
+            if isinstance(resp, dict):
+                data = resp.get("data") if ("data" in resp and resp.get("data") is not None) else resp
+            else:
+                data = resp
             items = []
             if isinstance(data, list):
                 items = data
@@ -651,7 +683,8 @@ async def poll_axisdirect(cred: Credential) -> List[Position]:
                 )
                 err_dict = ob_resp.get("error", {}) if isinstance(ob_resp, dict) else {}
                 err_code = str(err_dict.get("code") or "")
-                if status_code in (401, 403) or err_code in ("1081", "1082", "1200", "1002", "1003"):
+                err_msg_axis = str(err_dict.get("message") or "")
+                if status_code in (401, 403) or err_code in ("1001", "1002", "1003", "1004", "1005", "1010", "1081", "1082", "1090", "1091", "1200") or any(x in err_msg_axis.lower() for x in ("session", "token", "unauthorized", "invalid user", "expired")):
                     raise PermissionError(
                         f"Axis Direct Auth Error for {cred.client_id} (code={err_code or status_code}): {err_dict.get('message', 'Session expired')}"
                     )
@@ -892,7 +925,7 @@ async def poll_axisdirect(cred: Credential) -> List[Position]:
         return positions
     except Exception as e:
         await logger_api.error(f"❌ [Axis Direct Poll Exception] ({cred.client_id}): {e}")
-        if "401" in str(e) or "403" in str(e) or isinstance(e, PermissionError):
+        if "401" in str(e) or "403" in str(e) or isinstance(e, PermissionError) or any(x in str(e).lower() for x in ("session", "token", "unauthorized", "expired", "handshake")):
             raise PermissionError(f"Axis Direct Auth Error: {e}")
         raise
 

@@ -224,7 +224,15 @@ async def on_startup(app: web.Application):
             token_created_str = (d_cred.get("token_created_at") or "").strip()
             if token_created_str:
                 try:
-                    t_date = datetime.fromisoformat(token_created_str).date() if "T" in token_created_str else datetime.strptime(token_created_str[:10], "%Y-%m-%d").date()
+                    if "T" in token_created_str:
+                        t_date = datetime.fromisoformat(token_created_str).date()
+                    elif "-" in token_created_str:
+                        t_date = datetime.strptime(token_created_str[:10], "%Y-%m-%d").date()
+                    elif "/" in token_created_str:
+                        t_date = datetime.strptime(token_created_str[:10], "%d/%m/%Y").date()
+                    else:
+                        t_date = datetime.strptime(token_created_str[:10], "%Y%m%d").date()
+
                     if t_date < _today_ist:
                         add_to_blocklist(
                             client_id=cid,
@@ -235,8 +243,8 @@ async def on_startup(app: web.Application):
                         )
                         quarantined_count += 1
                         await logger_auth.warn(f"⛔ [STARTUP QUARANTINE] {broker_name}:{cid} ({uname}) token expired (issued {t_date}). Added to Failed Auth.")
-                except Exception:
-                    pass
+                except Exception as date_err:
+                    logger.debug(f"Could not parse token_created_at '{token_created_str}' for {cid}: {date_err}")
 
     if quarantined_count > 0:
         await logger_system.warn(f"⛔ [STARTUP QUARANTINE] {quarantined_count} account(s) quarantined in Failed Auth (missing/expired tokens).")

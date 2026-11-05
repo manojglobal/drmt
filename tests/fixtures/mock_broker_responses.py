@@ -121,6 +121,19 @@ FLATTRADE_BROKER_ERROR = {
 
 ALICEBLUE_POSITIONS_SUCCESS = {
     "stat": "Ok",
+    "result": [
+        {
+            "TradingSymbol": "SBIN-EQ",
+            "Exchange": "NSE",
+            "Product": "MIS",
+            "Netqty": 50,
+            "buyavgprice": 820.50,
+            "Price": 820.50,
+            "LTP": 825.00,
+            "MtoM": 225.00,
+            "Token": "3045"
+        }
+    ],
     "data": [
         {
             "TradingSymbol": "SBIN-EQ",
@@ -221,4 +234,50 @@ AXIS_POSITIONS_SUCCESS = {
             "pnl": 7.5
         }
     ]
+}
+
+# Additional mock responses for Failed Auth & Zero Positions edge-cases
+MSTOCK_AUTH_EXPIRED = {
+    "status": "error",
+    "message": "Invalid JWT Token or user session has expired"
+}
+
+MSTOCK_EMPTY_SUCCESS = {
+    "status": "success",
+    "data": []
+}
+
+KOTAK_STCODE_100022 = {
+    "stat": "not_ok",
+    "stCode": 100022,
+    "errMsg": "Token Expired, please login again"
+}
+
+KOTAK_NO_DATA = {
+    "stat": "not_ok",
+    "errMsg": "No Data available for user"
+}
+
+AXIS_AUTH_EXPIRED_1004 = {
+    "error": {
+        "code": "1004",
+        "message": "Session Token Expired"
+    }
+}
+
+AXIS_EMPTY_SUCCESS = {
+    "status": "success",
+    "data": []
+}
+
+FYERS_AUTH_EXPIRED_MINUS_17 = {
+    "s": "error",
+    "code": -17,
+    "message": "Could not authenticate the user"
+}
+
+FYERS_EMPTY_SUCCESS = {
+    "s": "ok",
+    "code": 200,
+    "netPositions": []
 }
