@@ -3,6 +3,7 @@ import csv
 import json
 import logging
 import os
+from datetime import datetime
 from dataclasses import asdict
 from aiohttp import web
 from api.auth import require_auth
@@ -12,7 +13,7 @@ from position.chronos import refresh_token_with_backoff
 from execution.engine import mass_exit
 from utils.user_mapping import get_client_username, get_client_ids_for_user, get_configured_client_ids
 from position.blocklist import get_blocked_users, get_blocked_user, remove_from_blocklist
-from credentials.dynamic_loader import get_dynamic_credentials, get_credential_source_info, get_client_email
+from credentials.dynamic_loader import get_dynamic_credentials, get_credential_source_info, get_client_email, update_dynamic_credential_token
 from settings import settings
 from core.engine import core_engine
 from logger.logger import (
@@ -726,10 +727,14 @@ async def refresh_blocked_user_token(request: web.Request):
             await db.commit()
 
         # Also update in-memory dynamic credentials if present
+        now_dt = datetime.now()
+        now_ts = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+        update_dynamic_credential_token(client_id, cred.token, now_ts)
         dyn = get_dynamic_credentials(client_id)
         if dyn:
             if cred.token:
                 dyn["token"] = cred.token
+            dyn["token_created_at"] = now_ts
             if getattr(cred, "refresh_token", None):
                 dyn["refresh_token"] = cred.refresh_token
             if getattr(cred, "public_key", None):

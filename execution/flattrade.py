@@ -1,6 +1,7 @@
 import logging
 import json
 import uuid
+from settings import settings
 from logger.logger import logger_exit, logger_api
 from models.schemas import Credential, Position
 from core.engine import core_engine
@@ -10,7 +11,100 @@ from credentials.flattrade import login_flattrade
 logger = logging.getLogger("DRMT.SCM")
 
 async def exit_flattrade(pos: Position, cred: Credential) -> bool:
-    """Flattrade Exit (Direct or Proxy)."""
+    """Flattrade Exit (SDK or Web flow based on FLATTRADE_FLOW setting)."""
+    flow_mode = getattr(settings, "FLATTRADE_FLOW", "WEB").upper()
+    is_sdk = (flow_mode == "SDK") and bool(cred.api_key and cred.api_secret)
+
+    if is_sdk:
+        return await _exit_flattrade_sdk(pos, cred)
+    return await _exit_flattrade_web(pos, cred)
+
+
+async def _exit_flattrade_sdk(pos: Position, cred: Credential) -> bool:
+    """Flattrade Exit via Official Pi Connect SDK flow."""
+    url = "https://piconnect.flattrade.in/PiConnectAPI/PlaceOrder"
+
+    from execution.payload_master import PayloadMaster
+    payload_data = PayloadMaster.build_flattrade_sdk_payload(pos, cred)
+
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "DRMT/2.0"
+    }
+
+    try:
+        await logger_api.info(f"📤 [Flattrade SDK Exit Order Payload] ({cred.client_id}) {pos.symbol}: {payload_data}")
+        await logger_exit.info(f"📤 Placing Flattrade SDK exit order for {pos.symbol} Qty={abs(pos.quantity)} ({cred.client_id})")
+        if cred.static_ip:
+            data = await proxy_request("POST", url, str(cred.static_ip), headers=headers, data=payload_data)
+        else:
+            session = core_engine.http_session
+            if not session:
+                raise RuntimeError("HTTP session not initialized")
+            async with session.post(url, data=payload_data, headers=headers) as resp:
+                data = await resp.json(content_type=None)
+
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except Exception:
+                pass
+
+        data_str = json.dumps(data, default=str) if isinstance(data, (dict, list)) else str(data)
+        await logger_api.info(f"📥 [Flattrade SDK Exit Order Response] ({cred.client_id}) {pos.symbol}: {data_str}")
+
+        data_obj = data[0] if isinstance(data, list) and len(data) > 0 else data
+        if isinstance(data_obj, dict):
+            status = str(data_obj.get("status", "")).upper()
+            stat = str(data_obj.get("stat", "")).lower()
+            if status == "S" or stat == "ok" or "norenordno" in data_obj or "orderid" in data_obj:
+                order_id = data_obj.get("norenordno") or data_obj.get("orderid") or "CONFIRMED"
+                await logger_api.info(f"✅ [Flattrade SDK Exit Success] ({cred.client_id}) {pos.symbol}: order_id={order_id}")
+                return True
+
+            emsg = str(data_obj.get("errMsg", "") or data_obj.get("emsg", "") or "").lower()
+            if stat == "not_ok" or any(x in emsg for x in ("invalid session", "session expired", "invalid key", "not logged in", "user not logged in")):
+                try:
+                    await logger_exit.warn(f"🔑 Flattrade SDK auth expired during exit for {pos.symbol}, attempting automatic re-auth...")
+                    new_token = await login_flattrade(cred)
+                    if new_token:
+                        cred.token = new_token
+                        retry_payload = PayloadMaster.build_flattrade_sdk_payload(pos, cred)
+                        if cred.static_ip:
+                            data = await proxy_request("POST", url, str(cred.static_ip), headers=headers, data=retry_payload)
+                        else:
+                            async with session.post(url, data=retry_payload, headers=headers) as resp:
+                                data = await resp.json(content_type=None)
+                        if isinstance(data, str):
+                            try:
+                                data = json.loads(data)
+                            except Exception:
+                                pass
+                        data_str = json.dumps(data, default=str) if isinstance(data, (dict, list)) else str(data)
+                        await logger_api.info(f"📥 [Flattrade SDK Exit Order Retry Response] ({cred.client_id}) {pos.symbol}: {data_str}")
+                        data_obj = data[0] if isinstance(data, list) and len(data) > 0 else data
+                        if isinstance(data_obj, dict):
+                            status = str(data_obj.get("status", "")).upper()
+                            stat = str(data_obj.get("stat", "")).lower()
+                            if status == "S" or stat == "ok" or "norenordno" in data_obj or "orderid" in data_obj:
+                                order_id = data_obj.get("norenordno") or data_obj.get("orderid") or "CONFIRMED"
+                                await logger_api.info(f"✅ [Flattrade SDK Exit Retry Success] ({cred.client_id}) {pos.symbol}: order_id={order_id}")
+                                return True
+                except Exception as retry_err:
+                    await logger_api.error(f"❌ [Flattrade SDK Exit Re-Auth Failed] ({cred.client_id}): {retry_err}")
+                    await logger_exit.error(f"Flattrade SDK exit re-auth retry failed: {retry_err}")
+
+        await logger_api.error(f"❌ [Flattrade SDK Exit Failed] ({cred.client_id}) {pos.symbol}: {data_str}")
+        await logger_exit.error(f"Flattrade SDK exit failed for {pos.symbol} ({cred.client_id})")
+        return False
+    except Exception as e:
+        await logger_api.error(f"❌ [Flattrade SDK Exit Exception] ({cred.client_id}) {pos.symbol}: {e}")
+        await logger_exit.error(f"Flattrade SDK exit error for {pos.symbol}: {e}")
+        return False
+
+
+async def _exit_flattrade_web(pos: Position, cred: Credential) -> bool:
+    """Flattrade Exit via Legacy Web Emerge API Flow (Direct or Proxy)."""
     url = "https://emergeapi.flattrade.in/placeOrder"
     
     from execution.payload_master import PayloadMaster

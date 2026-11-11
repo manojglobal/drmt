@@ -5,6 +5,7 @@ import json
 import random
 from typing import List, Dict, Any
 import zoneinfo
+from settings import settings
 from models.schemas import Credential, Position
 from credentials.httpclient import proxy_request
 from core.engine import core_engine
@@ -148,7 +149,107 @@ async def poll_mstock(cred: Credential) -> List[Position]:
         raise
 
 async def poll_flattrade(cred: Credential) -> List[Position]:
-    """Flattrade Position Polling (Direct or via DRMT Proxy)."""
+    """Flattrade Position Polling (SDK flow or Web flow based on FLATTRADE_FLOW setting)."""
+    if not cred.token or not str(cred.token).strip():
+        raise PermissionError(f"Flattrade Auth Error: missing session token (jKey) for {cred.client_id}")
+
+    flow_mode = getattr(settings, "FLATTRADE_FLOW", "WEB").upper()
+    is_sdk = (flow_mode == "SDK") and bool(cred.api_key and cred.api_secret)
+
+    if is_sdk:
+        return await _poll_flattrade_sdk(cred)
+    return await _poll_flattrade_web(cred)
+
+
+async def _poll_flattrade_sdk(cred: Credential) -> List[Position]:
+    """Flattrade Position Polling via Official Pi Connect SDK flow."""
+    url = "https://piconnect.flattrade.in/PiConnectAPI/PositionBook"
+    j_data = json.dumps({"uid": cred.client_id, "actid": cred.client_id}, separators=(",", ":"))
+    form_body = f"jData={j_data}&jKey={cred.token}"
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "DRMT/2.0"
+    }
+
+    try:
+        if cred.static_ip:
+            resp = await proxy_request("POST", url, str(cred.static_ip), headers=headers, data=form_body)
+        else:
+            session = core_engine.http_session
+            if not session:
+                raise RuntimeError("HTTP session not initialized")
+            async with session.post(url, data=form_body, headers=headers) as r:
+                if r.status in (401, 403):
+                    raise PermissionError(f"Flattrade Auth Error: HTTP {r.status}")
+                resp = await r.json(content_type=None)
+
+        if isinstance(resp, str):
+            try:
+                resp = json.loads(resp)
+            except Exception:
+                resp = {}
+
+        raw_resp_str = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else str(resp)
+        if _last_raw_payloads.get(f"flattrade:sdk:{cred.client_id}") != raw_resp_str:
+            _last_raw_payloads[f"flattrade:sdk:{cred.client_id}"] = raw_resp_str
+            await logger_api.info(f"📥 [Flattrade Pi SDK Positions Response] ({cred.client_id}): {raw_resp_str}")
+
+        if isinstance(resp, dict):
+            stat = str(resp.get("stat", "")).lower()
+            emsg = str(resp.get("emsg", "") or resp.get("errMsg", "")).lower()
+
+            # 1. Genuine Auth/Session Failures -> Raise PermissionError to trigger quarantine/re-auth
+            if any(x in emsg for x in ("invalid key", "session expired", "not logged in", "user not logged in", "token expired", "unauthorized", "invalid token", "forbidden", "session revoked", "user blocked", "account locked", "invalid user", "access denied")):
+                await logger_api.error(f"❌ [Flattrade Pi SDK Auth Expired] ({cred.client_id}): {resp.get('emsg') or resp.get('errMsg')}")
+                raise PermissionError(
+                    f"Flattrade Auth Error: Invalid/Expired session ({resp.get('emsg') or resp.get('errMsg')})"
+                )
+
+            # 2. Healthy empty position book ("No Data" / "no records") -> return []
+            if stat == "not_ok" and ("no data" in emsg or "no records" in emsg or "no order" in emsg):
+                return []
+
+            # 3. Broker Error Responses
+            if stat == "not_ok":
+                await logger_api.error(f"❌ [Flattrade Pi SDK Broker Error] ({cred.client_id}): {resp.get('emsg') or resp.get('errMsg')}")
+                raise RuntimeError(
+                    f"Flattrade Poll Error: {resp.get('emsg') or resp.get('errMsg')}"
+                )
+
+            raw_list = []
+        elif isinstance(resp, list):
+            raw_list = resp
+        else:
+            raw_list = []
+
+        if raw_list:
+            item_details = [
+                f"{p.get('tsym')}[Net:{p.get('netqty', 0)},Buy:{p.get('daybuyqty', 0)},Sell:{p.get('daysellqty', 0)},BuyAvg:{p.get('daybuyavgprc', 0)},SellAvg:{p.get('daysellavgprc', 0)},LTP:{p.get('lp') or p.get('mktprc', 0)},BookedPnL:{p.get('rpnl', 0)}]"
+                for p in raw_list if isinstance(p, dict)
+            ]
+            await logger_api.info(f"📋 [Flattrade Pi SDK Position Book Items] ({cred.client_id}): Total={len(raw_list)} | Details: {'; '.join(item_details)}")
+        else:
+            await logger_api.info(f"📋 [Flattrade Pi SDK Position Book Items] ({cred.client_id}): 0 positions")
+
+        asyncio.create_task(ensure_flattrade_instruments_cached(cred))
+        normalized = PositionManager.normalize_positions(raw_list, cred.broker, cred.client_id)
+        if normalized:
+            norm_details = [
+                f"{p.symbol} Qty:{p.quantity} Side:{p.transaction_type} Prd:{p.product_type} Avg:₹{p.avg_price} LTP:₹{p.ltp} PnL:₹{p.pnl}"
+                for p in normalized
+            ]
+            await logger_api.info(f"✅ [Flattrade Pi SDK Active Open Positions] ({cred.client_id}): Total={len(normalized)} | {'; '.join(norm_details)}")
+        return normalized
+    except Exception as e:
+        if "401" in str(e) or "403" in str(e) or isinstance(e, PermissionError) or any(x in str(e).lower() for x in ("invalid session", "session expired", "invalid key", "not logged in", "token expired", "unauthorized", "invalid token", "forbidden", "account locked")):
+            await logger_api.error(f"❌ [Flattrade Pi SDK Auth Error] ({cred.client_id}): {e}")
+            raise PermissionError(f"Flattrade Auth Error: {e}")
+        await logger_api.error(f"❌ [Flattrade Pi SDK Poll Error] ({cred.client_id}): {e}")
+        raise
+
+
+async def _poll_flattrade_web(cred: Credential) -> List[Position]:
+    """Flattrade Position Polling via Legacy Web quickAuth Flow (Direct or via DRMT Proxy)."""
     if not cred.token or not str(cred.token).strip():
         raise PermissionError(f"Flattrade Auth Error: missing session token (jKey) for {cred.client_id}")
 
@@ -256,23 +357,40 @@ async def poll_flattrade(cred: Credential) -> List[Position]:
                     import zoneinfo
                     _ist_tz = zoneinfo.ZoneInfo("Asia/Kolkata")
                     today_ist = datetime.now(tz=_ist_tz).date()
-                    dyn = get_dynamic_credentials(cred.client_id)
-                    raw_tc = (dyn.get("token_created_at") if dyn else None) or (str(cred.token_updated_at) if cred.token_updated_at else "")
-                    if raw_tc:
-                        t_str = str(raw_tc).strip()
-                        if "T" in t_str:
-                            t_date = datetime.fromisoformat(t_str).date()
-                        elif "-" in t_str:
-                            t_date = datetime.strptime(t_str[:10], "%Y-%m-%d").date()
-                        elif "/" in t_str:
-                            t_date = datetime.strptime(t_str[:10], "%d/%m/%Y").date()
-                        else:
-                            t_date = datetime.strptime(t_str[:10], "%Y%m%d").date()
 
-                        if t_date < today_ist:
-                            raise PermissionError(
-                                f"Flattrade Auth Error: Session token expired (issued on {t_date.strftime('%Y-%m-%d')}). Requires Token Refresh."
-                            )
+                    token_fresh_today = False
+                    if cred.token_updated_at:
+                        try:
+                            upd_dt = cred.token_updated_at
+                            if isinstance(upd_dt, str):
+                                upd_dt = datetime.fromisoformat(upd_dt.replace(" ", "T"))
+                            if hasattr(upd_dt, "tzinfo") and upd_dt.tzinfo is not None:
+                                upd_date = upd_dt.astimezone(_ist_tz).date()
+                            else:
+                                upd_date = upd_dt.date()
+                            if upd_date >= today_ist:
+                                token_fresh_today = True
+                        except Exception:
+                            pass
+
+                    if not token_fresh_today:
+                        dyn = get_dynamic_credentials(cred.client_id)
+                        raw_tc = (dyn.get("token_created_at") if dyn else None) or (str(cred.token_updated_at) if cred.token_updated_at else "")
+                        if raw_tc:
+                            t_str = str(raw_tc).strip()
+                            if "T" in t_str:
+                                t_date = datetime.fromisoformat(t_str).date()
+                            elif "-" in t_str:
+                                t_date = datetime.strptime(t_str[:10], "%Y-%m-%d").date()
+                            elif "/" in t_str:
+                                t_date = datetime.strptime(t_str[:10], "%d/%m/%Y").date()
+                            else:
+                                t_date = datetime.strptime(t_str[:10], "%Y%m%d").date()
+
+                            if t_date < today_ist:
+                                raise PermissionError(
+                                    f"Flattrade Auth Error: Session token expired (issued on {t_date.strftime('%Y-%m-%d')}). Requires Token Refresh."
+                                )
                 except PermissionError:
                     raise
                 except Exception:

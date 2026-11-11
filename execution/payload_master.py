@@ -285,6 +285,45 @@ class PayloadMaster:
         }
 
     @staticmethod
+    def build_flattrade_sdk_payload(pos: Position, cred: Credential) -> str:
+        """Builds Flattrade Pi Connect form-encoded order payload (jData=...&jKey=...)."""
+        tran_type = "S" if pos.quantity > 0 else "B"
+        qty = abs(pos.quantity)
+
+        prod_type = (pos.product_type or "").upper()
+        if prod_type in ("CNC", "DELIVERY", "C"):
+            prd = "C"
+        elif prod_type in ("NRML", "NORMAL", "CARRYFORWARD", "M"):
+            prd = "M"
+        elif prod_type in ("MIS", "INTRADAY", "I"):
+            prd = "I"
+        elif prod_type in ("BO", "B"):
+            prd = "B"
+        elif prod_type in ("CO", "H"):
+            prd = "H"
+        else:
+            prd = prod_type
+
+        exch = resolve_flattrade_exchange(pos.exchange, pos.symbol)
+        remarks = str(uuid.uuid4()).replace("-", "")[:15]
+
+        j_data = json.dumps({
+            "uid": cred.client_id,
+            "actid": cred.client_id,
+            "exch": exch,
+            "tsym": pos.symbol,
+            "qty": str(qty),
+            "prc": "0",
+            "prd": prd,
+            "trantype": tran_type,
+            "prctyp": "MKT",
+            "ret": "DAY",
+            "remarks": remarks,
+        }, separators=(",", ":"))
+
+        return f"jData={j_data}&jKey={cred.token}"
+
+    @staticmethod
     def build_fyers_payload(pos: Position) -> Dict[str, Any]:
         """Builds Fyers API v3 market exit order payload."""
         tran_type = -1 if pos.quantity > 0 else 1

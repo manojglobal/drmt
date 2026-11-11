@@ -168,6 +168,9 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                         if fresh:
                             if fresh.get("token") and fresh["token"] != c.token:
                                 c.token = fresh["token"]
+                                c.token_updated_at = datetime.now()
+                            if fresh.get("token_created_at"):
+                                setattr(c, "token_created_at", fresh["token_created_at"])
                             if fresh.get("api_key") and fresh["api_key"] != c.api_key:
                                 c.api_key = fresh["api_key"]
                             if fresh.get("password") and fresh["password"] != c.password:
@@ -193,36 +196,53 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                             raise PermissionError(f"Missing access token for {c.broker}:{c.client_id} — Please use Refresh Token on the dashboard.")
 
                         # 4b. Validate access token calendar-day freshness
-                        t_created = getattr(c, "token_created_at", None)
-                        if not t_created:
-                            try:
-                                from credentials.dynamic_loader import get_dynamic_credentials
-                                fresh_d = get_dynamic_credentials(c.client_id)
-                                t_created = fresh_d.get("token_created_at") if fresh_d else None
-                            except Exception:
-                                t_created = None
-                        if not t_created and c.token_updated_at:
-                            t_created = str(c.token_updated_at)
+                        now_ist_date = datetime.now(tz=_IST).date()
+                        token_fresh_today = False
 
-                        if t_created:
+                        if c.token_updated_at:
                             try:
-                                t_created_str = str(t_created).strip()
-                                if "T" in t_created_str:
-                                    t_date = datetime.fromisoformat(t_created_str).date()
-                                elif "-" in t_created_str:
-                                    t_date = datetime.strptime(t_created_str[:10], "%Y-%m-%d").date()
-                                elif "/" in t_created_str:
-                                    t_date = datetime.strptime(t_created_str[:10], "%d/%m/%Y").date()
+                                upd_dt = c.token_updated_at
+                                if isinstance(upd_dt, str):
+                                    upd_dt = datetime.fromisoformat(upd_dt.replace(" ", "T"))
+                                if hasattr(upd_dt, "tzinfo") and upd_dt.tzinfo is not None:
+                                    upd_date = upd_dt.astimezone(_IST).date()
                                 else:
-                                    t_date = datetime.strptime(t_created_str[:10], "%Y%m%d").date()
-
-                                now_ist_date = datetime.now(tz=_IST).date()
-                                if t_date < now_ist_date:
-                                    raise PermissionError(f"Session token expired (Issued on {t_date.strftime('%Y-%m-%d')}) — Please use Refresh Token on the dashboard.")
-                            except PermissionError:
-                                raise
+                                    upd_date = upd_dt.date()
+                                if upd_date >= now_ist_date:
+                                    token_fresh_today = True
                             except Exception:
                                 pass
+
+                        if not token_fresh_today:
+                            t_created = getattr(c, "token_created_at", None)
+                            if not t_created:
+                                try:
+                                    from credentials.dynamic_loader import get_dynamic_credentials
+                                    fresh_d = get_dynamic_credentials(c.client_id)
+                                    t_created = fresh_d.get("token_created_at") if fresh_d else None
+                                except Exception:
+                                    t_created = None
+                            if not t_created and c.token_updated_at:
+                                t_created = str(c.token_updated_at)
+
+                            if t_created:
+                                try:
+                                    t_created_str = str(t_created).strip()
+                                    if "T" in t_created_str:
+                                        t_date = datetime.fromisoformat(t_created_str).date()
+                                    elif "-" in t_created_str:
+                                        t_date = datetime.strptime(t_created_str[:10], "%Y-%m-%d").date()
+                                    elif "/" in t_created_str:
+                                        t_date = datetime.strptime(t_created_str[:10], "%d/%m/%Y").date()
+                                    else:
+                                        t_date = datetime.strptime(t_created_str[:10], "%Y%m%d").date()
+
+                                    if t_date < now_ist_date:
+                                        raise PermissionError(f"Session token expired (Issued on {t_date.strftime('%Y-%m-%d')}) — Please use Refresh Token on the dashboard.")
+                                except PermissionError:
+                                    raise
+                                except Exception:
+                                    pass
 
                         res = await broker_poll(c)
                         if c.client_id in _last_poll_errors:

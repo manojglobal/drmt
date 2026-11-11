@@ -60,7 +60,14 @@ async def save_working_credential(cred: Credential) -> None:
         # Keep in-memory cache synchronized with the latest runtime token
         try:
             from credentials.dynamic_loader import update_dynamic_credential_token
-            update_dynamic_credential_token(cred.client_id, cred.token)
+            from datetime import datetime
+            if isinstance(cred.token_updated_at, datetime):
+                upd_time = cred.token_updated_at.strftime("%Y-%m-%d %H:%M:%S")
+            elif cred.token_updated_at:
+                upd_time = str(cred.token_updated_at)
+            else:
+                upd_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            update_dynamic_credential_token(cred.client_id, cred.token, upd_time)
         except Exception:
             pass
 

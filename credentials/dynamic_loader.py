@@ -6,6 +6,7 @@ with the SQLite database.
 """
 
 import csv
+from datetime import datetime
 import hashlib
 import io
 import json
@@ -462,13 +463,14 @@ def get_dynamic_credentials(client_id: str) -> Optional[dict]:
     return _client_creds.get(cid_str)
 
 
-def update_dynamic_credential_token(client_id: str, token: str) -> None:
+def update_dynamic_credential_token(client_id: str, token: str, token_created_at: Optional[str] = None) -> None:
     """Updates the runtime session token for an active credential in memory."""
     if not client_id or not token:
         return
     cid_str = str(client_id).strip()
     if cid_str in _client_creds:
         _client_creds[cid_str]["token"] = str(token).strip()
+        _client_creds[cid_str]["token_created_at"] = token_created_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def get_credential_source_info() -> dict:

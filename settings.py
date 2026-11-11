@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     USE_DROPBOX_CREDENTIALS: bool = False
     DROPBOX_CREDENTIALS_URL: str = ""
     ALICE_BLUE_FLOW: str = "WEB"  # "WEB" (OMK Web Execution) or "SDK" (Open-API SDK Flow)
+    FLATTRADE_FLOW: str = "SDK"   # "SDK" (Pi Connect SDK Flow) or "WEB" (Emerge Web Flow)
     BLOCKED_RECHECK_INTERVAL_SEC: int = 90  # 1.5 minutes interval for blocked credentials recovery
     MARKET_OPEN_HOUR: int = 9
     MARKET_OPEN_MINUTE: int = 15
