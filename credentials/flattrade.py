@@ -2,6 +2,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
+from urllib.parse import urlparse, parse_qs
 from models.schemas import Credential
 from credentials.crypto import sha256_hex, totp_now
 from credentials.httpclient import proxy_request
@@ -15,10 +16,15 @@ logger = logging.getLogger("DRMT.SCM")
 async def login_flattrade(cred: Credential) -> str:
     """Dispatches to Pi Connect SDK flow or Web quickAuth based on FLATTRADE_FLOW setting and credentials."""
     flow_mode = getattr(settings, "FLATTRADE_FLOW", "WEB").upper()
-    is_sdk = (flow_mode == "SDK") and bool(cred.api_key and cred.api_secret)
 
-    if is_sdk:
-        return await login_flattrade_sdk(cred)
+    if flow_mode == "SDK":
+        if cred.api_key and cred.api_secret:
+            return await login_flattrade_sdk(cred)
+        raise ValueError(
+            f"Flattrade SDK mode is active, but client {cred.client_id} is missing 'api_key' and 'api_secret'. "
+            f"Aborting login to prevent logging out your active web session."
+        )
+
     return await login_flattrade_web(cred)
 
 
@@ -26,23 +32,53 @@ async def login_flattrade_sdk(cred: Credential) -> str:
     """Handles the 2-step headless OAuth authentication for Flattrade Pi Connect API."""
     logger.info(f"Logging in Flattrade (Pi SDK) {cred.client_id}")
 
-    # Step 1: Headless user auth to obtain request_code
+    # Step 1A: Get auth session ID (Sid) from authapi.flattrade.in/auth/session
     totp = totp_now(cred.totp_secret) if cred.totp_secret else ""
     pwd_hash = sha256_hex(cred.password)
 
+    sid_url = "https://authapi.flattrade.in/auth/session"
+    headers_sid = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "Origin": "https://auth.flattrade.in",
+        "Referer": f"https://auth.flattrade.in/?app_key={cred.api_key}"
+    }
+
+    await logger_api.info(f"📤 [Flattrade SDK Auth Step 1A Session Request] ({cred.client_id}) -> POST {sid_url} | uid: {cred.client_id}, static_ip: {cred.static_ip}")
+    if cred.static_ip:
+        resp_sid = await proxy_request("POST", sid_url, str(cred.static_ip), headers=headers_sid, json_data={})
+    else:
+        session = core_engine.http_session
+        if not session:
+            raise RuntimeError("HTTP session not initialized")
+        async with session.post(sid_url, json={}, headers=headers_sid) as r:
+            resp_sid = await r.json(content_type=None)
+
+    sid = str(resp_sid).strip('"') if resp_sid else ""
+    await logger_api.info(f"📥 [Flattrade SDK Auth Step 1A Session Response] ({cred.client_id}): sid={sid}")
+
+    # Step 1B: Headless user auth to obtain request_code
     ftauth_url = "https://authapi.flattrade.in/ftauth"
     payload1 = {
         "UserName": cred.client_id,
         "Password": pwd_hash,
-        "Otp": totp
+        "PAN_DOB": totp,
+        "APIKey": cred.api_key,
+        "Sid": sid,
+        "App": "",
+        "ClientID": "",
+        "Key": ""
     }
     headers1 = {
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "Origin": "https://auth.flattrade.in",
+        "Referer": f"https://auth.flattrade.in/?app_key={cred.api_key}&sid={sid}" if sid else f"https://auth.flattrade.in/?app_key={cred.api_key}"
     }
 
-    await logger_api.info(f"📤 [Flattrade SDK Auth Step 1 Request] ({cred.client_id}) -> POST {ftauth_url} | uid: {cred.client_id}, static_ip: {cred.static_ip}")
+    await logger_api.info(f"📤 [Flattrade SDK Auth Step 1B Request] ({cred.client_id}) -> POST {ftauth_url} | uid: {cred.client_id}, static_ip: {cred.static_ip}")
     if cred.static_ip:
         resp1 = await proxy_request("POST", ftauth_url, str(cred.static_ip), headers=headers1, json_data=payload1)
     else:
@@ -59,9 +95,18 @@ async def login_flattrade_sdk(cred: Credential) -> str:
             resp1 = {}
 
     resp1_str = json.dumps(resp1, default=str) if isinstance(resp1, (dict, list)) else str(resp1)
-    await logger_api.info(f"📥 [Flattrade SDK Auth Step 1 Response] ({cred.client_id}): {resp1_str}")
+    await logger_api.info(f"📥 [Flattrade SDK Auth Step 1B Response] ({cred.client_id}): {resp1_str}")
 
-    request_code = resp1.get("request_code") or resp1.get("code") if isinstance(resp1, dict) else None
+    request_code = None
+    if isinstance(resp1, dict):
+        redirect_url = resp1.get("RedirectURL") or resp1.get("redirect_url") or ""
+        if redirect_url:
+            parsed = urlparse(redirect_url)
+            qs = parse_qs(parsed.query)
+            request_code = qs.get("code", [None])[0] or qs.get("request_code", [None])[0]
+        if not request_code:
+            request_code = resp1.get("request_code") or resp1.get("code")
+
     if not request_code:
         emsg = (resp1.get("emsg") or resp1.get("message") or resp1.get("errmsg")) if isinstance(resp1, dict) else "Missing request_code"
         await logger_api.error(f"❌ [Flattrade SDK Auth Step 1 Error] ({cred.client_id}): {emsg} | Full Response: {resp1_str}")

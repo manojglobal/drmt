@@ -307,16 +307,31 @@ class PayloadMaster:
         exch = resolve_flattrade_exchange(pos.exchange, pos.symbol)
         remarks = str(uuid.uuid4()).replace("-", "")[:15]
 
+        # Calculate marketable limit price to satisfy Flattrade ALGO_CHK rule (MKT orders rejected for API)
+        base_price = float(pos.ltp) if (pos.ltp and pos.ltp > 0) else (float(pos.avg_price) if (pos.avg_price and pos.avg_price > 0) else 0.0)
+        sym_upper = str(pos.symbol or "").upper()
+        is_option = any(x in sym_upper for x in ("-CE", "-PE", " CE", " PE")) or str(pos.exchange).upper() in ("NFO", "BFO")
+        buffer_pct = 0.05 if is_option else 0.01
+
+        if base_price > 0:
+            if tran_type == "S":
+                raw_price = max(0.05, base_price * (1.0 - buffer_pct))
+            else:
+                raw_price = base_price * (1.0 + buffer_pct)
+            limit_price = round(round(raw_price / 0.05) * 0.05, 2)
+        else:
+            limit_price = 0.05
+
         j_data = json.dumps({
             "uid": cred.client_id,
             "actid": cred.client_id,
             "exch": exch,
             "tsym": pos.symbol,
             "qty": str(qty),
-            "prc": "0",
+            "prc": str(limit_price),
             "prd": prd,
             "trantype": tran_type,
-            "prctyp": "MKT",
+            "prctyp": "LMT",
             "ret": "DAY",
             "remarks": remarks,
         }, separators=(",", ":"))
