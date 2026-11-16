@@ -31,16 +31,17 @@ _client_creds: Dict[str, dict] = {}
 _initialized: bool = False
 
 
-def derive_user_email(first_name: str, client_id: str) -> str:
-    """Derives user email matching historical Plato format (e.g. shivram@gmail.com, recover@gmail.com)."""
+def derive_user_email(first_name: str, client_id: str = "") -> str:
+    """Derives user email matching historical Plato format using first_name only (e.g. shivram@gmail.com, recover@gmail.com)."""
     fn = (first_name or "").strip().lower()
     cid = (client_id or "").strip().upper()
     if "recover" in fn or cid == "P645M6":
         return "recover@gmail.com"
     if fn:
         clean = "".join(ch for ch in fn.split()[0] if ch.isalnum())
-        return f"{clean}@gmail.com"
-    return f"{cid.lower()}@gmail.com"
+        if clean:
+            return f"{clean}@gmail.com"
+    return ""
 
 
 def _normalize_dropbox_url(url: str) -> str:
@@ -150,9 +151,11 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
         if not row.get("id") or not row.get("broker_creds"):
             continue
 
-        first = (row.get("first_name") or "").strip()
-        last = (row.get("last_name") or "").strip()
+        first = (row.get("first_name") or row.get("firstName") or "").strip()
+        last = (row.get("last_name") or row.get("lastName") or "").strip()
         full_name = f"{first} {last}".strip() if last else first
+        if not first and full_name:
+            first = full_name.split()[0]
         broker = str(row.get("broker") or "").strip().upper()
         static_ip = str(row.get("static_ip") or "").strip()
 
@@ -211,14 +214,17 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
                 if not new_name_to_cids[existing_name]:
                     del new_name_to_cids[existing_name]
             new_cid_to_name[client_id] = full_name
-            new_cid_to_email[client_id] = derive_user_email(first, client_id)
+            email_val = derive_user_email(first, client_id)
+            if email_val:
+                new_cid_to_email[client_id] = email_val
             if not is_generic_name:
                 new_name_to_cids.setdefault(full_name, []).append(client_id)
         elif not is_generic_name and full_name and client_id not in new_name_to_cids.get(full_name, []):
             new_name_to_cids.setdefault(full_name, []).append(client_id)
 
-        if client_id not in new_cid_to_email:
-            new_cid_to_email[client_id] = derive_user_email(first, client_id)
+        email_val = derive_user_email(first, client_id)
+        if email_val and (client_id not in new_cid_to_email or not new_cid_to_email[client_id]):
+            new_cid_to_email[client_id] = email_val
 
         uid = str(row.get("user_id") or "").strip()
         if uid and full_name and not is_generic_name:
@@ -399,6 +405,11 @@ async def _fallback_load_from_db():
                 _name_to_cids[name] = []
             if cid not in _name_to_cids[name]:
                 _name_to_cids[name].append(cid)
+            if cid not in _cid_to_email and name:
+                fn = name.split()[0]
+                em = derive_user_email(fn, cid)
+                if em:
+                    _cid_to_email[cid] = em
 
         _initialized = True
         logger.info(f"Loaded {len(_configured_cids)} credentials from SQLite fallback.")
@@ -423,7 +434,7 @@ def get_client_email(client_id: str) -> str:
     if not client_id:
         return ""
     cid_str = str(client_id).strip()
-    return _cid_to_email.get(cid_str, f"{cid_str.lower()}@gmail.com")
+    return _cid_to_email.get(cid_str, "")
 
 
 def get_dynamic_cids_for_user(query_val: str) -> List[str]:
