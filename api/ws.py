@@ -74,7 +74,7 @@ async def websocket_handler(request: web.Request):
     await logger_api.info(f"🔌 [WS CONNECT] user={user.username} (id={user.id}) ip={client_ip} creds={len(credentials)}")
 
     # Unique User Management: Core Engine handles cancelling old tasks
-    await core_engine.spawn_user(str(user.id), ws, credentials)
+    polling_task = await core_engine.spawn_user(str(user.id), ws, credentials)
     
     try:
         async for msg in ws:
@@ -91,6 +91,8 @@ async def websocket_handler(request: web.Request):
     except Exception as e:
         logger.error(f"WebSocket Exception in async for loop: {e}")
         pass  # swallow disconnect errors - chronos loop handles cleanup
+    finally:
+        core_engine.remove_user(str(user.id), task=polling_task)
         
     logger.info(f"🔌 [WS DISCONNECT] Client disconnected: user={user.username} (id={user.id}), closed={ws.closed}, close_code={ws.close_code}")
     await logger_api.info(f"🔌 [WS DISCONNECT] user={user.username} (id={user.id}) code={ws.close_code}")

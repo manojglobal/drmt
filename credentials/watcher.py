@@ -30,7 +30,14 @@ from credentials.dynamic_loader import (
     get_client_email
 )
 from position.chronos import refresh_token_with_backoff
-from utils.email import send_auth_failed_email, send_credentials_restored_email
+from credentials.flattrade import (
+    FLATTRADE_MISSING_KEYS_MESSAGE,
+    format_flattrade_auth_reason,
+    get_flattrade_missing_fields_label,
+    is_flattrade_sdk_keys_missing,
+    notify_flattrade_missing_keys,
+)
+from utils.email import send_consolidated_auth_failed_email, send_credentials_restored_email
 from logger.logger import logger_auth, logger_system
 
 logger = logging.getLogger("DRMT.CredentialsWatcher")
@@ -121,6 +128,24 @@ async def run_blocked_credentials_check_iteration() -> int:
         return 0
 
     unblocked_count = 0
+    failed_missing_keys: list[dict] = []
+    failed_other: list[dict] = []
+
+    def _record_watcher_failure(cred_obj: Credential, broker_name: str, cid: str, uname: str, uemail: str, raw_reason: str) -> str:
+        formatted = format_flattrade_auth_reason(raw_reason)
+        entry = {
+            "broker": broker_name,
+            "client_id": cid,
+            "username": uname,
+            "user_email": uemail,
+            "reason": formatted,
+        }
+        if is_flattrade_sdk_keys_missing(cred_obj.broker, cred_obj.api_key, cred_obj.api_secret) or formatted == FLATTRADE_MISSING_KEYS_MESSAGE:
+            entry["missing_fields"] = get_flattrade_missing_fields_label(cred_obj.api_key, cred_obj.api_secret) or "API Key, Secret Key"
+            failed_missing_keys.append(entry)
+        else:
+            failed_other.append(entry)
+        return formatted
 
     # 2. Inspect each blocked user
     for b_user in blocked_list:
@@ -196,34 +221,25 @@ async def run_blocked_credentials_check_iteration() -> int:
                 # ── FAILURE ──
                 update_blocked_user_signature(client_id, new_sig)
                 b_info = get_blocked_user(client_id)
-                fail_reason = b_info.get("reason", "Authentication failed") if b_info else "Authentication failed"
+                raw_reason = b_info.get("reason", "Authentication failed") if b_info else "Authentication failed"
+                fail_reason = _record_watcher_failure(cred, broker, client_id, username, user_email, raw_reason)
                 await logger_auth.warn(f"❌ [CREDENTIALS WATCHER] Updated credentials for {broker}:{client_id} still failed: {fail_reason}")
-                
-                # Dispatch failure alert email
-                asyncio.create_task(
-                    send_auth_failed_email(
-                        broker=broker,
-                        client_id=client_id,
-                        username=username,
-                        reason=fail_reason,
-                        user_email=user_email
-                    ),
-                    name=f"email_failed_{client_id}"
-                )
         except Exception as auth_err:
-            err_str = str(auth_err)
+            err_str = _record_watcher_failure(cred, broker, client_id, username, user_email, str(auth_err))
             update_blocked_user_signature(client_id, new_sig, reason=err_str)
             await logger_auth.error(f"❌ [CREDENTIALS WATCHER] Exception testing credentials for {broker}:{client_id}: {err_str}", notify_email=False)
-            asyncio.create_task(
-                send_auth_failed_email(
-                    broker=broker,
-                    client_id=client_id,
-                    username=username,
-                    reason=err_str,
-                    user_email=user_email
-                ),
-                name=f"email_failed_{client_id}"
-            )
+
+    # Dispatch consolidated failure alert email(s) once per watcher iteration
+    if failed_missing_keys:
+        asyncio.create_task(
+            notify_flattrade_missing_keys(failed_missing_keys, source="Credentials Watcher"),
+            name="email_watcher_missing_keys",
+        )
+    if failed_other:
+        asyncio.create_task(
+            send_consolidated_auth_failed_email(failed_other, source="Credentials Watcher"),
+            name="email_watcher_failed_consolidated",
+        )
 
     return unblocked_count
 

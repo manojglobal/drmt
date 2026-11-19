@@ -13,7 +13,14 @@ from models.schemas import Credential
 from position.adapters import broker_poll
 from logger.logger import logger_system, logger_auth, logger_monitor
 from credentials.mstock import login_mstock
-from credentials.flattrade import login_flattrade
+from credentials.flattrade import (
+    FLATTRADE_MISSING_KEYS_MESSAGE,
+    format_flattrade_auth_reason,
+    get_flattrade_missing_fields_label,
+    is_flattrade_sdk_keys_missing,
+    login_flattrade,
+    notify_flattrade_missing_keys,
+)
 from credentials.aliceblue import login_aliceblue
 from credentials.fyers import login_fyers
 from credentials.kotakneo import login_kotakneo
@@ -95,28 +102,49 @@ async def refresh_token_with_backoff(cred: Credential, send_email: bool = True) 
                 sig = compute_credential_signature(fresh_d or cred.dict())
             except Exception:
                 pass
+            block_reason = format_flattrade_auth_reason(err_msg)
             add_to_blocklist(
                 client_id=cred.client_id,
                 broker=cred.broker,
                 username=username,
-                reason=err_msg,
+                reason=block_reason,
                 signature=sig
             )
-            # Dispatch single table failure alert email only when send_email is True (e.g. single retry / runtime)
+            # Dispatch failure alert email only when send_email is True (e.g. single manual retry)
             if send_email:
                 try:
-                    from utils.email import send_auth_failed_email
+                    from utils.email import send_auth_failed_email, send_flattrade_missing_keys_email
                     from credentials.dynamic_loader import get_client_email
-                    asyncio.create_task(
-                        send_auth_failed_email(
-                            broker=cred.broker,
-                            client_id=cred.client_id,
-                            username=username,
-                            reason=err_msg,
-                            user_email=get_client_email(cred.client_id)
-                        ),
-                        name=f"email_auth_failed_{cred.client_id}"
-                    )
+                    user_email = get_client_email(cred.client_id)
+                    if (
+                        is_flattrade_sdk_keys_missing(cred.broker, cred.api_key, cred.api_secret)
+                        or block_reason == FLATTRADE_MISSING_KEYS_MESSAGE
+                    ):
+                        asyncio.create_task(
+                            send_flattrade_missing_keys_email(
+                                [{
+                                    "broker": cred.broker,
+                                    "client_id": cred.client_id,
+                                    "username": username,
+                                    "user_email": user_email,
+                                    "missing_fields": get_flattrade_missing_fields_label(cred.api_key, cred.api_secret) or "API Key, Secret Key",
+                                    "reason": FLATTRADE_MISSING_KEYS_MESSAGE,
+                                }],
+                                source="Single Token Refresh",
+                            ),
+                            name=f"email_missing_keys_{cred.client_id}",
+                        )
+                    else:
+                        asyncio.create_task(
+                            send_auth_failed_email(
+                                broker=cred.broker,
+                                client_id=cred.client_id,
+                                username=username,
+                                reason=err_msg,
+                                user_email=user_email,
+                            ),
+                            name=f"email_auth_failed_{cred.client_id}",
+                        )
                 except Exception:
                     pass
             return False
@@ -156,6 +184,55 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                     break
                     
                 # 4. Broker Poll (All active credentials concurrently)
+                cycle_missing_key_alerts: list[dict] = []
+                cycle_expired_alerts: list[dict] = []
+
+                async def _record_poll_auth_failure(c: Credential, raw_err: str, default_msg: str, log_prefix: str, collect_expired: bool) -> None:
+                    username = get_client_username(c.client_id)
+                    err_reason = raw_err.strip() if raw_err.strip() else default_msg
+                    missing_keys = is_flattrade_sdk_keys_missing(c.broker, c.api_key, c.api_secret)
+                    block_reason = FLATTRADE_MISSING_KEYS_MESSAGE if missing_keys else err_reason
+                    await logger_auth.warn(
+                        f"🔑 [CHRONOS] {log_prefix} for {c.broker}:{c.client_id} ({username}): {block_reason}. "
+                        f"Quarantining account in Block list."
+                    )
+                    sig = ""
+                    try:
+                        from credentials.dynamic_loader import compute_credential_signature, get_dynamic_credentials
+                        fresh_d = get_dynamic_credentials(c.client_id)
+                        sig = compute_credential_signature(fresh_d or c.dict())
+                    except Exception:
+                        pass
+                    add_to_blocklist(
+                        client_id=c.client_id,
+                        broker=c.broker,
+                        username=username,
+                        reason=block_reason,
+                        signature=sig,
+                    )
+                    try:
+                        from credentials.dynamic_loader import get_client_email
+                        user_email = get_client_email(c.client_id)
+                    except Exception:
+                        user_email = ""
+                    if missing_keys:
+                        cycle_missing_key_alerts.append({
+                            "broker": c.broker,
+                            "client_id": c.client_id,
+                            "username": username,
+                            "user_email": user_email,
+                            "missing_fields": get_flattrade_missing_fields_label(c.api_key, c.api_secret),
+                            "reason": FLATTRADE_MISSING_KEYS_MESSAGE,
+                        })
+                    elif collect_expired:
+                        cycle_expired_alerts.append({
+                            "broker": c.broker,
+                            "client_id": c.client_id,
+                            "username": username,
+                            "user_email": user_email,
+                            "reason": err_reason,
+                        })
+
                 async def _poll_target(c: Credential):
                     if is_blocked(c.client_id):
                         # User is in Block List - skip polling to prevent broker lockout
@@ -173,6 +250,8 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                                 setattr(c, "token_created_at", fresh["token_created_at"])
                             if fresh.get("api_key") and fresh["api_key"] != c.api_key:
                                 c.api_key = fresh["api_key"]
+                            if fresh.get("api_secret") and fresh["api_secret"] != c.api_secret:
+                                c.api_secret = fresh["api_secret"]
                             if fresh.get("password") and fresh["password"] != c.password:
                                 c.password = fresh["password"]
                             if fresh.get("totp_secret") and fresh["totp_secret"] != c.totp_secret:
@@ -250,44 +329,14 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                             await logger_system.info(f"✅ Connection restored for {c.broker}:{c.client_id}")
                         return res
                     except PermissionError as e:
-                        username = get_client_username(c.client_id)
-                        err_reason = str(e).strip() if str(e).strip() else "Session token expired — on-demand auto-refresh is disabled."
-                        await logger_auth.warn(
-                            f"🔑 [CHRONOS] Session token expired/invalid for {c.broker}:{c.client_id} ({username}): {err_reason}. "
-                            f"Quarantining account in Block list (on-demand auto-refresh is disabled)."
+                        await _record_poll_auth_failure(
+                            c,
+                            str(e),
+                            "Session token expired — on-demand auto-refresh is disabled.",
+                            "Session token expired/invalid",
+                            collect_expired=True,
                         )
-                        # 1. Immediately quarantine into Block list with signature so future scans skip it
-                        sig = ""
-                        try:
-                            from credentials.dynamic_loader import compute_credential_signature, get_dynamic_credentials
-                            fresh_d = get_dynamic_credentials(c.client_id)
-                            sig = compute_credential_signature(fresh_d or c.dict())
-                        except Exception:
-                            pass
-                        add_to_blocklist(
-                            client_id=c.client_id,
-                            broker=c.broker,
-                            username=username,
-                            reason=err_reason,
-                            signature=sig
-                        )
-                        # 2. Dispatch alert email to operator asynchronously (non-blocking)
-                        from utils.email import send_error_email
-                        email_body = (
-                            f"Account {c.broker}:{c.client_id} ({username}) encountered an expired or invalid session token during live scanning.\n"
-                            f"Reason: {err_reason}\n\n"
-                            f"On-demand auto-refresh is disabled during live scans to prevent broker account lockouts.\n"
-                            f"The account has been placed in the Block list and live scanning has paused for this account.\n\n"
-                            f"To restore authentication, please use the 'Refresh Token' feature on the dashboard or update credentials in the remote CSV."
-                        )
-                        asyncio.create_task(
-                            send_error_email(
-                                f"Session Token Expired: {c.broker}:{c.client_id}",
-                                email_body
-                            ),
-                            name=f"email_token_expired_{c.client_id}"
-                        )
-                        # 3. Return empty list so remaining accounts continue scanning immediately
+                        # Return empty list so remaining accounts continue scanning immediately
                         return []
                     except Exception as e:
                         err_str = str(e)
@@ -301,25 +350,12 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                             )
                         )
                         if is_auth_error:
-                            username = get_client_username(c.client_id)
-                            err_reason = err_str.strip() if err_str.strip() else "Session token expired / invalid"
-                            await logger_auth.warn(
-                                f"🔑 [CHRONOS] Session token rejected for {c.broker}:{c.client_id} ({username}): {err_reason}. "
-                                f"Quarantining account in Block list."
-                            )
-                            sig = ""
-                            try:
-                                from credentials.dynamic_loader import compute_credential_signature, get_dynamic_credentials
-                                fresh_d = get_dynamic_credentials(c.client_id)
-                                sig = compute_credential_signature(fresh_d or c.dict())
-                            except Exception:
-                                pass
-                            add_to_blocklist(
-                                client_id=c.client_id,
-                                broker=c.broker,
-                                username=username,
-                                reason=err_reason,
-                                signature=sig
+                            await _record_poll_auth_failure(
+                                c,
+                                err_str,
+                                "Session token expired / invalid",
+                                "Session token rejected",
+                                collect_expired=False,
                             )
                             return []
 
@@ -342,6 +378,23 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                 t_poll_start = time.monotonic()
                 poll_batch = await asyncio.gather(*[_poll_target(c) for c in credentials], return_exceptions=True)
                 poll_duration_ms = (time.monotonic() - t_poll_start) * 1000
+
+                # Dispatch at most one consolidated alert email per category for this scan cycle
+                if cycle_missing_key_alerts:
+                    asyncio.create_task(
+                        notify_flattrade_missing_keys(cycle_missing_key_alerts, source="Live Polling Scan"),
+                        name="email_flattrade_missing_keys_scan",
+                    )
+                if cycle_expired_alerts:
+                    from utils.email import send_consolidated_auth_failed_email
+                    asyncio.create_task(
+                        send_consolidated_auth_failed_email(
+                            cycle_expired_alerts,
+                            total_configured=len(credentials),
+                            source="Live Polling Session Expired",
+                        ),
+                        name="email_poll_expired_consolidated",
+                    )
                 new_data_models = []
                 for res in poll_batch:
                     if isinstance(res, list):
@@ -405,4 +458,4 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
         # Cleanup
         if not ws.closed:
             await ws.close()
-        engine.remove_user(user_id)
+        engine.remove_user(user_id, task=asyncio.current_task())

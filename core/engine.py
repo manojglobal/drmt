@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Dict
+from typing import Dict, Optional
 import aiohttp
 import redis.asyncio as redis
 
@@ -88,15 +88,23 @@ class CoreEngine:
         from position.chronos import polling_loop
         
         task = asyncio.create_task(polling_loop(user_id, ws, credentials, self))
+        self._user_tasks[user_id] = task
         acc_list = ", ".join(f"{c.broker}:{c.client_id}" for c in credentials) if credentials else "None"
         logger.info(f"🚀 Spawned polling task for user_id {user_id} ({len(credentials)} active accounts: [{acc_list}])")
+        return task
 
-    def remove_user(self, user_id: str):
-        # Stops and removes an active polling session for a user.
-        if user_id in self._user_tasks:
-            task = self._user_tasks.pop(user_id)
-            if not task.done():
+    def remove_user(self, user_id: str, task: Optional[asyncio.Task] = None):
+        # Stops and removes an active polling session for a user without clobbering a newer task.
+        running_task = asyncio.current_task()
+        current_task = self._user_tasks.get(user_id)
+        if task is not None and current_task is not task:
+            if not task.done() and task is not running_task:
                 task.cancel()
+            return
+        if user_id in self._user_tasks:
+            popped = self._user_tasks.pop(user_id)
+            if not popped.done() and popped is not running_task:
+                popped.cancel()
 
     def acquire_api_semaphore(self):
         # Safely acquires a lock before hitting external APIs.

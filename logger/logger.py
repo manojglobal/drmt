@@ -68,8 +68,8 @@ SENSITIVE_PATTERNS = [
     # Flattrade jKey/susertoken
     (re.compile(r'([\"\']?jKey[\"\']?\s*[:=]\s*[\"\']?)([^\"\'\s,;}{]+)([\"\']?)', re.IGNORECASE), r'\g<1>***\g<3>'),
     (re.compile(r'([\"\']?susertoken[\"\']?\s*[:=]\s*[\"\']?)([^\"\'\s,;}{]+)([\"\']?)', re.IGNORECASE), r'\g<1>***\g<3>'),
-    # Refresh tokens, JWT tokens, and broker user sessions
-    (re.compile(r'([\"\']?(?:refreshToken|jwtToken|userSession)[\"\']?\s*[:=]\s*[\"\']?)([^\"\'\s,;}{]+)([\"\']?)', re.IGNORECASE), r'\g<1>***\g<3>'),
+    # Refresh tokens, client secrets, JWT tokens, and broker user sessions
+    (re.compile(r'([\"\']?(?:refreshToken|refresh_token|client_secret|DRMT_DROPBOX_APP_SECRET|DRMT_DROPBOX_REFRESH_TOKEN|jwtToken|userSession)[\"\']?\s*[:=]\s*[\"\']?)([^\"\'\s,;}{]+)([\"\']?)', re.IGNORECASE), r'\g<1>***\g<3>'),
 ]
 
 def sanitize_log_message(msg: str) -> str:
@@ -335,7 +335,10 @@ class DRMTLogFormatter(logging.Formatter):
     """
     def format(self, record: logging.LogRecord) -> str:
         dt = datetime.fromtimestamp(record.created, tz=_IST)
-        timestamp = dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        timestamp = (
+            f"{dt.year:04d}-{dt.month:02d}-{dt.day:02d} "
+            f"{dt.hour:02d}:{dt.minute:02d}:{dt.second:02d}.{dt.microsecond // 1000:03d}"
+        )
         lvl_name = "WARN" if record.levelname == "WARNING" else record.levelname
         level_str = f"{lvl_name:<8}"
         module = getattr(record, "origin_module", None)

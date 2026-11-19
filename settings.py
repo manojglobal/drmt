@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     CREDENTIALS_CSV_URL: str = ""
     USE_DROPBOX_CREDENTIALS: bool = False
     DROPBOX_CREDENTIALS_URL: str = ""
+    DRMT_DROPBOX_APP_KEY: str = ""
+    DRMT_DROPBOX_APP_SECRET: str = ""
+    DRMT_DROPBOX_REFRESH_TOKEN: str = ""
+    DRMT_DROPBOX_FILE_PATH: str = "/plato_client_credentials.csv"
     ALICE_BLUE_FLOW: str = "WEB"  # "WEB" (OMK Web Execution) or "SDK" (Open-API SDK Flow)
     FLATTRADE_FLOW: str = "SDK"   # "SDK" (Pi Connect SDK Flow) or "WEB" (Emerge Web Flow)
     BLOCKED_RECHECK_INTERVAL_SEC: int = 90  # 1.5 minutes interval for blocked credentials recovery

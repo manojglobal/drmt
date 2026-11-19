@@ -10,8 +10,111 @@ from credentials.dedup import save_working_credential
 from core.engine import core_engine
 from settings import settings
 from logger.logger import logger_auth, logger_api
+from utils.email import FLATTRADE_MISSING_KEYS_MESSAGE, send_flattrade_missing_keys_email
 
 logger = logging.getLogger("DRMT.SCM")
+
+# Tracks the last missing-key signature sent in a consolidated email to avoid repeat spam
+_last_missing_keys_signature: tuple | None = None
+
+
+def reset_missing_keys_alert_cache() -> None:
+    """Clear cached missing-key alert signature (intended for tests or credential resets)."""
+    global _last_missing_keys_signature
+    _last_missing_keys_signature = None
+
+
+def get_flattrade_missing_fields_label(api_key: str | None, api_secret: str | None) -> str:
+    """Return a human-readable label for missing Flattrade SDK credentials."""
+    has_key = bool(str(api_key or "").strip())
+    has_secret = bool(str(api_secret or "").strip())
+    if not has_key and not has_secret:
+        return "API Key, Secret Key"
+    if not has_key:
+        return "API Key"
+    if not has_secret:
+        return "Secret Key"
+    return ""
+
+
+def is_flattrade_sdk_keys_missing(broker: str | None, api_key: str | None, api_secret: str | None) -> bool:
+    """Return True when Flattrade SDK flow is active and API key or secret is missing."""
+    flow_mode = getattr(settings, "FLATTRADE_FLOW", "WEB").upper()
+    if flow_mode != "SDK":
+        return False
+    if "FLATTRADE" not in str(broker or "").upper():
+        return False
+    return bool(get_flattrade_missing_fields_label(api_key, api_secret))
+
+
+def format_flattrade_auth_reason(reason: str) -> str:
+    """Map technical Flattrade missing-key errors to the operator-friendly notification message."""
+    if not reason:
+        return reason
+    low = reason.lower()
+    if "missing 'api_key' and 'api_secret'" in low or (
+        "flattrade" in low and "api key" in low and "secret key" in low and "missing" in low
+    ):
+        return FLATTRADE_MISSING_KEYS_MESSAGE
+    return reason
+
+
+def collect_flattrade_missing_key_accounts() -> list[dict]:
+    """Scan configured Flattrade accounts and return those missing SDK API key or secret key."""
+    if getattr(settings, "FLATTRADE_FLOW", "WEB").upper() != "SDK":
+        return []
+
+    from utils.user_mapping import get_configured_client_ids, get_client_username
+    from credentials.dynamic_loader import get_dynamic_credentials, get_client_email
+
+    missing_accounts: list[dict] = []
+    for cid in sorted(get_configured_client_ids()):
+        d_cred = get_dynamic_credentials(cid)
+        if not d_cred:
+            continue
+        broker = str(d_cred.get("broker") or "").upper()
+        api_key = d_cred.get("api_key") or ""
+        api_secret = d_cred.get("api_secret") or ""
+        if not is_flattrade_sdk_keys_missing(broker, api_key, api_secret):
+            continue
+        missing_accounts.append({
+            "broker": "FLATTRADE",
+            "client_id": cid,
+            "username": get_client_username(cid),
+            "user_email": get_client_email(cid),
+            "missing_fields": get_flattrade_missing_fields_label(api_key, api_secret),
+            "reason": FLATTRADE_MISSING_KEYS_MESSAGE,
+        })
+    return missing_accounts
+
+
+async def notify_flattrade_missing_keys(
+    accounts: list[dict] | None = None,
+    source: str = "Credentials Sync",
+    force: bool = False,
+) -> list[dict]:
+    """Send a single merged alert email for all Flattrade accounts missing SDK API keys."""
+    global _last_missing_keys_signature
+
+    target_accounts = list(accounts) if accounts is not None else collect_flattrade_missing_key_accounts()
+    if not target_accounts:
+        if accounts is None:
+            _last_missing_keys_signature = None
+        return []
+
+    sig_key = tuple(
+        sorted((str(a.get("client_id", "")), str(a.get("missing_fields", ""))) for a in target_accounts)
+    )
+    if not force and _last_missing_keys_signature == sig_key:
+        return target_accounts
+
+    _last_missing_keys_signature = sig_key
+    await send_flattrade_missing_keys_email(target_accounts, source=source)
+    await logger_auth.warn(
+        f"⚠️ [FLATTRADE] Missing SDK API key/secret for {len(target_accounts)} account(s) ({source}): "
+        f"{[a.get('client_id') for a in target_accounts]}"
+    )
+    return target_accounts
 
 async def login_flattrade(cred: Credential) -> str:
     """Dispatches to Pi Connect SDK flow or Web quickAuth based on FLATTRADE_FLOW setting and credentials."""

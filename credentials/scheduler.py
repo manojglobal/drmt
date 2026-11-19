@@ -50,6 +50,7 @@ def build_refresh_tables_html(auth_results: list[dict]) -> tuple[str, str]:
     Returns (plain_text, html_body).
     """
     import html
+    from credentials.flattrade import format_flattrade_auth_reason
 
     # Group accounts by broker
     by_broker: dict[str, list[dict]] = {}
@@ -87,7 +88,7 @@ def build_refresh_tables_html(auth_results: list[dict]) -> tuple[str, str]:
             ok = acc.get("refreshed", False)
             email_val = acc.get("user_email", "")
             icon = "✅" if ok else "❌"
-            reason_val = acc.get("reason", "") if not ok else ""
+            reason_val = format_flattrade_auth_reason(str(acc.get("reason", ""))) if not ok else ""
             plain_parts.append(f"{email_val:<32} | {icon:^22} | {reason_val}")
 
         # HTML representation matching email_massage.png
@@ -113,7 +114,7 @@ def build_refresh_tables_html(auth_results: list[dict]) -> tuple[str, str]:
                 reason_html = ""
             else:
                 icon_html = '<span style="font-size: 16px; color: #d32f2f;">&#10060;</span>'
-                raw_reason = str(acc.get("reason", "Failed"))
+                raw_reason = format_flattrade_auth_reason(str(acc.get("reason", "Failed")))
                 reason_html = html.escape(raw_reason)
 
             table_html += f"""    <tr>
@@ -262,6 +263,7 @@ def get_seconds_until_next_market_close() -> float:
 def build_market_close_report_html(successful_accounts: list[dict], failed_accounts: list[dict]) -> tuple[str, str]:
     """Builds distinct tabular report for successful and failed accounts at market close."""
     import html
+    from credentials.flattrade import format_flattrade_auth_reason
     total_acc = len(successful_accounts) + len(failed_accounts)
     now_ist_str = datetime.now(timezone.utc).astimezone(_IST).strftime("%Y-%m-%d %I:%M %p IST")
 
@@ -355,8 +357,9 @@ def build_market_close_report_html(successful_accounts: list[dict], failed_accou
             cid = html.escape(str(acc.get("client_id", "")))
             un = html.escape(str(acc.get("username", "")))
             em = html.escape(str(acc.get("user_email", "")))
-            re = html.escape(str(acc.get("reason", "Authentication failed")))
-            plain_parts.append(f"{acc.get('broker',''):<12} | {acc.get('client_id',''):<12} | {acc.get('username',''):<22} | {acc.get('user_email',''):<28} | {acc.get('reason','')}")
+            formatted_reason = format_flattrade_auth_reason(str(acc.get("reason", "Authentication failed")))
+            re = html.escape(formatted_reason)
+            plain_parts.append(f"{acc.get('broker',''):<12} | {acc.get('client_id',''):<12} | {acc.get('username',''):<22} | {acc.get('user_email',''):<28} | {formatted_reason}")
             html_parts.append(f"""<tr>
       <td style="padding: 7px 8px; border: 1px solid #d1d5db; font-weight: 600;">{b}</td>
       <td style="padding: 7px 8px; border: 1px solid #d1d5db; font-family: monospace;">{cid}</td>

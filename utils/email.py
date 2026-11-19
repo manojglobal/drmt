@@ -324,3 +324,95 @@ async def send_consolidated_auth_failed_email(
     """
 
     await send_error_email(subject, plain_body, html_body=html_body)
+
+
+FLATTRADE_MISSING_KEYS_MESSAGE = (
+    "Your API key and secret key are missing. Please add your API key and secret key."
+)
+
+
+async def send_flattrade_missing_keys_email(
+    missing_accounts: list[dict],
+    source: str = "Credentials Sync",
+) -> None:
+    """Dispatches a single merged alert email listing all Flattrade accounts missing SDK API credentials."""
+    if not missing_accounts:
+        return
+
+    # Deduplicate by client_id while preserving order
+    unique_accounts: list[dict] = []
+    seen_cids: set[str] = set()
+    for acc in missing_accounts:
+        cid = str(acc.get("client_id", "")).strip()
+        if cid and cid in seen_cids:
+            continue
+        if cid:
+            seen_cids.add(cid)
+        unique_accounts.append(acc)
+
+    count = len(unique_accounts)
+    subject = f"Flattrade Missing API Key & Secret Key ({count} Account{'s' if count != 1 else ''})"
+
+    plain_lines = [
+        FLATTRADE_MISSING_KEYS_MESSAGE,
+        "",
+        f"Source: {source}",
+        f"Affected Accounts ({count}):",
+        f"{'Broker':<12} | {'Client ID':<12} | {'Username':<22} | {'User Email':<28} | Missing Fields",
+        "-" * 105,
+    ]
+
+    table_rows = []
+    for acc in unique_accounts:
+        broker_str = str(acc.get("broker", "FLATTRADE")).strip()
+        cid_str = str(acc.get("client_id", "")).strip()
+        uname_str = str(acc.get("username", cid_str)).strip()
+        email_str = str(acc.get("user_email", "")).strip()
+        missing_str = str(acc.get("missing_fields", "API Key, Secret Key")).strip()
+
+        plain_lines.append(
+            f"{broker_str:<12} | {cid_str:<12} | {uname_str:<22} | {email_str:<28} | {missing_str}"
+        )
+
+        table_rows.append(
+            f"""    <tr>
+      <td style="padding: 8px 10px; border: 1px solid #d1d5db; font-weight: 600;">{html.escape(broker_str)}</td>
+      <td style="padding: 8px 10px; border: 1px solid #d1d5db; font-family: monospace;">{html.escape(cid_str)}</td>
+      <td style="padding: 8px 10px; border: 1px solid #d1d5db;">{html.escape(uname_str)}</td>
+      <td style="padding: 8px 10px; border: 1px solid #d1d5db;">{html.escape(email_str)}</td>
+      <td style="padding: 8px 10px; border: 1px solid #d1d5db; color: #b45309; font-weight: 600;">{html.escape(missing_str)}</td>
+    </tr>"""
+        )
+
+    plain_lines.extend(["", FLATTRADE_MISSING_KEYS_MESSAGE])
+    plain_body = "\n".join(plain_lines)
+    rows_html = "\n".join(table_rows)
+    msg_esc = html.escape(FLATTRADE_MISSING_KEYS_MESSAGE)
+    src_esc = html.escape(source)
+    html_body = f"""
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 13.5px; color: #1f2937;">
+      <div style="margin-bottom: 14px; padding: 12px 14px; background: #fffbeb; border-left: 4px solid #d97706; border-radius: 4px;">
+        <div style="color: #92400e; font-weight: 700; font-size: 14px;">⚠️ {msg_esc}</div>
+        <div style="margin-top: 6px; font-size: 12px; color: #78350f;">
+          Source: <strong>{src_esc}</strong> &nbsp;|&nbsp; Affected Flattrade Accounts: <strong>{count}</strong>
+        </div>
+      </div>
+
+      <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border: 1px solid #d1d5db; font-size: 12.5px; margin-bottom: 16px;">
+        <thead>
+          <tr style="background-color: #fef3c7; text-align: left; color: #92400e;">
+            <th style="padding: 8px 10px; border: 1px solid #d1d5db;">Broker</th>
+            <th style="padding: 8px 10px; border: 1px solid #d1d5db;">Client ID</th>
+            <th style="padding: 8px 10px; border: 1px solid #d1d5db;">Username</th>
+            <th style="padding: 8px 10px; border: 1px solid #d1d5db;">User Email</th>
+            <th style="padding: 8px 10px; border: 1px solid #d1d5db;">Missing Fields</th>
+          </tr>
+        </thead>
+        <tbody>
+{rows_html}
+        </tbody>
+      </table>
+    </div>
+    """
+
+    await send_error_email(subject, plain_body, html_body=html_body)

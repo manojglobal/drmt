@@ -10,7 +10,7 @@ from core.engine import core_engine
 from database.db import init_db, get_db
 from api import auth_routes, api_routes, websocket_handler, rate_limit_middleware
 from health.monitor import health_monitor
-from logger.logger import logger_system, start_log_cleanup_loop, setup_logging
+from logger.logger import logger_auth, logger_system, start_log_cleanup_loop, setup_logging
 from credentials.crypto import hash_password
 from utils.email import init_email_session, close_email_session
 from utils.user_mapping import get_client_username, get_configured_client_ids
@@ -250,6 +250,13 @@ async def on_startup(app: web.Application):
         await logger_system.warn(f"⛔ [STARTUP QUARANTINE] {quarantined_count} account(s) quarantined in Failed Auth (missing/expired tokens).")
     else:
         await logger_system.info("🔐 Startup check complete: All configured accounts have today's active session tokens.")
+
+    # Notify once in a single merged email if Flattrade SDK mode has accounts missing API key/secret
+    from credentials.flattrade import notify_flattrade_missing_keys
+    try:
+        await notify_flattrade_missing_keys(source="Startup")
+    except Exception as mk_err:
+        logger.warning(f"Could not send consolidated Flattrade missing-key check at startup: {mk_err}")
     
     # 8. Start Health Monitor
     await health_monitor.start()

@@ -25,6 +25,34 @@ logger = logging.getLogger(__name__)
 
 routes = web.RouteTableDef()
 
+
+def _credential_from_row(r, dyn_data: dict | None = None) -> Credential:
+    """Build a Credential model from a DB row tuple, coercing nullable TEXT columns to empty strings."""
+    dyn = dyn_data or {}
+    mob_val = (r[17] if len(r) > 17 and r[17] else None) or dyn.get("mobile_number", "") or ""
+    mpin_val = (r[18] if len(r) > 18 and r[18] else None) or dyn.get("mpin", "") or ""
+    return Credential(
+        id=r[0],
+        broker=r[1],
+        client_id=r[2],
+        api_key=r[3] or "",
+        api_secret=r[4] or "",
+        totp_secret=r[5] or "",
+        password=r[6] or "",
+        static_ip=r[7] or "",
+        fingerprint=r[8] or f"{r[1]}:{r[2]}",
+        status=r[9] or "working",
+        token=r[10] or "",
+        token_updated_at=r[11],
+        sid=(r[12] if len(r) > 12 else None) or "",
+        base_url=(r[13] if len(r) > 13 else None) or "",
+        sub_account_id=(r[14] if len(r) > 14 else None) or "",
+        public_key=(r[15] if len(r) > 15 else None) or "",
+        refresh_token=(r[16] if len(r) > 16 else None) or "",
+        mobile_number=mob_val,
+        mpin=mpin_val,
+    )
+
 @routes.get('/api/credentials/source')
 async def get_credentials_source(request: web.Request):
     """Returns the current credentials source (Dropbox vs. Local CSV)."""
@@ -140,13 +168,7 @@ async def exit_positions(request: web.Request):
             rows = await cursor.fetchall()
             
     configured_cids = get_configured_client_ids()
-    credentials = [Credential(
-        id=r[0], broker=r[1], client_id=r[2], api_key=r[3], api_secret=r[4],
-        totp_secret=r[5], password=r[6], static_ip=r[7],
-        fingerprint=r[8], status=r[9], token=r[10], token_updated_at=r[11],
-        sid=r[12] if len(r) > 12 else "", base_url=r[13] if len(r) > 13 else "",
-        sub_account_id=r[14] if len(r) > 14 else "", public_key=r[15] if len(r) > 15 else "", refresh_token=r[16] if len(r) > 16 else ""
-    ) for r in rows if not configured_cids or r[2] in configured_cids]
+    credentials = [_credential_from_row(r) for r in rows if not configured_cids or r[2] in configured_cids]
     
     symbol_list = [f"{p.broker}:{p.client_id}:{p.symbol}" for p in positions]
     await logger_exit.info(
@@ -462,17 +484,7 @@ async def retry_blocked_user(request: web.Request):
             "blocked": True
         }, status=404)
         
-    dyn_data = get_dynamic_credentials(row[2]) or {}
-    mob_val = row[17] if len(row) > 17 and row[17] else dyn_data.get("mobile_number", "")
-    mpin_val = row[18] if len(row) > 18 and row[18] else dyn_data.get("mpin", "")
-    cred = Credential(
-        id=row[0], broker=row[1], client_id=row[2], api_key=row[3], api_secret=row[4],
-        totp_secret=row[5], password=row[6], static_ip=row[7],
-        fingerprint=row[8], status=row[9], token=row[10], token_updated_at=row[11],
-        sid=row[12] if len(row) > 12 else "", base_url=row[13] if len(row) > 13 else "",
-        sub_account_id=row[14] if len(row) > 14 else "", public_key=row[15] if len(row) > 15 else "", refresh_token=row[16] if len(row) > 16 else "",
-        mobile_number=mob_val, mpin=mpin_val
-    )
+    cred = _credential_from_row(row, get_dynamic_credentials(row[2]))
     
     # 3. Attempt single-attempt login
     logger.info(f"🔄 [BLOCKLIST RETRY] Attempting single login for {cred.broker}:{cred.client_id} ({username}) with updated credentials from CSV")
@@ -535,6 +547,8 @@ async def sync_dropbox_blocked_users(request: web.Request):
     # 3. Attempt re-authentication for each blocked user with fresh credentials
     unblocked_names = []
     still_blocked_names = []
+    sync_failed_missing_keys = []
+    sync_failed_other = []
 
     for item in blocked_list:
         client_id = item.get("client_id")
@@ -598,26 +612,49 @@ async def sync_dropbox_blocked_users(request: web.Request):
             still_blocked_names.append(f"{username} ({client_id}): missing in DB")
             continue
 
-        dyn_data = get_dynamic_credentials(row[2]) or {}
-        mob_val = row[17] if len(row) > 17 and row[17] else dyn_data.get("mobile_number", "")
-        mpin_val = row[18] if len(row) > 18 and row[18] else dyn_data.get("mpin", "")
-        cred = Credential(
-            id=row[0], broker=row[1], client_id=row[2], api_key=row[3], api_secret=row[4],
-            totp_secret=row[5], password=row[6], static_ip=row[7],
-            fingerprint=row[8], status=row[9], token=row[10], token_updated_at=row[11],
-            sid=row[12] if len(row) > 12 else "", base_url=row[13] if len(row) > 13 else "",
-            sub_account_id=row[14] if len(row) > 14 else "", public_key=row[15] if len(row) > 15 else "", refresh_token=row[16] if len(row) > 16 else "",
-            mobile_number=mob_val, mpin=mpin_val
-        )
+        cred = _credential_from_row(row, get_dynamic_credentials(row[2]))
 
         logger.info(f"🔄 [BLOCKLIST DROPBOX SYNC] Retrying {cred.broker}:{cred.client_id} ({username}) with fresh Dropbox credentials")
-        success = await refresh_token_with_backoff(cred)
+        success = await refresh_token_with_backoff(cred, send_email=False)
         if success:
             unblocked_names.append(f"{username} ({client_id})")
         else:
             blocked_info = get_blocked_user(client_id)
-            err = blocked_info.get("reason", "Auth failed") if blocked_info else "Auth failed"
+            raw_err = blocked_info.get("reason", "Auth failed") if blocked_info else "Auth failed"
+            from credentials.flattrade import (
+                FLATTRADE_MISSING_KEYS_MESSAGE,
+                format_flattrade_auth_reason,
+                get_flattrade_missing_fields_label,
+                is_flattrade_sdk_keys_missing,
+            )
+            err = format_flattrade_auth_reason(raw_err)
             still_blocked_names.append(f"{username} ({client_id}): {err}")
+            acc_info = {
+                "broker": cred.broker,
+                "client_id": cred.client_id,
+                "username": username,
+                "user_email": get_client_email(cred.client_id),
+                "reason": err,
+            }
+            if is_flattrade_sdk_keys_missing(cred.broker, cred.api_key, cred.api_secret) or err == FLATTRADE_MISSING_KEYS_MESSAGE:
+                acc_info["missing_fields"] = get_flattrade_missing_fields_label(cred.api_key, cred.api_secret) or "API Key, Secret Key"
+                sync_failed_missing_keys.append(acc_info)
+            else:
+                sync_failed_other.append(acc_info)
+
+    # Dispatch merged failure alert email(s) once after batch retry completes
+    if sync_failed_missing_keys:
+        from credentials.flattrade import notify_flattrade_missing_keys
+        asyncio.create_task(
+            notify_flattrade_missing_keys(sync_failed_missing_keys, source="Dropbox Sync Retry", force=True),
+            name="email_sync_missing_keys",
+        )
+    if sync_failed_other:
+        from utils.email import send_consolidated_auth_failed_email
+        asyncio.create_task(
+            send_consolidated_auth_failed_email(sync_failed_other, total_configured=len(blocked_list), source="Dropbox Sync Retry"),
+            name="email_sync_failed_consolidated",
+        )
 
     # 4. Construct user message
     unblocked_count = len(unblocked_names)
@@ -684,17 +721,7 @@ async def refresh_blocked_user_token(request: web.Request):
             "blocked": True
         }, status=404)
 
-    dyn_data = get_dynamic_credentials(row[2]) or {}
-    mob_val = row[17] if len(row) > 17 and row[17] else dyn_data.get("mobile_number", "")
-    mpin_val = row[18] if len(row) > 18 and row[18] else dyn_data.get("mpin", "")
-    cred = Credential(
-        id=row[0], broker=row[1], client_id=row[2], api_key=row[3], api_secret=row[4],
-        totp_secret=row[5], password=row[6], static_ip=row[7],
-        fingerprint=row[8], status=row[9], token=row[10], token_updated_at=row[11],
-        sid=row[12] if len(row) > 12 else "", base_url=row[13] if len(row) > 13 else "",
-        sub_account_id=row[14] if len(row) > 14 else "", public_key=row[15] if len(row) > 15 else "", refresh_token=row[16] if len(row) > 16 else "",
-        mobile_number=mob_val, mpin=mpin_val
-    )
+    cred = _credential_from_row(row, get_dynamic_credentials(row[2]))
 
     logger.info(f"🔑 [TOKEN REFRESH] Attempting broker token refresh for {cred.broker}:{cred.client_id} ({username}) using local DB credentials")
 
