@@ -193,70 +193,78 @@ async def on_startup(app: web.Application):
     # 6. Display Configured Credentials
     await display_configured_credentials()
     
-    # 7. Passive Token Freshness Quarantine (No auto-refresh — accounts with expired or missing tokens appear in Failed Auth)
+    # 7. Passive Token Freshness Quarantine (deferred before 09:10 AM IST so pre-refresh boots show zero credential errors)
+    from credentials.scheduler import is_before_daily_refresh
+    from credentials.flattrade import FLATTRADE_MISSING_KEYS_MESSAGE, is_flattrade_sdk_keys_missing
     from position.blocklist import add_to_blocklist
     from credentials.dynamic_loader import get_dynamic_credentials, compute_credential_signature
     from utils.user_mapping import get_client_username
-    import zoneinfo
     _ist_zone = zoneinfo.ZoneInfo("Asia/Kolkata")
     _today_ist = datetime.now(tz=_ist_zone).date()
 
-    quarantined_count = 0
-    for cid in get_configured_client_ids():
-        d_cred = get_dynamic_credentials(cid)
-        if not d_cred:
-            continue
-        token_val = (d_cred.get("token") or "").strip()
-        broker_name = d_cred.get("broker") or ""
-        uname = get_client_username(cid)
-        sig = compute_credential_signature(d_cred)
-        if not token_val:
-            add_to_blocklist(
-                client_id=cid,
-                broker=broker_name,
-                username=uname,
-                reason="Missing access token — Please use Refresh Token on the dashboard.",
-                signature=sig
-            )
-            quarantined_count += 1
-            await logger_auth.warn(f"⛔ [STARTUP QUARANTINE] {broker_name}:{cid} ({uname}) has no access token. Added to Failed Auth.")
-        else:
-            token_created_str = (d_cred.get("token_created_at") or "").strip()
-            if token_created_str:
-                try:
-                    if "T" in token_created_str:
-                        t_date = datetime.fromisoformat(token_created_str).date()
-                    elif "-" in token_created_str:
-                        t_date = datetime.strptime(token_created_str[:10], "%Y-%m-%d").date()
-                    elif "/" in token_created_str:
-                        t_date = datetime.strptime(token_created_str[:10], "%d/%m/%Y").date()
-                    else:
-                        t_date = datetime.strptime(token_created_str[:10], "%Y%m%d").date()
-
-                    if t_date < _today_ist:
-                        add_to_blocklist(
-                            client_id=cid,
-                            broker=broker_name,
-                            username=uname,
-                            reason=f"Session token expired (Issued on {t_date.strftime('%Y-%m-%d')}) — Please use Refresh Token on the dashboard.",
-                            signature=sig
-                        )
-                        quarantined_count += 1
-                        await logger_auth.warn(f"⛔ [STARTUP QUARANTINE] {broker_name}:{cid} ({uname}) token expired (issued {t_date}). Added to Failed Auth.")
-                except Exception as date_err:
-                    logger.debug(f"Could not parse token_created_at '{token_created_str}' for {cid}: {date_err}")
-
-    if quarantined_count > 0:
-        await logger_system.warn(f"⛔ [STARTUP QUARANTINE] {quarantined_count} account(s) quarantined in Failed Auth (missing/expired tokens).")
+    if is_before_daily_refresh():
+        await logger_system.info(
+            "⏳ [STARTUP] Running prior to 09:10 AM IST — deferring credential checks and alerts until scheduled 09:10 AM refresh."
+        )
     else:
-        await logger_system.info("🔐 Startup check complete: All configured accounts have today's active session tokens.")
+        quarantined_count = 0
+        for cid in get_configured_client_ids():
+            d_cred = get_dynamic_credentials(cid)
+            if not d_cred:
+                continue
+            token_val = (d_cred.get("token") or "").strip()
+            broker_name = d_cred.get("broker") or ""
+            uname = get_client_username(cid)
+            sig = compute_credential_signature(d_cred)
+            missing_sdk_keys = is_flattrade_sdk_keys_missing(
+                broker_name, d_cred.get("api_key"), d_cred.get("api_secret")
+            )
+            quarantine_reason = ""
+            if not token_val:
+                quarantine_reason = (
+                    FLATTRADE_MISSING_KEYS_MESSAGE
+                    if missing_sdk_keys
+                    else "Missing access token — Please use Refresh Token on the dashboard."
+                )
+            else:
+                token_created_str = (d_cred.get("token_created_at") or "").strip()
+                if token_created_str:
+                    try:
+                        if "T" in token_created_str:
+                            t_date = datetime.fromisoformat(token_created_str).date()
+                        elif "-" in token_created_str:
+                            t_date = datetime.strptime(token_created_str[:10], "%Y-%m-%d").date()
+                        elif "/" in token_created_str:
+                            t_date = datetime.strptime(token_created_str[:10], "%d/%m/%Y").date()
+                        else:
+                            t_date = datetime.strptime(token_created_str[:10], "%Y%m%d").date()
 
-    # Notify once in a single merged email if Flattrade SDK mode has accounts missing API key/secret
-    from credentials.flattrade import notify_flattrade_missing_keys
-    try:
-        await notify_flattrade_missing_keys(source="Startup")
-    except Exception as mk_err:
-        logger.warning(f"Could not send consolidated Flattrade missing-key check at startup: {mk_err}")
+                        if t_date < _today_ist:
+                            quarantine_reason = (
+                                FLATTRADE_MISSING_KEYS_MESSAGE
+                                if missing_sdk_keys
+                                else f"Session token expired (Issued on {t_date.strftime('%Y-%m-%d')}) — Please use Refresh Token on the dashboard."
+                            )
+                    except Exception as date_err:
+                        logger.debug(f"Could not parse token_created_at '{token_created_str}' for {cid}: {date_err}")
+
+            if quarantine_reason:
+                add_to_blocklist(
+                    client_id=cid,
+                    broker=broker_name,
+                    username=uname,
+                    reason=quarantine_reason,
+                    signature=sig,
+                )
+                quarantined_count += 1
+                await logger_auth.warn(
+                    f"⛔ [STARTUP QUARANTINE] {broker_name}:{cid} ({uname}): {quarantine_reason} Added to Failed Auth."
+                )
+
+        if quarantined_count > 0:
+            await logger_system.warn(f"⛔ [STARTUP QUARANTINE] {quarantined_count} account(s) quarantined in Failed Auth (missing/expired tokens).")
+        else:
+            await logger_system.info("🔐 Startup check complete: All configured accounts have today's active session tokens.")
     
     # 8. Start Health Monitor
     await health_monitor.start()

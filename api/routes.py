@@ -547,8 +547,7 @@ async def sync_dropbox_blocked_users(request: web.Request):
     # 3. Attempt re-authentication for each blocked user with fresh credentials
     unblocked_names = []
     still_blocked_names = []
-    sync_failed_missing_keys = []
-    sync_failed_other = []
+    sync_failed_accounts = []
 
     for item in blocked_list:
         client_id = item.get("client_id")
@@ -624,35 +623,25 @@ async def sync_dropbox_blocked_users(request: web.Request):
             from credentials.flattrade import (
                 FLATTRADE_MISSING_KEYS_MESSAGE,
                 format_flattrade_auth_reason,
-                get_flattrade_missing_fields_label,
                 is_flattrade_sdk_keys_missing,
             )
             err = format_flattrade_auth_reason(raw_err)
+            if is_flattrade_sdk_keys_missing(cred.broker, cred.api_key, cred.api_secret):
+                err = FLATTRADE_MISSING_KEYS_MESSAGE
             still_blocked_names.append(f"{username} ({client_id}): {err}")
-            acc_info = {
+            sync_failed_accounts.append({
                 "broker": cred.broker,
                 "client_id": cred.client_id,
                 "username": username,
                 "user_email": get_client_email(cred.client_id),
                 "reason": err,
-            }
-            if is_flattrade_sdk_keys_missing(cred.broker, cred.api_key, cred.api_secret) or err == FLATTRADE_MISSING_KEYS_MESSAGE:
-                acc_info["missing_fields"] = get_flattrade_missing_fields_label(cred.api_key, cred.api_secret) or "API Key, Secret Key"
-                sync_failed_missing_keys.append(acc_info)
-            else:
-                sync_failed_other.append(acc_info)
+            })
 
-    # Dispatch merged failure alert email(s) once after batch retry completes
-    if sync_failed_missing_keys:
-        from credentials.flattrade import notify_flattrade_missing_keys
-        asyncio.create_task(
-            notify_flattrade_missing_keys(sync_failed_missing_keys, source="Dropbox Sync Retry", force=True),
-            name="email_sync_missing_keys",
-        )
-    if sync_failed_other:
+    # Dispatch one merged failure alert email after batch retry completes
+    if sync_failed_accounts:
         from utils.email import send_consolidated_auth_failed_email
         asyncio.create_task(
-            send_consolidated_auth_failed_email(sync_failed_other, total_configured=len(blocked_list), source="Dropbox Sync Retry"),
+            send_consolidated_auth_failed_email(sync_failed_accounts, total_configured=len(blocked_list), source="Dropbox Sync Retry"),
             name="email_sync_failed_consolidated",
         )
 

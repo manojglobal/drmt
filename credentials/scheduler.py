@@ -11,11 +11,33 @@ logger = logging.getLogger("DRMT.Scheduler")
 # Indian Standard Time (UTC+05:30)
 _IST = timezone(timedelta(hours=5, minutes=30))
 
+# Guard flag so live polling yields while the 09:10 AM IST morning refresh is running
+_morning_refresh_in_progress: bool = False
+
 
 def _get_target_time() -> tuple[int, int]:
     h = getattr(settings, "DAILY_REFRESH_HOUR", 9)
     m = getattr(settings, "DAILY_REFRESH_MINUTE", 10)
     return int(h), int(m)
+
+
+def is_before_daily_refresh(dt: datetime | None = None) -> bool:
+    """Return True when the IST clock is prior to today's scheduled refresh time (e.g., before 09:10 AM IST)."""
+    if dt is None:
+        now_ist = datetime.now(timezone.utc).astimezone(_IST)
+    elif dt.tzinfo is None:
+        now_ist = dt.replace(tzinfo=_IST)
+    else:
+        now_ist = dt.astimezone(_IST)
+
+    th, tm = _get_target_time()
+    target_ist = now_ist.replace(hour=th, minute=tm, second=0, microsecond=0)
+    return now_ist < target_ist
+
+
+def is_morning_refresh_running() -> bool:
+    """Return True while execute_morning_credential_refresh is actively running."""
+    return _morning_refresh_in_progress
 
 
 def _format_target_time_str(h: int, m: int) -> str:
@@ -133,70 +155,75 @@ def build_refresh_tables_html(auth_results: list[dict]) -> tuple[str, str]:
 
 async def execute_morning_credential_refresh():
     """Executes the daily scheduled credential and token sync routine."""
-    t0 = time.monotonic()
-    th, tm = _get_target_time()
-    time_label = _format_target_time_str(th, tm)
-    await logger_system.info(f"🌅 [DAILY REFRESH] {time_label} ➔ Starting credential sync & token generation...")
-    await logger_auth.info("🌅 [DAILY REFRESH] Pulling latest credentials from remote storage...")
-
-    # 1. Pull latest credentials from Dropbox CSV and sync to SQLite
-    from credentials.dynamic_loader import fetch_and_sync_credentials
+    global _morning_refresh_in_progress
+    _morning_refresh_in_progress = True
     try:
-        await fetch_and_sync_credentials()
-        await logger_auth.info("📥 [DAILY REFRESH] Successfully re-synchronized credentials from remote CSV.")
-    except Exception as e:
-        await logger_auth.error(f"❌ [DAILY REFRESH] Error fetching remote credentials: {e}")
+        t0 = time.monotonic()
+        th, tm = _get_target_time()
+        time_label = _format_target_time_str(th, tm)
+        await logger_system.info(f"🌅 [DAILY REFRESH] {time_label} ➔ Starting credential sync & token generation...")
+        await logger_auth.info("🌅 [DAILY REFRESH] Pulling latest credentials from remote storage...")
 
-    # 2. Reset previous day's Block list for the new trading day
-    from position.blocklist import clear_blocklist
-    cleared_count = clear_blocklist()
-    await logger_auth.info(f"🧹 [DAILY REFRESH] Reset Block list ({cleared_count} old entries cleared) for the new trading day.")
-
-    # 3. Authenticate configured broker accounts to generate fresh session tokens
-    from main import authenticate_configured_credentials
-    from utils.email import send_email_notification, send_error_email
-    succeeded = []
-    failed = []
-    auth_results = []
-    try:
-        res = await authenticate_configured_credentials()
-        if len(res) == 3:
-            succeeded, failed, auth_results = res
-        else:
-            succeeded, failed = res[:2]
-    except Exception as e:
-        await logger_auth.error(f"❌ [DAILY REFRESH] Error during morning authentication: {e}")
-        failed.append(("SYSTEM", f"Authentication execution exception: {e}"))
-
-    elapsed = time.monotonic() - t0
-    total_acc = len(succeeded) + len(failed)
-    await logger_system.info(
-        f"✅ [DAILY REFRESH] Completed in {elapsed:.1f}s. "
-        f"{len(succeeded)} succeeded, {len(failed)} failed out of {total_acc} account(s). Ready for 9:15 AM market open."
-    )
-
-    # 4. Dispatch Tabular Email Notification (Matching email_massage.png format)
-    plain_table, html_table = build_refresh_tables_html(auth_results)
-    if failed:
+        # 1. Pull latest credentials from Dropbox CSV and sync to SQLite
+        from credentials.dynamic_loader import fetch_and_sync_credentials
         try:
-            await send_error_email(
-                f"Daily Credential Refresh Alert: {len(failed)} Account(s) Failed ({time_label})",
-                plain_table,
-                html_body=html_table,
-            )
-            await logger_auth.info("📧 [DAILY REFRESH] Tabular failure alert email sent.")
-        except Exception as mail_err:
-            await logger_auth.error(f"❌ [DAILY REFRESH] Failed sending failure alert email: {mail_err}")
-    elif succeeded:
+            await fetch_and_sync_credentials()
+            await logger_auth.info("📥 [DAILY REFRESH] Successfully re-synchronized credentials from remote CSV.")
+        except Exception as e:
+            await logger_auth.error(f"❌ [DAILY REFRESH] Error fetching remote credentials: {e}")
+
+        # 2. Reset previous day's Block list for the new trading day
+        from position.blocklist import clear_blocklist
+        cleared_count = clear_blocklist()
+        await logger_auth.info(f"🧹 [DAILY REFRESH] Reset Block list ({cleared_count} old entries cleared) for the new trading day.")
+
+        # 3. Authenticate configured broker accounts to generate fresh session tokens
+        from main import authenticate_configured_credentials
+        from utils.email import send_email_notification, send_error_email
+        succeeded = []
+        failed = []
+        auth_results = []
         try:
-            await send_email_notification(
-                f"Daily Credential Refresh Successful ({time_label})",
-                plain_table,
-                html_body=html_table,
-            )
-            await logger_auth.info("📧 [DAILY REFRESH] Tabular success notification email sent.")
-        except Exception as mail_err:
-            await logger_auth.error(f"❌ [DAILY REFRESH] Failed sending success notification email: {mail_err}")
+            res = await authenticate_configured_credentials()
+            if len(res) == 3:
+                succeeded, failed, auth_results = res
+            else:
+                succeeded, failed = res[:2]
+        except Exception as e:
+            await logger_auth.error(f"❌ [DAILY REFRESH] Error during morning authentication: {e}")
+            failed.append(("SYSTEM", f"Authentication execution exception: {e}"))
+
+        elapsed = time.monotonic() - t0
+        total_acc = len(succeeded) + len(failed)
+        await logger_system.info(
+            f"✅ [DAILY REFRESH] Completed in {elapsed:.1f}s. "
+            f"{len(succeeded)} succeeded, {len(failed)} failed out of {total_acc} account(s). Ready for 9:15 AM market open."
+        )
+
+        # 4. Dispatch Tabular Email Notification (Matching email_massage.png format)
+        plain_table, html_table = build_refresh_tables_html(auth_results)
+        if failed:
+            try:
+                await send_error_email(
+                    f"Daily Credential Refresh Alert: {len(failed)} Account(s) Failed ({time_label})",
+                    plain_table,
+                    html_body=html_table,
+                )
+                await logger_auth.info("📧 [DAILY REFRESH] Tabular failure alert email sent.")
+            except Exception as mail_err:
+                await logger_auth.error(f"❌ [DAILY REFRESH] Failed sending failure alert email: {mail_err}")
+        elif succeeded:
+            try:
+                await send_email_notification(
+                    f"Daily Credential Refresh Successful ({time_label})",
+                    plain_table,
+                    html_body=html_table,
+                )
+                await logger_auth.info("📧 [DAILY REFRESH] Tabular success notification email sent.")
+            except Exception as mail_err:
+                await logger_auth.error(f"❌ [DAILY REFRESH] Failed sending success notification email: {mail_err}")
+    finally:
+        _morning_refresh_in_progress = False
 
 
 async def start_daily_credential_scheduler():
@@ -221,6 +248,14 @@ async def start_daily_credential_scheduler():
 
             # Sleep until target time
             await asyncio.sleep(wait_seconds)
+
+            # Guard against early timer wakeups (wall-clock drift before target IST time)
+            now_after = datetime.now(timezone.utc).astimezone(_IST)
+            target_today = now_after.replace(hour=th, minute=tm, second=0, microsecond=0)
+            if now_after < target_today:
+                drift = (target_today - now_after).total_seconds()
+                if drift <= 60.0:
+                    await asyncio.sleep(drift + 0.05)
 
             # Execute the morning routine
             await execute_morning_credential_refresh()

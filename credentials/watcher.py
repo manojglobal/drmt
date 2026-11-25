@@ -33,9 +33,7 @@ from position.chronos import refresh_token_with_backoff
 from credentials.flattrade import (
     FLATTRADE_MISSING_KEYS_MESSAGE,
     format_flattrade_auth_reason,
-    get_flattrade_missing_fields_label,
     is_flattrade_sdk_keys_missing,
-    notify_flattrade_missing_keys,
 )
 from utils.email import send_consolidated_auth_failed_email, send_credentials_restored_email
 from logger.logger import logger_auth, logger_system
@@ -128,23 +126,19 @@ async def run_blocked_credentials_check_iteration() -> int:
         return 0
 
     unblocked_count = 0
-    failed_missing_keys: list[dict] = []
-    failed_other: list[dict] = []
+    failed_accounts: list[dict] = []
 
     def _record_watcher_failure(cred_obj: Credential, broker_name: str, cid: str, uname: str, uemail: str, raw_reason: str) -> str:
         formatted = format_flattrade_auth_reason(raw_reason)
-        entry = {
+        if is_flattrade_sdk_keys_missing(cred_obj.broker, cred_obj.api_key, cred_obj.api_secret):
+            formatted = FLATTRADE_MISSING_KEYS_MESSAGE
+        failed_accounts.append({
             "broker": broker_name,
             "client_id": cid,
             "username": uname,
             "user_email": uemail,
             "reason": formatted,
-        }
-        if is_flattrade_sdk_keys_missing(cred_obj.broker, cred_obj.api_key, cred_obj.api_secret) or formatted == FLATTRADE_MISSING_KEYS_MESSAGE:
-            entry["missing_fields"] = get_flattrade_missing_fields_label(cred_obj.api_key, cred_obj.api_secret) or "API Key, Secret Key"
-            failed_missing_keys.append(entry)
-        else:
-            failed_other.append(entry)
+        })
         return formatted
 
     # 2. Inspect each blocked user
@@ -229,15 +223,10 @@ async def run_blocked_credentials_check_iteration() -> int:
             update_blocked_user_signature(client_id, new_sig, reason=err_str)
             await logger_auth.error(f"❌ [CREDENTIALS WATCHER] Exception testing credentials for {broker}:{client_id}: {err_str}", notify_email=False)
 
-    # Dispatch consolidated failure alert email(s) once per watcher iteration
-    if failed_missing_keys:
+    # Dispatch consolidated failure alert email once per watcher iteration
+    if failed_accounts:
         asyncio.create_task(
-            notify_flattrade_missing_keys(failed_missing_keys, source="Credentials Watcher"),
-            name="email_watcher_missing_keys",
-        )
-    if failed_other:
-        asyncio.create_task(
-            send_consolidated_auth_failed_email(failed_other, source="Credentials Watcher"),
+            send_consolidated_auth_failed_email(failed_accounts, source="Credentials Watcher"),
             name="email_watcher_failed_consolidated",
         )
 

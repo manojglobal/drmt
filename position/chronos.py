@@ -16,11 +16,10 @@ from credentials.mstock import login_mstock
 from credentials.flattrade import (
     FLATTRADE_MISSING_KEYS_MESSAGE,
     format_flattrade_auth_reason,
-    get_flattrade_missing_fields_label,
     is_flattrade_sdk_keys_missing,
     login_flattrade,
-    notify_flattrade_missing_keys,
 )
+from credentials.scheduler import is_before_daily_refresh, is_morning_refresh_running
 from credentials.aliceblue import login_aliceblue
 from credentials.fyers import login_fyers
 from credentials.kotakneo import login_kotakneo
@@ -113,38 +112,19 @@ async def refresh_token_with_backoff(cred: Credential, send_email: bool = True) 
             # Dispatch failure alert email only when send_email is True (e.g. single manual retry)
             if send_email:
                 try:
-                    from utils.email import send_auth_failed_email, send_flattrade_missing_keys_email
+                    from utils.email import send_auth_failed_email
                     from credentials.dynamic_loader import get_client_email
                     user_email = get_client_email(cred.client_id)
-                    if (
-                        is_flattrade_sdk_keys_missing(cred.broker, cred.api_key, cred.api_secret)
-                        or block_reason == FLATTRADE_MISSING_KEYS_MESSAGE
-                    ):
-                        asyncio.create_task(
-                            send_flattrade_missing_keys_email(
-                                [{
-                                    "broker": cred.broker,
-                                    "client_id": cred.client_id,
-                                    "username": username,
-                                    "user_email": user_email,
-                                    "missing_fields": get_flattrade_missing_fields_label(cred.api_key, cred.api_secret) or "API Key, Secret Key",
-                                    "reason": FLATTRADE_MISSING_KEYS_MESSAGE,
-                                }],
-                                source="Single Token Refresh",
-                            ),
-                            name=f"email_missing_keys_{cred.client_id}",
-                        )
-                    else:
-                        asyncio.create_task(
-                            send_auth_failed_email(
-                                broker=cred.broker,
-                                client_id=cred.client_id,
-                                username=username,
-                                reason=err_msg,
-                                user_email=user_email,
-                            ),
-                            name=f"email_auth_failed_{cred.client_id}",
-                        )
+                    asyncio.create_task(
+                        send_auth_failed_email(
+                            broker=cred.broker,
+                            client_id=cred.client_id,
+                            username=username,
+                            reason=block_reason,
+                            user_email=user_email,
+                        ),
+                        name=f"email_auth_failed_{cred.client_id}",
+                    )
                 except Exception:
                     pass
             return False
@@ -184,8 +164,7 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                     break
                     
                 # 4. Broker Poll (All active credentials concurrently)
-                cycle_missing_key_alerts: list[dict] = []
-                cycle_expired_alerts: list[dict] = []
+                cycle_auth_alerts: list[dict] = []
 
                 async def _record_poll_auth_failure(c: Credential, raw_err: str, default_msg: str, log_prefix: str, collect_expired: bool) -> None:
                     username = get_client_username(c.client_id)
@@ -215,22 +194,13 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                         user_email = get_client_email(c.client_id)
                     except Exception:
                         user_email = ""
-                    if missing_keys:
-                        cycle_missing_key_alerts.append({
+                    if missing_keys or collect_expired:
+                        cycle_auth_alerts.append({
                             "broker": c.broker,
                             "client_id": c.client_id,
                             "username": username,
                             "user_email": user_email,
-                            "missing_fields": get_flattrade_missing_fields_label(c.api_key, c.api_secret),
-                            "reason": FLATTRADE_MISSING_KEYS_MESSAGE,
-                        })
-                    elif collect_expired:
-                        cycle_expired_alerts.append({
-                            "broker": c.broker,
-                            "client_id": c.client_id,
-                            "username": username,
-                            "user_email": user_email,
-                            "reason": err_reason,
+                            "reason": block_reason,
                         })
 
                 async def _poll_target(c: Credential):
@@ -269,9 +239,16 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                     except Exception:
                         pass
 
+                    defer_auth = is_before_daily_refresh() or is_morning_refresh_running()
                     try:
+                        # Before 09:10 IST refresh or while morning refresh is running, defer all auth errors silently
+                        if defer_auth and is_flattrade_sdk_keys_missing(c.broker, c.api_key, c.api_secret):
+                            return []
+
                         # 4a. Validate access token presence
                         if not c.token or not str(c.token).strip():
+                            if defer_auth:
+                                return []
                             raise PermissionError(f"Missing access token for {c.broker}:{c.client_id} — Please use Refresh Token on the dashboard.")
 
                         # 4b. Validate access token calendar-day freshness
@@ -317,6 +294,8 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                                         t_date = datetime.strptime(t_created_str[:10], "%Y%m%d").date()
 
                                     if t_date < now_ist_date:
+                                        if defer_auth:
+                                            return []
                                         raise PermissionError(f"Session token expired (Issued on {t_date.strftime('%Y-%m-%d')}) — Please use Refresh Token on the dashboard.")
                                 except PermissionError:
                                     raise
@@ -329,6 +308,8 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                             await logger_system.info(f"✅ Connection restored for {c.broker}:{c.client_id}")
                         return res
                     except PermissionError as e:
+                        if defer_auth:
+                            return []
                         await _record_poll_auth_failure(
                             c,
                             str(e),
@@ -350,6 +331,8 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                             )
                         )
                         if is_auth_error:
+                            if defer_auth:
+                                return []
                             await _record_poll_auth_failure(
                                 c,
                                 err_str,
@@ -379,17 +362,12 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                 poll_batch = await asyncio.gather(*[_poll_target(c) for c in credentials], return_exceptions=True)
                 poll_duration_ms = (time.monotonic() - t_poll_start) * 1000
 
-                # Dispatch at most one consolidated alert email per category for this scan cycle
-                if cycle_missing_key_alerts:
-                    asyncio.create_task(
-                        notify_flattrade_missing_keys(cycle_missing_key_alerts, source="Live Polling Scan"),
-                        name="email_flattrade_missing_keys_scan",
-                    )
-                if cycle_expired_alerts:
+                # Dispatch at most one consolidated alert email for this scan cycle
+                if cycle_auth_alerts:
                     from utils.email import send_consolidated_auth_failed_email
                     asyncio.create_task(
                         send_consolidated_auth_failed_email(
-                            cycle_expired_alerts,
+                            cycle_auth_alerts,
                             total_configured=len(credentials),
                             source="Live Polling Session Expired",
                         ),
