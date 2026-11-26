@@ -333,6 +333,68 @@ class TestCredentialsLoader(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(cred["token"], "tok_db")
             self.assertEqual(cred["token_created_at"], "2026-11-18 09:10:00")
 
+    async def test_dynamic_sync_preserves_runtime_sid_base_url_sub_account_and_kotak_fields(self):
+        """CSV reloads omitting runtime session fields must not wipe existing SQLite or memory sid/base_url/sub_account_id."""
+        import credentials.dynamic_loader as dl
+
+        kotak_csv = (
+            "id,broker,credentials,user_id,first_name,last_name,static_ip,client_id,access_token,access_token_created_at\n"
+            '1,KOTAK,"{""api_key"": ""k_ak"", ""totp_secret"": ""JBSWY3DPEHPK3PXP""}",10,Raj,Kumar,1.2.3.4,VFIU2,,\n'
+        )
+        async with isolated_test_db():
+            async with get_db() as db:
+                await db.execute(
+                    """
+                    INSERT INTO credentials
+                    (broker, client_id, api_key, api_secret, fingerprint, status, token, sid, base_url, sub_account_id, mobile_number, mpin)
+                    VALUES ('KOTAK', 'VFIU2', 'k_ak', '', 'KOTAK:VFIU2', 'working', 'live_kotak_tok', 'live_sid_99', 'https://e22.kotaksecurities.com', 'sub_axis_77', '9876543210', '1234')
+                    """
+                )
+                await db.commit()
+
+            dl._configured_cids.clear()
+            dl._client_creds.clear()
+            await dl._fallback_load_from_db()
+            dl.update_dynamic_credential_token(
+                "VFIU2",
+                "live_kotak_tok",
+                sid="live_sid_99",
+                base_url="https://e22.kotaksecurities.com",
+                sub_account_id="sub_axis_77",
+            )
+
+            with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as tf:
+                tf.write(kotak_csv)
+                temp_csv_path = tf.name
+
+            try:
+                with (
+                    patch("settings.settings.USE_DROPBOX_CREDENTIALS", False),
+                    patch("settings.settings.CREDENTIALS_CSV_PATH", temp_csv_path),
+                ):
+                    count = await fetch_and_sync_credentials()
+                    self.assertEqual(count, 1)
+
+                async with get_db() as db:
+                    cur = await db.execute(
+                        "SELECT token, sid, base_url, sub_account_id, mobile_number, mpin FROM credentials WHERE fingerprint = 'KOTAK:VFIU2'"
+                    )
+                    row = await cur.fetchone()
+                    self.assertEqual(row[0], "live_kotak_tok")
+                    self.assertEqual(row[1], "live_sid_99")
+                    self.assertEqual(row[2], "https://e22.kotaksecurities.com")
+                    self.assertEqual(row[3], "sub_axis_77")
+                    self.assertEqual(row[4], "9876543210")
+                    self.assertEqual(row[5], "1234")
+
+                dyn = get_dynamic_credentials("VFIU2")
+                self.assertEqual(dyn["sid"], "live_sid_99")
+                self.assertEqual(dyn["base_url"], "https://e22.kotaksecurities.com")
+                self.assertEqual(dyn["sub_account_id"], "sub_axis_77")
+            finally:
+                if os.path.exists(temp_csv_path):
+                    os.remove(temp_csv_path)
+
 
 if __name__ == "__main__":
     unittest.main()

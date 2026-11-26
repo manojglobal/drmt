@@ -33,13 +33,13 @@ async def save_working_credential(cred: Credential) -> None:
                 api_key = excluded.api_key,
                 api_secret = excluded.api_secret,
                 password = excluded.password,
-                sid = COALESCE(excluded.sid, credentials.sid),
-                base_url = COALESCE(excluded.base_url, credentials.base_url),
-                sub_account_id = COALESCE(excluded.sub_account_id, credentials.sub_account_id),
-                public_key = CASE WHEN excluded.public_key != '' THEN excluded.public_key ELSE credentials.public_key END,
-                refresh_token = CASE WHEN excluded.refresh_token != '' THEN excluded.refresh_token ELSE credentials.refresh_token END,
-                mobile_number = COALESCE(excluded.mobile_number, credentials.mobile_number),
-                mpin = COALESCE(excluded.mpin, credentials.mpin)
+                sid = CASE WHEN excluded.sid IS NOT NULL AND excluded.sid != '' THEN excluded.sid ELSE credentials.sid END,
+                base_url = CASE WHEN excluded.base_url IS NOT NULL AND excluded.base_url != '' THEN excluded.base_url ELSE credentials.base_url END,
+                sub_account_id = CASE WHEN excluded.sub_account_id IS NOT NULL AND excluded.sub_account_id != '' THEN excluded.sub_account_id ELSE credentials.sub_account_id END,
+                public_key = CASE WHEN excluded.public_key IS NOT NULL AND excluded.public_key != '' THEN excluded.public_key ELSE credentials.public_key END,
+                refresh_token = CASE WHEN excluded.refresh_token IS NOT NULL AND excluded.refresh_token != '' THEN excluded.refresh_token ELSE credentials.refresh_token END,
+                mobile_number = CASE WHEN excluded.mobile_number IS NOT NULL AND excluded.mobile_number != '' THEN excluded.mobile_number ELSE credentials.mobile_number END,
+                mpin = CASE WHEN excluded.mpin IS NOT NULL AND excluded.mpin != '' THEN excluded.mpin ELSE credentials.mpin END
         """
         await db.execute(upsert_query, (
             cred.broker, cred.client_id, cred.api_key, cred.api_secret, cred.totp_secret, 
@@ -67,7 +67,16 @@ async def save_working_credential(cred: Credential) -> None:
                 upd_time = str(cred.token_updated_at)
             else:
                 upd_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            update_dynamic_credential_token(cred.client_id, cred.token, upd_time)
+            update_dynamic_credential_token(
+                cred.client_id,
+                cred.token,
+                upd_time,
+                sid=getattr(cred, "sid", "") or "",
+                base_url=getattr(cred, "base_url", "") or "",
+                sub_account_id=getattr(cred, "sub_account_id", "") or "",
+                public_key=getattr(cred, "public_key", "") or "",
+                refresh_token=getattr(cred, "refresh_token", "") or "",
+            )
         except Exception:
             pass
 

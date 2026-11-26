@@ -19,6 +19,9 @@ from credentials.kotakneo import (
 )
 from credentials.mstock import login_mstock
 from core.engine import core_engine
+from credentials.dedup import save_working_credential
+from credentials.dynamic_loader import get_dynamic_credentials
+from database.db import get_db
 from models.schemas import Credential
 from tests.helpers import isolated_test_db, suppress_email_notifications
 
@@ -223,15 +226,34 @@ class TestBrokerAuthAndProxy(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(get_kotak_base_url(cred), "https://napi.kotaksecurities.com")
             self.assertEqual(get_kotak_headers(cred)["neo-fin-key"], "neotradeapi")
 
-            with patch("credentials.kotakneo.proxy_request", new=AsyncMock(side_effect=[
-                {"data": {"token": "tmp_k", "sid": "sid_1"}},
-                {"data": {"token": "trade_k", "sid": "sid_2", "baseUrl": "https://gw.kotak.in"}},
-                {"stat": "Ok", "data": []},
-            ])):
+            with (
+                patch.dict("credentials.dynamic_loader._client_creds", {"VFIU2": {"client_id": "VFIU2", "token": ""}}, clear=False),
+                patch("credentials.kotakneo.proxy_request", new=AsyncMock(side_effect=[
+                    {"data": {"token": "tmp_k", "sid": "sid_1"}},
+                    {"data": {"token": "trade_k", "sid": "sid_2", "baseUrl": "https://gw.kotak.in"}},
+                    {"stat": "Ok", "data": []},
+                ])),
+            ):
                 tok = await login_kotakneo(cred)
                 self.assertEqual(tok, "trade_k")
                 self.assertEqual(cred.sid, "sid_2")
                 self.assertEqual(cred.base_url, "https://gw.kotak.in")
+
+                dyn = get_dynamic_credentials("VFIU2")
+                self.assertEqual(dyn["sid"], "sid_2")
+                self.assertEqual(dyn["base_url"], "https://gw.kotak.in")
+                self.assertEqual(dyn["token"], "trade_k")
+
+                # Subsequent save with empty sid/base_url must not wipe persisted DB runtime values
+                stale_cred = cred.model_copy(update={"sid": "", "base_url": ""})
+                await save_working_credential(stale_cred)
+                async with get_db() as db:
+                    cur = await db.execute(
+                        "SELECT sid, base_url FROM credentials WHERE fingerprint = 'KOTAK NEO:VFIU2'"
+                    )
+                    row = await cur.fetchone()
+                    self.assertEqual(row[0], "sid_2")
+                    self.assertEqual(row[1], "https://gw.kotak.in")
 
             # Missing credentials returns structured error dict
             bad_res = await generate_user_kotak_neo_access_token("VFIU2", "", "", "k_tok", "", "")

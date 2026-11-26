@@ -333,13 +333,19 @@ def _parse_csv_credentials(
             if existing_time and token_created and existing_time > token_created:
                 continue
 
-        # Preserve live in-memory session token if present; only fallback to CSV token
+        # Preserve live in-memory session token and runtime session fields if omitted in CSV
         live_cred = _client_creds.get(client_id)
         live_token = (live_cred.get("token") or "") if live_cred else ""
         live_token_created = (live_cred.get("token_created_at") or "") if live_cred else ""
 
         effective_token = live_token if live_token else token_val
         effective_token_created = live_token_created if live_token else token_created
+
+        def _csv_or_live(csv_val: str, field_name: str) -> str:
+            cleaned = str(csv_val or "").strip()
+            if cleaned:
+                return cleaned
+            return str(live_cred.get(field_name) or "") if live_cred else ""
 
         cred_record = {
             "client_id": client_id,
@@ -354,11 +360,11 @@ def _parse_csv_credentials(
             "user_id": int(uid) if uid and uid.isdigit() else None,
             "full_name": new_cid_to_name.get(client_id, full_name),
             "row_id": row_id,
-            "sid": creds_json.get("sid") or "",
-            "base_url": creds_json.get("base_url") or "",
-            "sub_account_id": creds_json.get("sub_account_id") or creds_json.get("subAccountId") or "",
-            "public_key": creds_json.get("public_key") or creds_json.get("publicKey") or "",
-            "refresh_token": creds_json.get("refresh_token") or creds_json.get("refreshToken") or "",
+            "sid": _csv_or_live(creds_json.get("sid") or "", "sid"),
+            "base_url": _csv_or_live(creds_json.get("base_url") or "", "base_url"),
+            "sub_account_id": _csv_or_live(creds_json.get("sub_account_id") or creds_json.get("subAccountId") or "", "sub_account_id"),
+            "public_key": _csv_or_live(creds_json.get("public_key") or creds_json.get("publicKey") or "", "public_key"),
+            "refresh_token": _csv_or_live(creds_json.get("refresh_token") or creds_json.get("refreshToken") or "", "refresh_token"),
             "mobile_number": (creds_json.get("mobile_number") or creds_json.get("phone_number") or "").strip(),
             "mpin": str(creds_json.get("mpin") or "").strip(),
         }
@@ -465,13 +471,13 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
                     password = excluded.password,
                     static_ip = excluded.static_ip,
                     user_id = COALESCE(excluded.user_id, credentials.user_id),
-                    sid = COALESCE(excluded.sid, credentials.sid),
-                    base_url = COALESCE(excluded.base_url, credentials.base_url),
-                    sub_account_id = COALESCE(excluded.sub_account_id, credentials.sub_account_id),
-                    public_key = CASE WHEN excluded.public_key != '' THEN excluded.public_key ELSE credentials.public_key END,
-                    refresh_token = CASE WHEN excluded.refresh_token != '' THEN excluded.refresh_token ELSE credentials.refresh_token END,
-                    mobile_number = COALESCE(excluded.mobile_number, credentials.mobile_number),
-                    mpin = COALESCE(excluded.mpin, credentials.mpin)
+                    sid = CASE WHEN excluded.sid IS NOT NULL AND excluded.sid != '' THEN excluded.sid ELSE credentials.sid END,
+                    base_url = CASE WHEN excluded.base_url IS NOT NULL AND excluded.base_url != '' THEN excluded.base_url ELSE credentials.base_url END,
+                    sub_account_id = CASE WHEN excluded.sub_account_id IS NOT NULL AND excluded.sub_account_id != '' THEN excluded.sub_account_id ELSE credentials.sub_account_id END,
+                    public_key = CASE WHEN excluded.public_key IS NOT NULL AND excluded.public_key != '' THEN excluded.public_key ELSE credentials.public_key END,
+                    refresh_token = CASE WHEN excluded.refresh_token IS NOT NULL AND excluded.refresh_token != '' THEN excluded.refresh_token ELSE credentials.refresh_token END,
+                    mobile_number = CASE WHEN excluded.mobile_number IS NOT NULL AND excluded.mobile_number != '' THEN excluded.mobile_number ELSE credentials.mobile_number END,
+                    mpin = CASE WHEN excluded.mpin IS NOT NULL AND excluded.mpin != '' THEN excluded.mpin ELSE credentials.mpin END
             """
             await db.execute(upsert_query, (
                 rec["broker"],
@@ -628,14 +634,35 @@ def get_dynamic_credentials(client_id: str) -> Optional[dict]:
     return _client_creds.get(cid_str)
 
 
-def update_dynamic_credential_token(client_id: str, token: str, token_created_at: Optional[str] = None) -> None:
-    """Updates the runtime session token for an active credential in memory."""
-    if not client_id or not token:
+def update_dynamic_credential_token(
+    client_id: str,
+    token: str,
+    token_created_at: Optional[str] = None,
+    sid: Optional[str] = None,
+    base_url: Optional[str] = None,
+    sub_account_id: Optional[str] = None,
+    public_key: Optional[str] = None,
+    refresh_token: Optional[str] = None,
+) -> None:
+    """Updates the runtime session token and session metadata for an active credential in memory."""
+    if not client_id:
         return
     cid_str = str(client_id).strip()
-    if cid_str in _client_creds:
-        _client_creds[cid_str]["token"] = str(token).strip()
-        _client_creds[cid_str]["token_created_at"] = token_created_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if cid_str not in _client_creds:
+        return
+    target = _client_creds[cid_str]
+    if token:
+        target["token"] = str(token).strip()
+        target["token_created_at"] = token_created_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for field_name, field_val in (
+        ("sid", sid),
+        ("base_url", base_url),
+        ("sub_account_id", sub_account_id),
+        ("public_key", public_key),
+        ("refresh_token", refresh_token),
+    ):
+        if field_val is not None and str(field_val).strip():
+            target[field_name] = str(field_val).strip()
 
 
 def get_credential_source_info() -> dict:

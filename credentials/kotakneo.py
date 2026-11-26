@@ -195,7 +195,12 @@ async def _execute_headless_kotak_login(cred: Credential) -> bool:
             cred.base_url = res["base_url"]
         cred.token_updated_at = datetime.now()
         await save_working_credential(cred)
-        update_dynamic_credential_token(cred.client_id, cred.token)
+        update_dynamic_credential_token(
+            cred.client_id,
+            cred.token,
+            sid=cred.sid,
+            base_url=cred.base_url,
+        )
         masked = f"{cred.token[:8]}...{cred.token[-8:]}" if len(cred.token) > 16 else cred.token
         logger.info(f"🔑 Successfully renewed Kotak Neo session token headlessly for {cred.client_id}: {masked}")
         return True
