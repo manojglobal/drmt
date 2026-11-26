@@ -272,8 +272,8 @@ class PositionManager:
                     pnl = (avg_price - ltp) * abs(qty)
                 pnl = round(pnl, 2)
             
-            # Rule: ID Gen as broker:client_id:symbol
-            pos_id = f"{broker}:{client_id}:{symbol}"
+            # Rule: ID Gen as broker:client_id:symbol:exchange:product so segments/products never collide
+            pos_id = f"{broker}:{client_id}:{symbol}:{exchange}:{product}"
             
             token_val = str(
                 raw.get("instrumentId")

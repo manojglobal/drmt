@@ -24,7 +24,7 @@ class TestPositionManager(unittest.TestCase):
         positions = PositionManager.normalize_positions(raw_list, "FLATTRADE", "FZ48062")
         self.assertEqual(len(positions), 1)
         pos = positions[0]
-        self.assertEqual(pos.id, "FLATTRADE:FZ48062:RELIANCE-EQ")
+        self.assertEqual(pos.id, "FLATTRADE:FZ48062:RELIANCE-EQ:NSE:INTRADAY")
         self.assertEqual(pos.symbol, "RELIANCE-EQ")
         self.assertEqual(pos.quantity, 10)
         self.assertEqual(pos.transaction_type, "BUY")
@@ -39,7 +39,7 @@ class TestPositionManager(unittest.TestCase):
         positions = PositionManager.normalize_positions(raw_list, "FLATTRADE", "FZ48062")
         self.assertEqual(len(positions), 1)
         pos = positions[0]
-        self.assertEqual(pos.id, "FLATTRADE:FZ48062:WIPRO-EQ")
+        self.assertEqual(pos.id, "FLATTRADE:FZ48062:WIPRO-EQ:NSE:INTRADAY")
         self.assertEqual(pos.symbol, "WIPRO-EQ")
         self.assertEqual(pos.quantity, -1)
         self.assertEqual(pos.transaction_type, "SELL")
@@ -139,6 +139,25 @@ class TestPositionManager(unittest.TestCase):
         """Verify PositionManager handles empty or malformed inputs without raising unhandled exceptions."""
         self.assertEqual(PositionManager.normalize_positions([], "FLATTRADE", "FZ48062"), [])
         self.assertEqual(PositionManager.normalize_positions([None, "invalid_str", 123], "FLATTRADE", "FZ48062"), [])
+
+    def test_pos_id_distinguishes_products_and_exchanges(self):
+        """Verify same symbol across distinct products or exchanges produces unique pos.id values."""
+        raw_rows = [
+            {"tsym": "SBIN-EQ", "exch": "NSE", "prd": "I", "netqty": 10, "netavgprc": 800.0, "ltp": 805.0},
+            {"tsym": "SBIN-EQ", "exch": "NSE", "prd": "C", "netqty": 5, "netavgprc": 800.0, "ltp": 805.0},
+            {"tsym": "SBIN-EQ", "exch": "BSE", "prd": "I", "netqty": 2, "netavgprc": 800.0, "ltp": 805.0},
+        ]
+        positions = PositionManager.normalize_positions(raw_rows, "FLATTRADE", "FZ48062")
+        self.assertEqual(len(positions), 3)
+        ids = {p.id for p in positions}
+        self.assertEqual(
+            ids,
+            {
+                "FLATTRADE:FZ48062:SBIN-EQ:NSE:INTRADAY",
+                "FLATTRADE:FZ48062:SBIN-EQ:NSE:CNC",
+                "FLATTRADE:FZ48062:SBIN-EQ:BSE:INTRADAY",
+            },
+        )
 
 
 if __name__ == "__main__":

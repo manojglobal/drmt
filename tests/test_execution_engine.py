@@ -28,7 +28,7 @@ from tests.helpers import suppress_email_notifications
 
 def _pos(broker: str, cid: str, symbol: str, qty: int, exchange: str = "NSE", prd: str = "INTRADAY", ltp: float = 100.0) -> Position:
     return Position(
-        id=f"{broker}:{cid}:{symbol}",
+        id=f"{broker}:{cid}:{symbol}:{exchange}:{prd}",
         broker=broker,
         client_id=cid,
         symbol=symbol,
@@ -54,15 +54,30 @@ class TestExecutionEngineAndAdapters(unittest.IsolatedAsyncioTestCase):
         _recently_exited_positions.clear()
 
     def test_anti_echo_debounce_cache_and_ttl_expiry(self):
-        """mark_position_as_exited registers composite keys and expires cleanly after TTL."""
-        mark_position_as_exited("FLATTRADE:FZ59716:WIPRO-EQ")
-        self.assertTrue(is_recently_exited("FLATTRADE:FZ59716:WIPRO-EQ"))
-        self.assertTrue(is_recently_exited("MSTOCK:FZ59716:WIPRO"))  # base symbol match
+        """mark_position_as_exited matches exact broker/client/symbol/exchange/product and expires cleanly after TTL."""
+        exited_pos = _pos("FLATTRADE", "FZ59716", "WIPRO-EQ", 1, exchange="NSE", prd="INTRADAY")
+        mark_position_as_exited(exited_pos)
+
+        self.assertTrue(is_recently_exited(exited_pos))
+        self.assertTrue(is_recently_exited("FLATTRADE:FZ59716:WIPRO-EQ:NSE:INTRADAY"))
+
+        # Must not suppress different broker, -EQ stripped symbol, different product, or different exchange
+        self.assertFalse(is_recently_exited(_pos("MSTOCK", "FZ59716", "WIPRO", 1, exchange="NSE", prd="INTRADAY")))
+        self.assertFalse(is_recently_exited(_pos("FLATTRADE", "FZ59716", "WIPRO", 1, exchange="NSE", prd="INTRADAY")))
+        self.assertFalse(is_recently_exited(_pos("FLATTRADE", "FZ59716", "WIPRO-EQ", 1, exchange="NSE", prd="CNC")))
+        self.assertFalse(is_recently_exited(_pos("FLATTRADE", "FZ59716", "WIPRO-EQ", 1, exchange="BSE", prd="INTRADAY")))
+
+        # Must not collide when Fyers symbols contain ':' (e.g. NSE:SBIN-EQ vs NSE:INFY-EQ)
+        fyers_exited = _pos("FYERS", "XR10079", "NSE:SBIN-EQ", 1, exchange="NSE", prd="INTRADAY")
+        fyers_other = _pos("FYERS", "XR10079", "NSE:INFY-EQ", 1, exchange="NSE", prd="INTRADAY")
+        mark_position_as_exited(fyers_exited)
+        self.assertTrue(is_recently_exited(fyers_exited))
+        self.assertFalse(is_recently_exited(fyers_other))
 
         # Simulate elapsed time past 20s TTL
         for k in list(_recently_exited_positions.keys()):
             _recently_exited_positions[k] = time.monotonic() - 25.0
-        self.assertFalse(is_recently_exited("FLATTRADE:FZ59716:WIPRO-EQ", ttl_seconds=20.0))
+        self.assertFalse(is_recently_exited(exited_pos, ttl_seconds=20.0))
         self.assertEqual(get_recently_exited_ids(ttl_seconds=20.0), set())
 
     def test_flattrade_sdk_marketable_limit_payload_and_instrument_resolvers(self):

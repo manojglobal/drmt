@@ -1278,17 +1278,21 @@ function Dashboard({ user, onLogout }) {
                 addToast(data.message || `Processed exit for ${positionsToExit.length} position(s)`, "success");
                 if (data.results && data.results.length > 0) {
                     const exitedIds = new Set();
+                    const exitedFallbackKeys = new Set();
                     data.results.forEach(r => {
                         if (r.success) {
                             addToast(`✅ ${r.broker} - ${r.symbol}: Placed successfully`, 'success');
-                            if (r.id) exitedIds.add(r.id);
-                            exitedIds.add(`${r.broker}:${r.symbol}`);
+                            if (r.id) {
+                                exitedIds.add(r.id);
+                            } else {
+                                exitedFallbackKeys.add(`${r.broker}:${r.client_id || ''}:${r.symbol}`);
+                            }
                         } else {
                             addToast(`❌ ${r.broker} - ${r.symbol} Failed: ${r.message}`, 'error');
                         }
                     });
-                    if (exitedIds.size > 0) {
-                        setPositions(prev => prev.filter(p => !exitedIds.has(p.id) && !exitedIds.has(`${p.broker}:${p.symbol}`)));
+                    if (exitedIds.size > 0 || exitedFallbackKeys.size > 0) {
+                        setPositions(prev => prev.filter(p => !exitedIds.has(p.id) && !exitedFallbackKeys.has(`${p.broker}:${p.client_id || ''}:${p.symbol}`)));
                     }
                 }
             } else {

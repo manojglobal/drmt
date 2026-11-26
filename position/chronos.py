@@ -379,7 +379,7 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                         new_data_models.extend(res)
                 
                 from execution.engine import is_recently_exited
-                new_data_models = [p for p in new_data_models if not is_recently_exited(p.id)]
+                new_data_models = [p for p in new_data_models if not is_recently_exited(p)]
                 
                 target_count = len(new_data_models) if new_data_models else len(credentials)
                 await logger_system.info(f"─── [POSITION SCAN] Scanned {target_count} Targets in {poll_duration_ms:.1f}ms ───")

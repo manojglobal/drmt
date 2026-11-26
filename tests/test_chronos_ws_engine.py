@@ -78,14 +78,19 @@ class TestChronosAndWebSocketEngine(unittest.IsolatedAsyncioTestCase):
             token_updated_at=today_dt, fingerprint="FLATTRADE:FZ59716", status="working"
         )
         pos_live = Position(
-            id="FLATTRADE:FZ59716:WIPRO-EQ", broker="FLATTRADE", client_id="FZ59716",
+            id="FLATTRADE:FZ59716:WIPRO-EQ:NSE:INTRADAY", broker="FLATTRADE", client_id="FZ59716",
             symbol="WIPRO-EQ", token="3787", exchange="NSE", product_type="INTRADAY",
             order_type="MKT", transaction_type="BUY", quantity=5, avg_price=200.0, ltp=205.0, pnl=25.0
         )
         pos_echo = Position(
-            id="FLATTRADE:FZ59716:RELIANCE-EQ", broker="FLATTRADE", client_id="FZ59716",
+            id="FLATTRADE:FZ59716:RELIANCE-EQ:NSE:INTRADAY", broker="FLATTRADE", client_id="FZ59716",
             symbol="RELIANCE-EQ", token="2885", exchange="NSE", product_type="INTRADAY",
             order_type="MKT", transaction_type="BUY", quantity=2, avg_price=2500.0, ltp=2510.0, pnl=20.0
+        )
+        pos_cnc_sibling = Position(
+            id="FLATTRADE:FZ59716:RELIANCE-EQ:NSE:CNC", broker="FLATTRADE", client_id="FZ59716",
+            symbol="RELIANCE-EQ", token="2885", exchange="NSE", product_type="CNC",
+            order_type="MKT", transaction_type="BUY", quantity=1, avg_price=2500.0, ltp=2510.0, pnl=10.0
         )
         mark_position_as_exited(pos_echo.id)
 
@@ -103,17 +108,20 @@ class TestChronosAndWebSocketEngine(unittest.IsolatedAsyncioTestCase):
             patch("position.chronos.is_morning_refresh_running", return_value=False),
             patch("position.chronos.random.uniform", return_value=0.0),
             patch("position.chronos.asyncio.sleep", side_effect=_fake_sleep),
-            patch("position.chronos.broker_poll", new=AsyncMock(return_value=[pos_live, pos_echo])),
+            patch("position.chronos.broker_poll", new=AsyncMock(return_value=[pos_live, pos_echo, pos_cnc_sibling])),
         ):
             await polling_loop("205", ws, [cred], engine)
 
-        # Frame 1: cached Redis snapshot; Frame 2: new diff (WIPRO-EQ only, RELIANCE-EQ filtered by anti-echo).
+        # Frame 1: cached Redis snapshot; Frame 2: WIPRO-EQ + RELIANCE-EQ (CNC) preserved, INTRADAY echo filtered.
         # Cycle 2 has identical snapshot so diff check skips Frame 3.
         self.assertEqual(len(ws.sent_bytes), 2)
         msg0 = json.loads(ws.sent_bytes[0].decode("utf-8"))
         msg1 = json.loads(ws.sent_bytes[1].decode("utf-8"))
         self.assertEqual(msg0["data"][0]["symbol"], "OLD-EQ")
-        self.assertEqual([p["symbol"] for p in msg1["data"]], ["WIPRO-EQ"])
+        self.assertEqual(
+            [p["id"] for p in msg1["data"]],
+            ["FLATTRADE:FZ59716:WIPRO-EQ:NSE:INTRADAY", "FLATTRADE:FZ59716:RELIANCE-EQ:NSE:CNC"],
+        )
         self.assertTrue(ws.closed)
 
     async def test_chronos_quarantines_expired_token_and_ignores_transient_502(self):

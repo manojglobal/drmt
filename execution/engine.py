@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import time
-from typing import List, Dict
+from typing import List, Dict, Union
 
 from core.engine import core_engine
 from execution.aliceblue import exit_aliceblue
@@ -80,8 +80,8 @@ async def mass_exit(positions: List[Position], credentials: List[Credential]) ->
     results = list(missing_results)
     for pos, res in zip(task_positions, raw_results):
         is_success = res is True
-        if is_success and pos and pos.id:
-            mark_position_as_exited(pos.id)
+        if is_success and pos:
+            mark_position_as_exited(pos)
         msg = "Order placed successfully" if is_success else (str(res) if isinstance(res, Exception) else "Broker rejected exit order")
         results.append({
             "broker": pos.broker,
@@ -99,50 +99,53 @@ async def mass_exit(positions: List[Position], credentials: List[Credential]) ->
     return success_count, results
 
 
-# In-memory cache for recently exited position IDs with TTL to prevent race condition echoes
+# In-memory cache for recently exited position keys with TTL to prevent race condition echoes
 _recently_exited_positions: Dict[str, float] = {}
+_EXIT_CACHE_PRUNE_AGE_SEC = 60.0
 
 
-def mark_position_as_exited(position_id: str):
+def _build_exit_key(target: Union[Position, str]) -> str:
+    """Builds a canonical uppercase key preserving broker, client_id, symbol, exchange, and product."""
+    if isinstance(target, Position):
+        parts = (
+            str(target.broker or "").strip().upper(),
+            str(target.client_id or "").strip().upper(),
+            str(target.symbol or "").strip().upper(),
+            str(target.exchange or "").strip().upper(),
+            str(target.product_type or "").strip().upper(),
+        )
+        return ":".join(parts)
+    return str(target).strip().upper()
+
+
+def _prune_expired_exits(now: float, max_age_seconds: float = _EXIT_CACHE_PRUNE_AGE_SEC) -> None:
+    """Removes expired entries from _recently_exited_positions to bound memory."""
+    expired = [k for k, ts in _recently_exited_positions.items() if (now - ts) >= max_age_seconds]
+    for k in expired:
+        _recently_exited_positions.pop(k, None)
+
+
+def mark_position_as_exited(position_or_id: Union[Position, str]):
     """Registers a position as successfully exited to prevent stale in-flight scan echoes from restoring it."""
-    if not position_id:
+    if not position_or_id:
+        return
+    key = _build_exit_key(position_or_id)
+    if not key:
         return
     now = time.monotonic()
-    pos_str = str(position_id).strip()
-    _recently_exited_positions[pos_str] = now
-    _recently_exited_positions[pos_str.upper()] = now
-
-    parts = pos_str.split(":")
-    if len(parts) >= 3:
-        cid = parts[1].strip().upper()
-        sym = parts[2].strip().upper()
-        _recently_exited_positions[f"{cid}:{sym}"] = now
-        base_sym = sym.replace("-EQ", "")
-        _recently_exited_positions[f"{cid}:{base_sym}"] = now
+    _prune_expired_exits(now)
+    _recently_exited_positions[key] = now
 
 
-def is_recently_exited(position_id: str, ttl_seconds: float = 20.0) -> bool:
-    """Checks whether a position was recently exited within the TTL window."""
-    if not position_id:
+def is_recently_exited(position_or_id: Union[Position, str], ttl_seconds: float = 20.0) -> bool:
+    """Checks whether a position matches an exact recently exited key within the TTL window."""
+    if not position_or_id:
         return False
-    now = time.monotonic()
-    pos_str = str(position_id).strip()
-
-    for key in (pos_str, pos_str.upper()):
-        ts = _recently_exited_positions.get(key)
-        if ts and (now - ts) < ttl_seconds:
-            return True
-
-    parts = pos_str.split(":")
-    if len(parts) >= 3:
-        cid = parts[1].strip().upper()
-        sym = parts[2].strip().upper()
-        for k in (f"{cid}:{sym}", f"{cid}:{sym.replace('-EQ', '')}"):
-            ts = _recently_exited_positions.get(k)
-            if ts and (now - ts) < ttl_seconds:
-                return True
-
-    return False
+    key = _build_exit_key(position_or_id)
+    if not key:
+        return False
+    ts = _recently_exited_positions.get(key)
+    return bool(ts and (time.monotonic() - ts) < ttl_seconds)
 
 
 def get_recently_exited_ids(ttl_seconds: float = 20.0) -> set:
