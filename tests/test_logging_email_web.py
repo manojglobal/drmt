@@ -177,6 +177,9 @@ class TestEmbeddedFrontendAssets(AioHTTPTestCase):
         self.assertIn("/ws/positions", jsx_body)
         self.assertIn("/api/exit", jsx_body)
         self.assertIn("isIntradayProduct", jsx_body)
+        self.assertIn("isHoldingProduct", jsx_body)
+        self.assertIn("getPositionProduct", jsx_body)
+        self.assertIn("useState('INTRADAY')", jsx_body)
 
         r_css = await self.client.get("/style.css")
         self.assertEqual(r_css.status, 200)

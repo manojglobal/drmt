@@ -22,10 +22,28 @@ async def proxy_request(
 ) -> Any:
     """Wraps aiohttp to send requests via the DRMT proxy.
 
-    If the proxy returns HTTP 500 (usually caused by an unavailable
-    source_ip on the proxy), retries once without source_ip.
+    Retries once after brief backoff on transient proxy/upstream 5xx errors
+    while strictly preserving any configured static source_ip.
     """
     return await _proxy_request_inner(method, url, source_ip, headers, json_data, data)
+
+
+async def _retry_proxy_request(
+    status_label: Any,
+    method: str,
+    safe_url: str,
+    raw_url: str,
+    source_ip: str,
+    elapsed_ms: float,
+    headers: Dict[str, Any],
+    json_data: Optional[Any],
+    data: Optional[Any],
+) -> Any:
+    """Logs a transient 5xx retry with brief backoff while strictly preserving source_ip."""
+    ip_tag = f"with source_ip={source_ip}" if source_ip else "after 300ms backoff"
+    logger.warning(f"⚠️  [PROXY {status_label}] {method} {safe_url} ({elapsed_ms:.1f}ms) — retrying {ip_tag}")
+    await asyncio.sleep(0.3)
+    return await _proxy_request_inner(method, raw_url, source_ip, headers, json_data, data, _is_retry=True)
 
 
 async def _proxy_request_inner(
@@ -37,18 +55,17 @@ async def _proxy_request_inner(
     data: Optional[Any] = None,
     _is_retry: bool = False,
 ) -> Any:
-    if not headers:
-        headers = {}
+    req_headers = dict(headers) if headers else {}
 
     # Strip X-Static-IP before forwarding if it exists (the proxy expects source_ip payload or handles it)
-    headers.pop('X-Static-IP', None)
+    req_headers.pop('X-Static-IP', None)
 
     payload: Dict[str, Any] = {
         "method": method,
         "url": url,
-        "headers": headers
+        "headers": req_headers
     }
-    if source_ip and not _is_retry:
+    if source_ip:
         payload["source_ip"] = source_ip
     if json_data is not None:
         payload["json"] = json_data
@@ -61,7 +78,7 @@ async def _proxy_request_inner(
 
     t0 = time.monotonic()
     safe_url = sanitize_log_message(url)
-    retry_tag = " [no-ip retry]" if _is_retry else ""
+    retry_tag = " [retry]" if _is_retry else ""
     req_body_str = json.dumps(json_data or data or {}, default=str) if (json_data is not None or data is not None) else "{}"
     sanitized_req = sanitize_log_message(req_body_str)
     logger.debug(f"📤 [PROXY REQ] {method} {safe_url} (source_ip={source_ip}){retry_tag}")
@@ -71,11 +88,12 @@ async def _proxy_request_inner(
         try:
             resp_data = await resp.json()
 
-            # HTTP 500 from proxy usually means source_ip is unavailable — retry without it
+            # HTTP 500 from proxy — retry once while preserving configured source_ip
             if resp.status == 500 and not _is_retry:
                 elapsed_ms = (time.monotonic() - t0) * 1000
-                logger.warning(f"⚠️  [PROXY 500] {method} {safe_url} ({elapsed_ms:.1f}ms) — retrying without source_ip={source_ip}")
-                return await _proxy_request_inner(method, url, "", headers, json_data, data, _is_retry=True)
+                return await _retry_proxy_request(
+                    500, method, safe_url, url, source_ip, elapsed_ms, req_headers, json_data, data
+                )
 
             resp.raise_for_status()
             elapsed_ms = (time.monotonic() - t0) * 1000
@@ -85,13 +103,11 @@ async def _proxy_request_inner(
                 target_sc = resp_data.get("status_code", 200)
                 broker_body = resp_data.get("json") if resp_data.get("json") is not None else resp_data.get("text", "")
 
-                # 500/502/503/504 wrapped response means source_ip route failed or broker ALB had a temporary glitch — retry once
+                # 500/502/503/504 wrapped response — retry once after backoff while preserving source_ip
                 if target_sc in (500, 502, 503, 504) and not _is_retry:
-                    elapsed_ms = (time.monotonic() - t0) * 1000
-                    tag = f"without source_ip={source_ip}" if source_ip else "after 300ms backoff"
-                    logger.warning(f"⚠️  [PROXY {target_sc}] {method} {safe_url} ({elapsed_ms:.1f}ms) — retrying {tag}")
-                    await asyncio.sleep(0.3)
-                    return await _proxy_request_inner(method, url, "", headers, json_data, data, _is_retry=True)
+                    return await _retry_proxy_request(
+                        target_sc, method, safe_url, url, source_ip, elapsed_ms, req_headers, json_data, data
+                    )
 
                 # Parse JSON string if broker returned stringified JSON
                 if isinstance(broker_body, str) and (broker_body.startswith("{") or broker_body.startswith("[")):
@@ -127,10 +143,11 @@ async def _proxy_request_inner(
             elapsed_ms = (time.monotonic() - t0) * 1000
             resp_text = await resp.text()
 
-            # HTTP 500 text response — retry without source_ip
+            # HTTP 500 text response — retry once while preserving configured source_ip
             if resp.status == 500 and not _is_retry:
-                logger.warning(f"⚠️  [PROXY 500] {method} {safe_url} ({elapsed_ms:.1f}ms) — retrying without source_ip={source_ip}")
-                return await _proxy_request_inner(method, url, "", headers, json_data, data, _is_retry=True)
+                return await _retry_proxy_request(
+                    500, method, safe_url, url, source_ip, elapsed_ms, req_headers, json_data, data
+                )
 
             sanitized_text = sanitize_log_message(resp_text[:2000])
             logger.debug(f"📥 API Response ({elapsed_ms:.1f}ms): {sanitized_text}")
@@ -139,7 +156,8 @@ async def _proxy_request_inner(
             return resp_text
         except Exception as e:
             elapsed_ms = (time.monotonic() - t0) * 1000
-            logger.debug(f"❌ API Error ({elapsed_ms:.1f}ms): {e}")
-            await logger_api.error(f"❌ [PROXY ERR] {method} {safe_url} after {elapsed_ms:.1f}ms: {e}")
+            safe_err = sanitize_log_message(str(e))
+            logger.debug(f"❌ API Error ({elapsed_ms:.1f}ms): {safe_err}")
+            await logger_api.error(f"❌ [PROXY ERR] {method} {safe_url} after {elapsed_ms:.1f}ms: {safe_err}")
             raise
 

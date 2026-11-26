@@ -6,6 +6,43 @@ from utils.user_mapping import get_client_username
 logger = logging.getLogger(__name__)
 
 class PositionManager:
+    _PRODUCT_KEYS = (
+        "product",
+        "Product",
+        "product_type",
+        "productType",
+        "producttype",
+        "ProductType",
+        "prd",
+        "Prd",
+        "prod",
+        "Prod",
+        "pc",
+        "Pcode",
+        "pCode",
+    )
+    _PRODUCT_KEYS_LOWER = {k.lower() for k in _PRODUCT_KEYS}
+
+    @staticmethod
+    def normalize_product_type(raw_product: Any) -> str:
+        """Normalizes broker-specific product codes to canonical DRMT product names."""
+        prod_upper = str(raw_product or "").strip().upper()
+        if not prod_upper:
+            return ""
+        if prod_upper in ("I", "MIS", "INTRADAY"):
+            return "INTRADAY"
+        if prod_upper in ("C", "DELIVERY", "CNC", "LONGTERM"):
+            return "CNC"
+        if prod_upper in ("M", "CARRYFORWARD", "NORMAL", "MARGIN", "NRML"):
+            return "NRML"
+        if prod_upper in ("B", "BO"):
+            return "BO"
+        if prod_upper in ("H", "CO"):
+            return "CO"
+        if prod_upper == "MTF":
+            return "MTF"
+        return prod_upper
+
     @staticmethod
     def normalize_positions(raw_list: List[Dict[Any, Any]], broker: str, client_id: str) -> List[Position]:
         """
@@ -115,28 +152,18 @@ class PositionManager:
                 exchange = raw_exch_upper
             else:
                 exchange = "BFO" if is_derivative else "BSE"
-            product = (
-                raw.get("product")
-                or raw.get("product_type")
-                or raw.get("productType")
-                or raw.get("producttype")
-                or raw.get("prd")
-                or raw.get("prod")
-                or raw.get("pc")
-                or raw.get("Pcode")
-                or ""
-            )
-            prod_upper = str(product).upper()
-            if prod_upper in ("I", "MIS", "INTRADAY"):
-                product = "INTRADAY"
-            elif prod_upper in ("C", "DELIVERY", "CNC"):
-                product = "CNC"
-            elif prod_upper in ("M", "CARRYFORWARD", "NORMAL", "MARGIN", "NRML"):
-                product = "NRML"
-            elif prod_upper in ("B", "BO"):
-                product = "BO"
-            elif prod_upper in ("H", "CO"):
-                product = "CO"
+            raw_product = None
+            for key in PositionManager._PRODUCT_KEYS:
+                val = raw.get(key)
+                if val is not None and str(val).strip() != "":
+                    raw_product = val
+                    break
+            if raw_product is None:
+                for k, val in raw.items():
+                    if str(k).strip().lower() in PositionManager._PRODUCT_KEYS_LOWER and val is not None and str(val).strip() != "":
+                        raw_product = val
+                        break
+            product = PositionManager.normalize_product_type(raw_product)
             order_type = raw.get("order_type") or ""
             
             # Use provided transaction_type if available, otherwise infer from quantity

@@ -59,13 +59,15 @@ class TestPositionManager(unittest.TestCase):
         self.assertEqual(positions[0].product_type, "CNC")
 
     def test_normalize_aliceblue_positions(self):
-        """Verify AliceBlue schema mapping."""
+        """Verify AliceBlue schema mapping including capitalized Product field."""
         raw_list = ALICEBLUE_POSITIONS_SUCCESS["data"]
         positions = PositionManager.normalize_positions(raw_list, "ALICEBLUE", "AB12345")
         self.assertEqual(len(positions), 1)
         pos = positions[0]
+        self.assertEqual(pos.id, "ALICEBLUE:AB12345:SBIN-EQ:NSE:INTRADAY")
         self.assertEqual(pos.symbol, "SBIN-EQ")
         self.assertEqual(pos.exchange, "NSE")
+        self.assertEqual(pos.product_type, "INTRADAY")
         self.assertEqual(pos.quantity, 50)
         self.assertEqual(pos.transaction_type, "BUY")
         self.assertEqual(pos.avg_price, 820.50)
@@ -158,6 +160,25 @@ class TestPositionManager(unittest.TestCase):
                 "FLATTRADE:FZ48062:SBIN-EQ:BSE:INTRADAY",
             },
         )
+
+    def test_product_normalization_variants(self):
+        """Verify Product casing variants, whitespace trimming, LONGTERM, MTF, and blank fallback."""
+        raw_rows = [
+            {"TradingSymbol": "A-EQ", "Exchange": "NSE", "Product": "LONGTERM", "Netqty": 1, "Price": 100, "LTP": 101},
+            {"TradingSymbol": "B-EQ", "Exchange": "NSE", "Product": " MTF ", "Netqty": 1, "Price": 100, "LTP": 101},
+            {"TradingSymbol": "C-EQ", "Exchange": "NSE", "PRODUCT": " mis ", "Netqty": 1, "Price": 100, "LTP": 101},
+            {"TradingSymbol": "D-EQ", "Exchange": "NFO", "productType": "MARGIN", "Netqty": 25, "Price": 100, "LTP": 101},
+            {"TradingSymbol": "E-EQ", "Exchange": "NSE", "Product": "", "Netqty": 1, "Price": 100, "LTP": 101},
+        ]
+        by_sym = {
+            p.symbol: p.product_type
+            for p in PositionManager.normalize_positions(raw_rows, "ALICEBLUE", "AB12345")
+        }
+        self.assertEqual(by_sym["A-EQ"], "CNC")
+        self.assertEqual(by_sym["B-EQ"], "MTF")
+        self.assertEqual(by_sym["C-EQ"], "INTRADAY")
+        self.assertEqual(by_sym["D-EQ"], "NRML")
+        self.assertEqual(by_sym["E-EQ"], "")
 
 
 if __name__ == "__main__":

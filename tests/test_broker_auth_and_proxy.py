@@ -1,5 +1,6 @@
 """Unit tests for RESTProxyTransport and all 6 broker login/auth workflows."""
 
+import aiohttp
 import json
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -77,7 +78,7 @@ class TestBrokerAuthAndProxy(unittest.IsolatedAsyncioTestCase):
         core_engine.http_session = None
 
     async def test_proxy_request_retries_on_500_and_unpacks_wrapped_json(self):
-        """proxy_request strips X-Static-IP, retries once without source_ip on 500, and parses JSON."""
+        """proxy_request strips forwarded X-Static-IP without mutating input and preserves source_ip on 500 retry."""
         sess = _SequencedSession([
             _FakeResponse({"error": "proxy error"}, status=500),
             _FakeResponse({"status_code": 200, "json": '{"stat": "Ok", "token": "abc"}'}, status=200),
@@ -94,7 +95,51 @@ class TestBrokerAuthAndProxy(unittest.IsolatedAsyncioTestCase):
         retry_payload = sess.calls[1][2]["json"]
         self.assertEqual(first_payload["source_ip"], "172.31.8.133")
         self.assertNotIn("X-Static-IP", first_payload["headers"])
-        self.assertNotIn("source_ip", retry_payload)
+        self.assertEqual(retry_payload["source_ip"], "172.31.8.133")
+        self.assertEqual(headers["X-Static-IP"], "1.2.3.4")
+
+    async def test_proxy_request_preserves_source_ip_on_wrapped_5xx_and_text_500_and_sanitizes_errors(self):
+        """Wrapped 502/503/504 and non-JSON 500 retries keep source_ip, empty stays omitted, and errors log sanitized."""
+        async with suppress_email_notifications():
+            # 1. Wrapped upstream 502 retry preserves configured source_ip
+            sess_502 = _SequencedSession([
+                _FakeResponse({"status_code": 502, "text": "Bad Gateway"}, status=200),
+                _FakeResponse({"status_code": 200, "json": {"ok": True}}, status=200),
+            ])
+            core_engine.http_session = sess_502
+            res_502 = await proxy_request("GET", "https://broker.in/pos", "172.31.8.148")
+            self.assertEqual(res_502, {"ok": True})
+            self.assertEqual(sess_502.calls[1][2]["json"]["source_ip"], "172.31.8.148")
+
+            # 2. ContentTypeError (HTML/text 500) retry preserves source_ip
+            sess_text = _SequencedSession([
+                _FakeResponse(aiohttp.ContentTypeError(None, ()), status=500, text_body="<html>500</html>"),
+                _FakeResponse({"status_code": 200, "json": {"recovered": 1}}, status=200),
+            ])
+            core_engine.http_session = sess_text
+            res_text = await proxy_request("POST", "https://broker.in/order", "172.31.8.133")
+            self.assertEqual(res_text, {"recovered": 1})
+            self.assertEqual(sess_text.calls[1][2]["json"]["source_ip"], "172.31.8.133")
+
+            # 3. Unconfigured source_ip stays omitted across retries
+            sess_no_ip = _SequencedSession([
+                _FakeResponse({"status_code": 503, "text": "Unavailable"}, status=200),
+                _FakeResponse({"status_code": 200, "json": {"done": True}}, status=200),
+            ])
+            core_engine.http_session = sess_no_ip
+            await proxy_request("GET", "https://broker.in/pos", "")
+            self.assertNotIn("source_ip", sess_no_ip.calls[0][2]["json"])
+            self.assertNotIn("source_ip", sess_no_ip.calls[1][2]["json"])
+
+            # 4. Proxy error logs sanitize sensitive fields via sanitize_log_message
+            core_engine.http_session = _SequencedSession([
+                _FakeResponse({"status_code": 400, "json": {"token": "super_secret_tok_999"}}, status=200),
+            ])
+            with patch("credentials.httpclient.logger_api.error", new=AsyncMock()) as mock_err_log:
+                with self.assertRaises(RuntimeError):
+                    await proxy_request("POST", "https://broker.in/order", "172.31.8.133")
+            logged_messages = " ".join(str(c.args[0]) for c in mock_err_log.call_args_list)
+            self.assertNotIn("super_secret_tok_999", logged_messages)
 
     async def test_proxy_request_raises_permission_error_on_401_and_runtime_on_400(self):
         """proxy_request converts wrapped 401/403 into PermissionError and 400 into RuntimeError."""

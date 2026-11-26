@@ -6,7 +6,7 @@ credentials, populates in-memory caches, and synchronizes with SQLite.
 """
 
 import csv
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import hashlib
 import io
 import json
@@ -22,6 +22,70 @@ from logger.logger import logger_auth, logger_system, sanitize_log_message
 from settings import settings
 
 logger = logging.getLogger("DRMT.CredentialsSync")
+
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _parse_token_created_dt(ts_str: str) -> Optional[datetime]:
+    """Parses token creation/update timestamps into naive-IST datetimes for comparison."""
+    raw = str(ts_str or "").strip()
+    if not raw:
+        return None
+    norm = f"{raw[:-1]}+00:00" if raw.endswith("Z") else raw
+    try:
+        dt = datetime.fromisoformat(norm)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(_IST).replace(tzinfo=None)
+        return dt
+    except ValueError:
+        pass
+    for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y%m%d"):
+        try:
+            return datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _resolve_effective_token(
+    csv_token: str,
+    csv_created: str,
+    live_cred: Optional[dict],
+) -> Tuple[str, str]:
+    """Chooses the newer token between CSV source data and live in-memory session state."""
+    if not live_cred:
+        return csv_token, csv_created
+
+    live_token = str(live_cred.get("token") or "").strip()
+    live_created = str(live_cred.get("token_created_at") or "").strip()
+    if not live_token:
+        return csv_token, csv_created
+    if not csv_token:
+        return live_token, live_created
+
+    has_csv_lineage = "csv_token" in live_cred
+    prev_csv_token = str(live_cred.get("csv_token") or "").strip() if has_csv_lineage else ""
+
+    # Operator explicitly edited the token in CSV/Dropbox since last sync
+    if has_csv_lineage and csv_token != prev_csv_token:
+        return csv_token, csv_created
+
+    csv_dt = _parse_token_created_dt(csv_created)
+    live_dt = _parse_token_created_dt(live_created)
+
+    if csv_token == live_token:
+        if csv_dt is not None and (live_dt is None or csv_dt > live_dt):
+            return csv_token, csv_created
+        return live_token, live_created or csv_created
+
+    if csv_dt is not None and live_dt is not None:
+        return (csv_token, csv_created) if csv_dt >= live_dt else (live_token, live_created)
+    if csv_dt is not None and live_dt is None:
+        return csv_token, csv_created
+    # CSV stayed unchanged while runtime auto-refresh generated a newer live token
+    if (has_csv_lineage and csv_token == prev_csv_token) or live_dt is not None:
+        return live_token, live_created
+    return csv_token, csv_created
 
 _DROPBOX_OAUTH_TOKEN_URL = "https://api.dropboxapi.com/oauth2/token"
 _DROPBOX_DOWNLOAD_URL = "https://content.dropboxapi.com/2/files/download"
@@ -275,8 +339,8 @@ def _parse_csv_credentials(
         client_id = str(client_id).strip()
         new_configured_cids.add(client_id)
 
-        token_created = creds_json.get("access_token_created_at") or ""
-        token_val = creds_json.get("access_token") or creds_json.get("token") or ""
+        token_created = str(creds_json.get("access_token_created_at") or "").strip()
+        token_val = str(creds_json.get("access_token") or creds_json.get("token") or "").strip()
         row_id = _safe_row_id(row)
 
         # Name deduplication: prefer human names over generic labels (e.g. Demat, Virtual, Recovery)
@@ -333,13 +397,11 @@ def _parse_csv_credentials(
             if existing_time and token_created and existing_time > token_created:
                 continue
 
-        # Preserve live in-memory session token and runtime session fields if omitted in CSV
+        # Select the fresher token between CSV and runtime memory without losing edits or newer logins
         live_cred = _client_creds.get(client_id)
-        live_token = (live_cred.get("token") or "") if live_cred else ""
-        live_token_created = (live_cred.get("token_created_at") or "") if live_cred else ""
-
-        effective_token = live_token if live_token else token_val
-        effective_token_created = live_token_created if live_token else token_created
+        effective_token, effective_token_created = _resolve_effective_token(
+            token_val, token_created, live_cred
+        )
 
         def _csv_or_live(csv_val: str, field_name: str) -> str:
             cleaned = str(csv_val or "").strip()
@@ -357,6 +419,7 @@ def _parse_csv_credentials(
             "broker": broker,
             "token": effective_token,
             "token_created_at": effective_token_created,
+            "csv_token": token_val,
             "user_id": int(uid) if uid and uid.isdigit() else None,
             "full_name": new_cid_to_name.get(client_id, full_name),
             "row_id": row_id,
@@ -622,7 +685,14 @@ def compute_credential_signature(cred: Optional[dict]) -> str:
     sub_account_id = str(cred.get("sub_account_id") or "").strip()
     public_key = str(cred.get("public_key") or "").strip()
     refresh_token = str(cred.get("refresh_token") or "").strip()
-    raw = f"{broker}:{client_id}:{api_key}:{api_secret}:{totp_secret}:{password}:{static_ip}:{sid}:{base_url}:{sub_account_id}:{public_key}:{refresh_token}"
+    token = str(cred.get("token") or "").strip()
+    mobile_number = str(cred.get("mobile_number") or "").strip()
+    mpin = str(cred.get("mpin") or "").strip()
+    raw = (
+        f"{broker}:{client_id}:{api_key}:{api_secret}:{totp_secret}:{password}:"
+        f"{static_ip}:{sid}:{base_url}:{sub_account_id}:{public_key}:{refresh_token}:"
+        f"{token}:{mobile_number}:{mpin}"
+    )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 

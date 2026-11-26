@@ -66,6 +66,16 @@ class TestCredentialsLoader(unittest.IsolatedAsyncioTestCase):
         cred2["password"] = "Pass2"
         self.assertNotEqual(compute_credential_signature(cred1), compute_credential_signature(cred2))
 
+        # Changes to token, mobile_number, or mpin must also change signature
+        cred_tok = dict(cred1, token="new_tok_1")
+        self.assertNotEqual(compute_credential_signature(cred1), compute_credential_signature(cred_tok))
+
+        cred_mob = dict(cred1, mobile_number="9876543210")
+        self.assertNotEqual(compute_credential_signature(cred1), compute_credential_signature(cred_mob))
+
+        cred_mpin = dict(cred1, mpin="123456")
+        self.assertNotEqual(compute_credential_signature(cred1), compute_credential_signature(cred_mpin))
+
         # None/empty handling
         self.assertEqual(compute_credential_signature(None), "")
 
@@ -338,8 +348,8 @@ class TestCredentialsLoader(unittest.IsolatedAsyncioTestCase):
         import credentials.dynamic_loader as dl
 
         kotak_csv = (
-            "id,broker,credentials,user_id,first_name,last_name,static_ip,client_id,access_token,access_token_created_at\n"
-            '1,KOTAK,"{""api_key"": ""k_ak"", ""totp_secret"": ""JBSWY3DPEHPK3PXP""}",10,Raj,Kumar,1.2.3.4,VFIU2,,\n'
+            "id,user_id,first_name,last_name,broker_id,broker,broker_creds,static_ip\n"
+            '1,10,Raj,Kumar,7,KOTAK,"{""client_id"": ""VFIU2"", ""api_key"": ""k_ak_updated"", ""totp_secret"": ""JBSWY3DPEHPK3PXP""}",1.2.3.4\n'
         )
         async with isolated_test_db():
             async with get_db() as db:
@@ -377,7 +387,7 @@ class TestCredentialsLoader(unittest.IsolatedAsyncioTestCase):
 
                 async with get_db() as db:
                     cur = await db.execute(
-                        "SELECT token, sid, base_url, sub_account_id, mobile_number, mpin FROM credentials WHERE fingerprint = 'KOTAK:VFIU2'"
+                        "SELECT token, sid, base_url, sub_account_id, mobile_number, mpin, api_key FROM credentials WHERE fingerprint = 'KOTAK:VFIU2'"
                     )
                     row = await cur.fetchone()
                     self.assertEqual(row[0], "live_kotak_tok")
@@ -386,12 +396,75 @@ class TestCredentialsLoader(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(row[3], "sub_axis_77")
                     self.assertEqual(row[4], "9876543210")
                     self.assertEqual(row[5], "1234")
+                    self.assertEqual(row[6], "k_ak_updated")
 
                 dyn = get_dynamic_credentials("VFIU2")
+                self.assertEqual(dyn["api_key"], "k_ak_updated")
                 self.assertEqual(dyn["sid"], "live_sid_99")
                 self.assertEqual(dyn["base_url"], "https://e22.kotaksecurities.com")
                 self.assertEqual(dyn["sub_account_id"], "sub_axis_77")
             finally:
+                dl._configured_cids.clear()
+                dl._client_creds.clear()
+                if os.path.exists(temp_csv_path):
+                    os.remove(temp_csv_path)
+
+    async def test_csv_token_update_overrides_stale_memory_while_preserving_newer_runtime_token(self):
+        """Edited or newer CSV tokens replace stale in-memory tokens, while unchanged CSV keeps newer runtime refreshes."""
+        import credentials.dynamic_loader as dl
+
+        def _make_csv(token_val: str, created_val: str) -> str:
+            return (
+                "id,user_id,first_name,last_name,broker_id,broker,broker_creds,static_ip\n"
+                f'1,10,Jagdeesh,Sawant,5,FLATTRADE,"{{""client_id"": ""FZ59716"", ""password"": ""pwd"", ""access_token"": ""{token_val}"", ""access_token_created_at"": ""{created_val}""}}",1.2.3.4\n'
+            )
+
+        async with isolated_test_db():
+            dl._configured_cids.clear()
+            dl._client_creds.clear()
+
+            with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as tf:
+                temp_csv_path = tf.name
+
+            try:
+                with (
+                    patch("settings.settings.USE_DROPBOX_CREDENTIALS", False),
+                    patch("settings.settings.CREDENTIALS_CSV_PATH", temp_csv_path),
+                ):
+                    # 1. Initial sync loads morning CSV token
+                    with open(temp_csv_path, "w", encoding="utf-8") as f:
+                        f.write(_make_csv("tok_morning", "2026-11-26 09:00:00"))
+                    await fetch_and_sync_credentials()
+                    self.assertEqual(get_dynamic_credentials("FZ59716")["token"], "tok_morning")
+
+                    # 2. Runtime headless auto-refresh issues a newer token while CSV remains unchanged
+                    dl.update_dynamic_credential_token("FZ59716", "tok_runtime_newer", "2026-11-26 11:00:00")
+                    await fetch_and_sync_credentials()
+                    self.assertEqual(get_dynamic_credentials("FZ59716")["token"], "tok_runtime_newer")
+
+                    # 3. Operator manually updates token in CSV (even without bumping timestamp) -> overrides memory & SQLite
+                    with open(temp_csv_path, "w", encoding="utf-8") as f:
+                        f.write(_make_csv("tok_csv_manual_fix", ""))
+                    await fetch_and_sync_credentials()
+                    self.assertEqual(get_dynamic_credentials("FZ59716")["token"], "tok_csv_manual_fix")
+                    async with get_db() as db:
+                        cur = await db.execute("SELECT token FROM credentials WHERE client_id = 'FZ59716'")
+                        self.assertEqual((await cur.fetchone())[0], "tok_csv_manual_fix")
+
+                    # 4. Simulate fallback DB load (no csv_token lineage) with older token, then CSV has newer timestamp
+                    dl._client_creds["FZ59716"] = {
+                        "client_id": "FZ59716",
+                        "broker": "FLATTRADE",
+                        "token": "tok_stale_db",
+                        "token_created_at": "2026-11-25 09:00:00",
+                    }
+                    with open(temp_csv_path, "w", encoding="utf-8") as f:
+                        f.write(_make_csv("tok_fresh_csv", "2026-11-26 12:00:00"))
+                    await fetch_and_sync_credentials()
+                    self.assertEqual(get_dynamic_credentials("FZ59716")["token"], "tok_fresh_csv")
+            finally:
+                dl._configured_cids.clear()
+                dl._client_creds.clear()
                 if os.path.exists(temp_csv_path):
                     os.remove(temp_csv_path)
 

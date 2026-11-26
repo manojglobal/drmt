@@ -756,15 +756,37 @@ const ActionLogWidget = () => {
    MAIN DASHBOARD
    ═══════════════════════════════════════════ */
 
-const isIntradayProduct = (productType) => {
+const getPositionProduct = (pos) => {
+    if (!pos) return '';
+    return (
+        pos.product_type
+        || pos.productType
+        || pos.product
+        || pos.Product
+        || pos.prd
+        || pos.pc
+        || pos.Pcode
+        || ''
+    );
+};
+
+const isHoldingProduct = (productType) => {
     if (!productType) return false;
     const pt = String(productType).toUpperCase().trim();
+    return pt === 'CNC' || pt === 'DELIVERY' || pt === 'LONGTERM' || pt === 'MTF' || pt === 'C';
+};
+
+const isIntradayProduct = (productType) => {
+    const pt = String(productType || '').toUpperCase().trim();
+    if (!pt) return true;
+    if (isHoldingProduct(pt)) return false;
     return pt === 'INTRADAY' || pt === 'MIS' || pt === 'BO' || pt === 'CO' || pt === 'I' || pt === 'NRML' || pt === 'NORMAL' || pt === 'CARRYFORWARD' || pt === 'MARGIN' || pt === 'M' || pt.includes('INTRADAY');
 };
 
 const getDisplayProduct = (productType) => {
-    if (!productType) return 'INTRADAY';
-    return isIntradayProduct(productType) ? 'INTRADAY' : String(productType).toUpperCase().trim();
+    const pt = String(productType || '').toUpperCase().trim();
+    if (!pt) return 'INTRADAY';
+    return isIntradayProduct(pt) ? 'INTRADAY' : pt;
 };
 
 function CustomFilterDropdown({ label, options, value, onChange, disabled }) {
@@ -1177,10 +1199,10 @@ function Dashboard({ user, onLogout }) {
                 if (side !== selectedTradeType) return false;
             }
             if (selectedProduct === 'INTRADAY' || selectedProduct === 'Intraday') {
-                const pt = pos.product_type || pos.product || '';
+                const pt = getPositionProduct(pos);
                 if (!isIntradayProduct(pt)) return false;
             } else if (selectedProduct === 'HOLDING' || selectedProduct === 'HOLDING_DAY' || selectedProduct === 'Holding') {
-                const pt = pos.product_type || pos.product || '';
+                const pt = getPositionProduct(pos);
                 if (isIntradayProduct(pt)) return false;
             }
             const pnlVal = typeof pos.pnl === 'number' ? pos.pnl : parseFloat(pos.pnl || 0);
@@ -1401,7 +1423,7 @@ function Dashboard({ user, onLogout }) {
                     pos.broker || "",
                     pos.symbol || "",
                     pos.exchange || "",
-                    getDisplayProduct(pos.product_type),
+                    getDisplayProduct(getPositionProduct(pos)),
                     side,
                     pos.quantity || 0,
                     (pos.avg_price || 0).toFixed(2),
@@ -1816,7 +1838,7 @@ function Dashboard({ user, onLogout }) {
                                                         <td>{pos.broker}</td>
                                                         <td className="font-semibold">{pos.symbol}</td>
                                                         <td>{pos.exchange}</td>
-                                                        <td>{getDisplayProduct(pos.product_type)}</td>
+                                                        <td>{getDisplayProduct(getPositionProduct(pos))}</td>
                                                         <td>
                                                             <span className={`side-badge ${side === 'BUY' ? 'side-buy' : 'side-sell'}`}>{side}</span>
                                                         </td>
@@ -2015,7 +2037,7 @@ function Dashboard({ user, onLogout }) {
                                                         <td>{pos.broker}</td>
                                                         <td className="font-semibold">{pos.symbol}</td>
                                                         <td>{pos.exchange}</td>
-                                                        <td>{getDisplayProduct(pos.product_type)}</td>
+                                                        <td>{getDisplayProduct(getPositionProduct(pos))}</td>
                                                         <td>
                                                             <span className={`side-badge ${side === 'BUY' ? 'side-buy' : 'side-sell'}`}>{side}</span>
                                                         </td>

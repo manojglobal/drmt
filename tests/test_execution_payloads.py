@@ -238,6 +238,67 @@ class TestExecutionPayloadMaster(unittest.TestCase):
         with self.assertRaises(ValueError):
             PayloadMaster.build_axis_payload(pos_ax_zero, self.axis_cred)
 
+    def test_aliceblue_web_and_sdk_product_routing_and_defaults(self):
+        """Verify AliceBlue Web/SDK align on Intraday default fallback and segment-aware product routing."""
+        base_kw = dict(
+            id="AB:1",
+            broker="ALICEBLUE",
+            client_id="AB12345",
+            symbol="SBIN-EQ",
+            token="3045",
+            exchange="NSE",
+            order_type="",
+            transaction_type="BUY",
+            quantity=10,
+            avg_price=820.0,
+            ltp=825.0,
+            pnl=50.0,
+        )
+
+        # Empty/unknown product defaults to INTRADAY on both Web ('MIS') and SDK ('INTRADAY')
+        pos_empty = Position(product_type="", **base_kw)
+        self.assertEqual(PayloadMaster.build_alice_web_payload(pos_empty, self.alice_cred)[0]["product"], "MIS")
+        self.assertEqual(PayloadMaster.build_alice_sdk_payload(pos_empty, self.alice_cred)[0]["product"], "INTRADAY")
+
+        # Whitespace MIS / BO / CO map to Intraday consistently
+        for pcode in (" mis ", "BO", "CO", "INTRADAY"):
+            p = Position(product_type=pcode, **base_kw)
+            self.assertEqual(PayloadMaster.build_alice_web_payload(p, self.alice_cred)[0]["product"], "MIS")
+            self.assertEqual(PayloadMaster.build_alice_sdk_payload(p, self.alice_cred)[0]["product"], "INTRADAY")
+
+        # Cash Delivery / CNC / LONGTERM & MTF
+        pos_cnc = Position(product_type="CNC", **base_kw)
+        self.assertEqual(PayloadMaster.build_alice_web_payload(pos_cnc, self.alice_cred)[0]["product"], "CNC")
+        self.assertEqual(PayloadMaster.build_alice_sdk_payload(pos_cnc, self.alice_cred)[0]["product"], "LONGTERM")
+
+        pos_mtf = Position(product_type="MTF", **base_kw)
+        self.assertEqual(PayloadMaster.build_alice_web_payload(pos_mtf, self.alice_cred)[0]["product"], "MTF")
+        self.assertEqual(PayloadMaster.build_alice_sdk_payload(pos_mtf, self.alice_cred)[0]["product"], "MTF")
+
+        # Derivative contract (F&O) even when raw exchange arrived as NSE resolves to NFO + NRML/NORMAL
+        for sym, exch_in in (("NIFTY26NOV25000CE", "NFO"), ("NIFTY 26NOV 25000 CE", "NSE")):
+            pos_fo = Position(
+                id=f"AB:FO:{sym}",
+                broker="ALICEBLUE",
+                client_id="AB12345",
+                symbol=sym,
+                token="99999",
+                exchange=exch_in,
+                product_type="NRML",
+                order_type="",
+                transaction_type="BUY",
+                quantity=25,
+                avg_price=120.0,
+                ltp=125.0,
+                pnl=125.0,
+            )
+            web_fo = PayloadMaster.build_alice_web_payload(pos_fo, self.alice_cred)[0]
+            sdk_fo = PayloadMaster.build_alice_sdk_payload(pos_fo, self.alice_cred)[0]
+            self.assertEqual(web_fo["exchange"], "NFO")
+            self.assertEqual(web_fo["product"], "NRML")
+            self.assertEqual(sdk_fo["exchange"], "NFO")
+            self.assertEqual(sdk_fo["product"], "NORMAL")
+
 
 if __name__ == "__main__":
     unittest.main()

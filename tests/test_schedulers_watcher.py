@@ -240,6 +240,37 @@ class TestSchedulersAndBlockedWatcher(unittest.IsolatedAsyncioTestCase):
         self.assertIn("FZ58776", plain_body)
         self.assertIn("FZ48062", plain_body)
 
+    async def test_blocked_watcher_detects_token_mobile_and_mpin_changes(self):
+        """Watcher retries and unblocks accounts when only token or Kotak mobile_number/mpin are fixed."""
+        kotak_old = {
+            "broker": "KOTAK NEO", "client_id": "VFIU2", "api_key": "k_ak",
+            "totp_secret": "TOTP1", "mobile_number": "9999900000", "mpin": "0000", "token": "old_tok",
+        }
+        kotak_mpin_fixed = dict(kotak_old, mpin="1234", mobile_number="9876543210")
+
+        ft_old = {
+            "broker": "FLATTRADE", "client_id": "FZ59716", "password": "pwd", "token": "expired_tok",
+        }
+        ft_token_fixed = dict(ft_old, token="fresh_manual_tok")
+
+        add_to_blocklist("VFIU2", "KOTAK NEO", "Raj", "Invalid MPIN", signature=compute_credential_signature(kotak_old))
+        add_to_blocklist("FZ59716", "FLATTRADE", "Jagdeesh", "Token expired", signature=compute_credential_signature(ft_old))
+
+        fixed_map = {"VFIU2": kotak_mpin_fixed, "FZ59716": ft_token_fixed}
+        with (
+            patch("credentials.watcher.fetch_and_sync_credentials", new=AsyncMock(return_value=2)),
+            patch("credentials.watcher.get_dynamic_credentials", side_effect=lambda cid: fixed_map.get(cid)),
+            patch("credentials.watcher.get_client_email", return_value="user@gmail.com"),
+            patch("credentials.watcher.refresh_token_with_backoff", new=AsyncMock(return_value=True)) as mock_refresh,
+            patch("credentials.watcher.send_credentials_restored_email", new=AsyncMock()),
+        ):
+            unblocked = await run_blocked_credentials_check_iteration()
+
+        self.assertEqual(unblocked, 2)
+        self.assertEqual(mock_refresh.await_count, 2)
+        self.assertFalse(is_blocked("VFIU2"))
+        self.assertFalse(is_blocked("FZ59716"))
+
 
 if __name__ == "__main__":
     unittest.main()

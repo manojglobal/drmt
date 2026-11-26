@@ -165,19 +165,34 @@ class PayloadMaster:
         }
 
     @staticmethod
+    def _resolve_alice_product(product_type: Any, resolved_exchange: str, is_sdk: bool = False) -> str:
+        """Resolves normalized AliceBlue product code symmetrically across Web (OMK) and SDK flows."""
+        prod_upper = str(product_type or "").strip().upper()
+        is_cash = resolved_exchange in ("NSE", "BSE")
+
+        if prod_upper in ("INTRADAY", "MIS", "I", "BO", "B", "CO", "H"):
+            return "INTRADAY" if is_sdk else "MIS"
+        if prod_upper in ("DELIVERY", "CNC", "LONGTERM", "C"):
+            if is_sdk:
+                return "LONGTERM" if is_cash else "NORMAL"
+            return "CNC" if is_cash else "NRML"
+        if prod_upper == "MTF":
+            if is_sdk:
+                return "MTF" if is_cash else "NORMAL"
+            return "MTF" if is_cash else "NRML"
+        if prod_upper in ("CARRYFORWARD", "NRML", "NORMAL", "MARGIN", "M"):
+            if is_sdk:
+                return "LONGTERM" if is_cash else "NORMAL"
+            return "CNC" if is_cash else "NRML"
+        return "INTRADAY" if is_sdk else "MIS"
+
+    @staticmethod
     def build_alice_web_payload(pos: Position, cred: Optional[Credential] = None) -> List[Dict[str, Any]]:
         """Builds Alice Blue ANT Web OMK order payload."""
         trans_type = "S" if pos.quantity > 0 else "B"
         qty = abs(pos.quantity)
-        prod_upper = str(pos.product_type or "").upper()
-        if prod_upper in ("INTRADAY", "MIS", "I"):
-            prod = "MIS"
-        elif prod_upper in ("CARRYFORWARD", "NRML", "NORMAL", "M"):
-            prod = "NRML"
-        else:
-            prod = "CNC"
-
         exch = resolve_alice_exchange(pos.exchange, pos.symbol)
+        prod = PayloadMaster._resolve_alice_product(pos.product_type, exch, is_sdk=False)
         cid = (cred.client_id if cred and cred.client_id else getattr(pos, "client_id", "DRMT_DEFAULT")) or "DRMT_DEFAULT"
         device_id = hashlib.md5(f"DRMT_ALICE_{cid}".encode()).hexdigest()
 
@@ -208,18 +223,8 @@ class PayloadMaster:
         """Builds Alice Blue Open-API SDK order payload with marketable limit safeguard."""
         trans_type = "SELL" if pos.quantity > 0 else "BUY"
         qty = abs(pos.quantity)
-        prod_upper = str(pos.product_type or "").upper()
-
-        if prod_upper in ("INTRADAY", "MIS", "I"):
-            prod = "INTRADAY"
-        elif prod_upper in ("DELIVERY", "CNC", "LONGTERM", "C"):
-            prod = "LONGTERM"
-        elif prod_upper in ("MTF",):
-            prod = "MTF"
-        elif prod_upper in ("CARRYFORWARD", "NRML", "NORMAL", "M"):
-            prod = "LONGTERM" if str(pos.exchange).upper() in ("NSE", "BSE") else "NORMAL"
-        else:
-            prod = "INTRADAY"
+        exch = resolve_alice_exchange(pos.exchange, pos.symbol)
+        prod = PayloadMaster._resolve_alice_product(pos.product_type, exch, is_sdk=True)
 
         base_price = pos.ltp if (pos.ltp and pos.ltp > 0) else (pos.avg_price if (pos.avg_price and pos.avg_price > 0) else 0.0)
         if base_price > 0:
@@ -228,7 +233,6 @@ class PayloadMaster:
         else:
             limit_price = 0.05
 
-        exch = resolve_alice_exchange(pos.exchange, pos.symbol)
         cid = (cred.client_id if cred and cred.client_id else getattr(pos, "client_id", "DRMT_DEFAULT")) or "DRMT_DEFAULT"
         device_id = hashlib.md5(f"DRMT_ALICE_{cid}".encode()).hexdigest()
 
