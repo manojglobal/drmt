@@ -1,5 +1,6 @@
 """Unit tests for position/adapters.py broker polling functions."""
 
+import json
 import unittest
 from unittest.mock import patch, AsyncMock
 import aiohttp
@@ -166,6 +167,36 @@ class TestPositionAdapters(unittest.IsolatedAsyncioTestCase):
         )
         with self.assertRaises(PermissionError):
             await poll_fyers(cred)
+
+    @patch("position.adapters.proxy_request")
+    async def test_aliceblue_static_ip_and_flattrade_sdk_url_encoding(self, mock_proxy):
+        """AliceBlue polls via proxy_request when static_ip is set, and Flattrade SDK URL-encodes jData."""
+        mock_proxy.return_value = ALICEBLUE_POSITIONS_SUCCESS
+        ab_cred = Credential(
+            broker="ALICEBLUE", client_id="AB999", token="tok_ab",
+            static_ip="172.31.8.140", fingerprint="ALICEBLUE:AB999", status="working",
+        )
+        pos = await poll_aliceblue(ab_cred)
+        self.assertEqual(len(pos), 1)
+        mock_proxy.assert_awaited_once()
+
+        mock_proxy.reset_mock()
+        mock_proxy.return_value = []
+        ft_cred = Credential(
+            broker="FLATTRADE", client_id="FZ1&2", token="tok+abc",
+            api_key="ak", api_secret="as", static_ip="172.31.8.133",
+            fingerprint="FLATTRADE:FZ1&2", status="working",
+        )
+        with patch("position.adapters.settings.FLATTRADE_FLOW", "SDK"):
+            await poll_flattrade(ft_cred)
+        sent_body = mock_proxy.await_args.kwargs["data"]
+        self.assertTrue(sent_body.startswith('jData={"uid"'))
+        self.assertNotIn("%7B", sent_body)
+        jdata_str, jkey_val = sent_body.split("jData=", 1)[1].split("&jKey=", 1)
+        self.assertNotIn("&", jdata_str)
+        self.assertIn("\\u0026", jdata_str)
+        self.assertEqual(json.loads(jdata_str), {"uid": "FZ1&2", "actid": "FZ1&2"})
+        self.assertEqual(jkey_val, "tok+abc")
 
 
 if __name__ == "__main__":

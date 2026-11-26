@@ -841,6 +841,17 @@ async def login_axisdirect(cred: Credential) -> str:
             msg = err_dict.get("message") or f"Session error code {err_code or status_code}"
             raise ValueError(f"Axis Direct Auth Error for {cred.client_id}: {msg}")
 
+    err_dict = resp.get("error", {}) if isinstance(resp, dict) else {}
+    raw_sc = resp.get("statusCode") if isinstance(resp, dict) else None
+    resp_sc = int(raw_sc) if str(raw_sc or "").isdigit() else int(status_code or 0)
+    if status_code >= 400 or resp_sc >= 400 or not isinstance(resp, dict) or bool(err_dict):
+        err_msg_detail = (
+            (err_dict.get("message") or err_dict.get("error") or str(err_dict))
+            if isinstance(err_dict, dict) and err_dict
+            else str(resp)
+        )
+        raise RuntimeError(f"Axis Direct session probe failed for {cred.client_id} (HTTP {resp_sc}): {err_msg_detail}")
+
     # Success: persist working credential
     cred.token_updated_at = datetime.now()
     await save_working_credential(cred)

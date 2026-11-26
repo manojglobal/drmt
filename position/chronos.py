@@ -24,7 +24,14 @@ from credentials.aliceblue import login_aliceblue
 from credentials.fyers import login_fyers
 from credentials.kotakneo import login_kotakneo
 from credentials.axisdirect import login_axisdirect
-from position.blocklist import add_to_blocklist, remove_from_blocklist, is_blocked
+from position.blocklist import (
+    add_to_blocklist,
+    remove_from_blocklist,
+    is_blocked,
+    is_auth_failure_message,
+    is_transient_error,
+    mark_transient_auth_failure,
+)
 from utils.user_mapping import get_client_username
 
 logger = logging.getLogger(__name__)
@@ -38,6 +45,7 @@ _last_poll_errors: Dict[str, Tuple[str, float]] = {}  # client_id -> (clean_err,
 # In-flight concurrency lock per client_id to prevent simultaneous broker login attempts
 _AUTH_CLIENT_LOCKS: Dict[str, asyncio.Lock] = {}
 
+
 def _get_client_auth_lock(client_id: str) -> asyncio.Lock:
     cid_str = str(client_id).strip()
     if cid_str not in _AUTH_CLIENT_LOCKS:
@@ -46,11 +54,13 @@ def _get_client_auth_lock(client_id: str) -> asyncio.Lock:
 
 async def refresh_token_with_backoff(cred: Credential, send_email: bool = True) -> bool:
     """Attempts single-attempt credential login guarded by a per-client lock. If it fails, adds user to blocklist with zero auto-retries."""
+    cid_key = str(cred.client_id).strip()
     lock = _get_client_auth_lock(cred.client_id)
     if lock.locked():
         await logger_auth.warn(f"⏳ Authentication already in progress for {cred.broker}:{cred.client_id}. Waiting for lock...")
 
     async with lock:
+        mark_transient_auth_failure(cid_key, False)
         username = get_client_username(cred.client_id)
         try:
             token = ""
@@ -74,21 +84,8 @@ async def refresh_token_with_backoff(cred: Credential, send_email: bool = True) 
                 err_msg = str(e)
             except Exception:
                 err_msg = type(e).__name__
-            # Differentiate genuine network / gateway errors from broker authentication errors
-            # Only treat as transient if it's a socket/network timeout or HTTP 5xx/429 without auth rejection
-            is_net_exc = isinstance(e, (asyncio.TimeoutError, ConnectionError))
-            has_5xx = bool(re.search(r"\b(500|502|503|504|429|IA500)\b", err_msg))
-            has_net_phrase = any(
-                p in err_msg.lower()
-                for p in ("bad gateway", "gateway timeout", "service unavailable", "connection reset", "connection refused", "internal server error")
-            )
-            is_auth_phrase = any(
-                a in err_msg.lower()
-                for a in ("session", "token", "password", "totp", "mpin", "unauthorized", "invalid key", "invalid client", "auth error", "auth fail")
-            )
-            is_transient = (is_net_exc or has_5xx or has_net_phrase) and not is_auth_phrase
-
-            if is_transient:
+            if is_transient_error(e):
+                mark_transient_auth_failure(cid_key, True)
                 await logger_auth.warn(f"⚠️  Transient network error authenticating {cred.broker}:{cred.client_id} ({username}): {e} (skipping blocklist)")
                 return False
 
@@ -321,16 +318,7 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                         return []
                     except Exception as e:
                         err_str = str(e)
-                        is_auth_error = any(
-                            k in err_str.lower()
-                            for k in (
-                                "unauthorized", "invalid token", "token expired", "session expired",
-                                "invalid session", "forbidden", "auth error", "broker auth fail",
-                                "401", "403", "-17", "100022", "1004", "invalid jwt", "invalid key",
-                                "token is expired", "jwt token", "invalid user", "access denied"
-                            )
-                        )
-                        if is_auth_error:
+                        if is_auth_failure_message(err_str):
                             if defer_auth:
                                 return []
                             await _record_poll_auth_failure(
@@ -342,10 +330,7 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                             )
                             return []
 
-                        is_transient = any(
-                            code in err_str
-                            for code in ("500", "502", "503", "504", "Bad Gateway", "Gateway Timeout", "Timeout", "Connection reset", "Connection refused", "IA500", "Internal Server Error")
-                        ) or isinstance(e, (asyncio.TimeoutError, ConnectionError))
+                        is_transient = is_transient_error(e)
 
                         now = time.monotonic()
                         prev = _last_poll_errors.get(c.client_id)

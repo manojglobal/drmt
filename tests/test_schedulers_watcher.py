@@ -271,6 +271,31 @@ class TestSchedulersAndBlockedWatcher(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(is_blocked("VFIU2"))
         self.assertFalse(is_blocked("FZ59716"))
 
+    async def test_blocked_watcher_does_not_lock_signature_on_transient_failure(self):
+        """Watcher must not lock new signature after a transient 502/network failure so next cycle retries cleanly."""
+        from position.blocklist import get_blocked_user_signature
+
+        old_cred = {"broker": "ALICEBLUE", "client_id": "AB999", "password": "old_p", "totp_secret": "TOTP1"}
+        fixed_cred = {"broker": "ALICEBLUE", "client_id": "AB999", "password": "new_p", "totp_secret": "TOTP1"}
+        old_sig = compute_credential_signature(old_cred)
+        new_sig = compute_credential_signature(fixed_cred)
+
+        add_to_blocklist("AB999", "ALICEBLUE", "Alice User", "Wrong Password", signature=old_sig)
+
+        with (
+            patch("credentials.watcher.fetch_and_sync_credentials", new=AsyncMock(return_value=1)),
+            patch("credentials.watcher.get_dynamic_credentials", return_value=fixed_cred),
+            patch("credentials.watcher.get_client_email", return_value="ab@gmail.com"),
+            patch("credentials.watcher.refresh_token_with_backoff", new=AsyncMock(return_value=False)),
+            patch("credentials.watcher.consume_transient_auth_failure", return_value=True),
+        ):
+            unblocked = await run_blocked_credentials_check_iteration()
+
+        self.assertEqual(unblocked, 0)
+        self.assertTrue(is_blocked("AB999"))
+        self.assertEqual(get_blocked_user_signature("AB999"), old_sig)
+        self.assertNotEqual(get_blocked_user_signature("AB999"), new_sig)
+
 
 if __name__ == "__main__":
     unittest.main()

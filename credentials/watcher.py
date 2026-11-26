@@ -17,11 +17,13 @@ from typing import Optional
 from settings import settings
 from models.schemas import Credential
 from position.blocklist import (
+    consume_transient_auth_failure,
     get_blocked_users,
     get_blocked_user,
     update_blocked_user_signature,
     remove_from_blocklist,
-    is_blocked
+    is_blocked,
+    is_transient_error,
 )
 from credentials.dynamic_loader import (
     fetch_and_sync_credentials,
@@ -213,15 +215,25 @@ async def run_blocked_credentials_check_iteration() -> int:
                 )
             else:
                 # ── FAILURE ──
-                update_blocked_user_signature(client_id, new_sig)
-                b_info = get_blocked_user(client_id)
-                raw_reason = b_info.get("reason", "Authentication failed") if b_info else "Authentication failed"
-                fail_reason = _record_watcher_failure(cred, broker, client_id, username, user_email, raw_reason)
-                await logger_auth.warn(f"❌ [CREDENTIALS WATCHER] Updated credentials for {broker}:{client_id} still failed: {fail_reason}")
+                if consume_transient_auth_failure(client_id):
+                    await logger_auth.warn(
+                        f"⏳ [CREDENTIALS WATCHER] Transient error verifying {broker}:{client_id}; keeping signature unlocked for next cycle."
+                    )
+                else:
+                    update_blocked_user_signature(client_id, new_sig)
+                    b_info = get_blocked_user(client_id)
+                    raw_reason = b_info.get("reason", "Authentication failed") if b_info else "Authentication failed"
+                    fail_reason = _record_watcher_failure(cred, broker, client_id, username, user_email, raw_reason)
+                    await logger_auth.warn(f"❌ [CREDENTIALS WATCHER] Updated credentials for {broker}:{client_id} still failed: {fail_reason}")
         except Exception as auth_err:
-            err_str = _record_watcher_failure(cred, broker, client_id, username, user_email, str(auth_err))
-            update_blocked_user_signature(client_id, new_sig, reason=err_str)
-            await logger_auth.error(f"❌ [CREDENTIALS WATCHER] Exception testing credentials for {broker}:{client_id}: {err_str}", notify_email=False)
+            if is_transient_error(auth_err):
+                await logger_auth.warn(
+                    f"⏳ [CREDENTIALS WATCHER] Transient exception testing {broker}:{client_id}: {auth_err}; keeping signature unlocked."
+                )
+            else:
+                err_str = _record_watcher_failure(cred, broker, client_id, username, user_email, str(auth_err))
+                update_blocked_user_signature(client_id, new_sig, reason=err_str)
+                await logger_auth.error(f"❌ [CREDENTIALS WATCHER] Exception testing credentials for {broker}:{client_id}: {err_str}", notify_email=False)
 
     # Dispatch consolidated failure alert email once per watcher iteration
     if failed_accounts:

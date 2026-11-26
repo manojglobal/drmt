@@ -54,7 +54,10 @@ async def exit_kotakneo(pos: Position, cred: Credential) -> bool:
     )
 
     try:
-        resp = await _send_kotak_order(url, form_data, headers, cred.static_ip)
+        try:
+            resp = await _send_kotak_order(url, form_data, headers, cred.static_ip)
+        except PermissionError as pe:
+            resp = {"stat": "Not_Ok", "stCode": 401, "errMsg": str(pe)}
         resp_str = json.dumps(resp, default=str) if isinstance(resp, (dict, list)) else str(resp)
         await logger_api.info(f"📥 [Kotak Neo Exit Order Response] ({cred.client_id}) {pos.symbol}: {resp_str}")
         success, order_id, err_msg, st_code = _parse_kotak_order_response(resp)
@@ -99,6 +102,9 @@ async def _send_kotak_order(url: str, form_data: str, headers: Dict[str, str], s
         if not session:
             raise RuntimeError("Core Engine HTTP session not initialized")
         async with session.post(url, data=form_data, headers=headers) as r:
+            if r.status in (401, 403):
+                err_body = await r.text()
+                raise PermissionError(f"Kotak Neo HTTP {r.status}: {err_body}")
             return await r.json(content_type=None)
 
 

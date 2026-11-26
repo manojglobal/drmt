@@ -320,6 +320,53 @@ class TestBrokerAuthAndProxy(unittest.IsolatedAsyncioTestCase):
             await login_axisdirect(cred_bad)
         self.assertIn("missing", str(ctx.exception))
 
+    async def test_aliceblue_static_ip_login_and_kotak_axis_fail_closed_on_5xx(self):
+        """AliceBlue routes login via proxy when static_ip is set; Kotak/Axis probes fail closed on 5xx errors."""
+        async with isolated_test_db(), suppress_email_notifications():
+            # 1. AliceBlue 6-step login with static_ip must use proxy_request
+            ab_cred = Credential(
+                broker="ALICE BLUE", client_id="AB_IP", password="pwd", totp_secret="JBSWY3DPEHPK3PXP",
+                api_key="vendor_k", api_secret="app_sec", static_ip="172.31.8.140",
+                fingerprint="ALICE BLUE:AB_IP", status="working",
+            )
+            with patch("credentials.aliceblue.proxy_request", new=AsyncMock(side_effect=[
+                {"status": "Ok"},
+                {"status": "Ok", "result": [{"encKey": "my_aes_enc_key"}]},
+                {"status": "Ok", "result": [{"token": "temp_tok"}]},
+                {"status": "Ok", "result": [{"accessToken": "acc_tok"}]},
+                {"status": "Ok", "result": [{"redirectUrl": "https://cb/?authCode=AC_77"}]},
+                {"stat": "Ok", "userSession": "ab_proxied_session"},
+            ])) as mock_ab_proxy:
+                tok = await login_aliceblue(ab_cred)
+                self.assertEqual(tok, "ab_proxied_session")
+                self.assertEqual(mock_ab_proxy.await_count, 6)
+
+            # 2. Kotak 502 probe error must raise RuntimeError instead of marking token working
+            k_cred = Credential(
+                broker="KOTAK NEO", client_id="K502", token="old_k", sid="sid_1",
+                fingerprint="KOTAK NEO:K502", status="working",
+            )
+            with (
+                patch("credentials.kotakneo._probe_kotak_session", new=AsyncMock(return_value=(502, {"error": "Bad Gateway"}))),
+                patch("credentials.kotakneo.save_working_credential", new=AsyncMock()) as mock_save_k,
+            ):
+                with self.assertRaises(RuntimeError):
+                    await login_kotakneo(k_cred)
+                mock_save_k.assert_not_awaited()
+
+            # 3. Axis 500/400 probe error must raise RuntimeError instead of saving unverified token
+            ax_cred = Credential(
+                broker="AXIS DIRECT", client_id="AX500", api_key="ak", api_secret="as",
+                token="old_ax", public_key="pk_1", fingerprint="AXIS DIRECT:AX500", status="working",
+            )
+            with (
+                patch("credentials.axisdirect.send_axis_api_request", new=AsyncMock(return_value=(500, {"error": {"code": "500", "message": "Internal error"}}))),
+                patch("credentials.axisdirect.save_working_credential", new=AsyncMock()) as mock_save_ax,
+            ):
+                with self.assertRaises(RuntimeError):
+                    await login_axisdirect(ax_cred)
+                mock_save_ax.assert_not_awaited()
+
 
 if __name__ == "__main__":
     unittest.main()

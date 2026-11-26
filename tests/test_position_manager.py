@@ -180,6 +180,20 @@ class TestPositionManager(unittest.TestCase):
         self.assertEqual(by_sym["D-EQ"], "NRML")
         self.assertEqual(by_sym["E-EQ"], "")
 
+    def test_qty_float_zero_fallback_exchange_priority_and_instrument_token(self):
+        """Verify netQty=0 does not fall back to quantity, float qty strings work, BSE-EQ on NSE stays NSE, and instrument_token maps."""
+        raw_rows = [
+            {"tsym": "CLOSED-EQ", "exch": "NSE", "netQty": 0, "quantity": 25, "avg_price": 100, "ltp": 100},
+            {"symbol": "FLOAT-EQ", "exchange": "NSE", "quantity": "15.0", "avg_price": 100, "ltp": 105},
+            {"symbol": "BSE-EQ", "exchange": "NSE", "quantity": 10, "instrument_token": "19585", "avg_price": 500, "ltp": 510},
+        ]
+        positions = PositionManager.normalize_positions(raw_rows, "MSTOCK", "M123")
+        by_sym = {p.symbol: p for p in positions}
+        self.assertNotIn("CLOSED-EQ", by_sym)
+        self.assertEqual(by_sym["FLOAT-EQ"].quantity, 15)
+        self.assertEqual(by_sym["BSE-EQ"].exchange, "NSE")
+        self.assertEqual(by_sym["BSE-EQ"].token, "19585")
+
 
 if __name__ == "__main__":
     unittest.main()

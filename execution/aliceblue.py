@@ -40,22 +40,63 @@ def _build_sdk_payload(pos: Position, cred: Optional[Credential] = None) -> list
     return PayloadMaster.build_alice_sdk_payload(pos, cred)
 
 
+def _extract_alice_items(data: Any) -> list:
+    """Extracts result dicts cleanly from AliceBlue Web/SDK dictionary or list responses."""
+    if isinstance(data, dict):
+        res = data.get("result")
+        if isinstance(res, list):
+            return res
+        if isinstance(res, dict):
+            return [res]
+        return [data]
+    if isinstance(data, list):
+        return data
+    return []
+
+
+def _is_alice_auth_error(data: Any, auth_err: Optional[PermissionError]) -> bool:
+    """Detects expired/invalid session errors across PermissionError and nested result payloads."""
+    if auth_err is not None:
+        return True
+    for it in _extract_alice_items(data):
+        if isinstance(it, dict):
+            emsg = str(it.get("message") or it.get("emsg") or "").lower()
+            if any(x in emsg for x in ("session expired", "invalid token", "unauthorized", "login", "401", "403")):
+                return True
+    return False
+
+
+async def _post_alice_order(url: str, headers: dict, payload: list, static_ip: str) -> tuple[Any, Optional[PermissionError]]:
+    """Dispatches AliceBlue exit POST via proxy or direct HTTP, surfacing 401/403 as PermissionError cleanly."""
+    if static_ip:
+        try:
+            data = await proxy_request("POST", url, str(static_ip), headers=headers, json_data=payload)
+        except PermissionError as pe:
+            return None, pe
+    else:
+        session = core_engine.http_session
+        if not session:
+            raise RuntimeError("HTTP session not initialized")
+        async with session.post(url, headers=headers, json=payload) as resp:
+            if resp.status in (401, 403):
+                err_body = await resp.text()
+                return None, PermissionError(f"AliceBlue HTTP {resp.status}: {err_body}")
+            data = await resp.json(content_type=None)
+
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            pass
+    return data, None
+
+
 def _check_order_success(data: Any, flow_mode: str = "WEB") -> tuple[bool, str]:
     """Validates AliceBlue response across Web (orderNo) and SDK (brokerOrderId/orderNumber) flows."""
     if not data:
         return False, "Empty response from broker"
 
-    items = []
-    if isinstance(data, dict):
-        res = data.get("result")
-        if isinstance(res, list):
-            items = res
-        elif isinstance(res, dict):
-            items = [res]
-        else:
-            items = [data]
-    elif isinstance(data, list):
-        items = data
+    items = _extract_alice_items(data)
 
     for it in items:
         if isinstance(it, dict):
@@ -97,63 +138,41 @@ async def exit_aliceblue(pos: Position, cred: Credential) -> bool:
     try:
         await logger_api.info(f"📤 [AliceBlue {flow_label} Exit Payload] ({cred.client_id}) {pos.symbol}: {json.dumps(payload)}")
         await logger_exit.info(f"📤 Placing AliceBlue ({flow_label}) exit order for {pos.symbol} Qty={abs(pos.quantity)} ({cred.client_id})")
-        if cred.static_ip:
-            data = await proxy_request("POST", url, str(cred.static_ip), headers=headers, json_data=payload)
+        data, auth_err = await _post_alice_order(url, headers, payload, cred.static_ip)
+
+        if auth_err is None:
+            data_str = json.dumps(data, default=str) if isinstance(data, (dict, list)) else str(data)
+            await logger_api.info(f"📥 [AliceBlue {flow_label} Exit Response] ({cred.client_id}) {pos.symbol}: {data_str}")
+            is_ok, status_msg = _check_order_success(data, flow_mode)
+            if is_ok:
+                await logger_api.info(f"✅ [AliceBlue Exit Success] ({cred.client_id}) {pos.symbol}: {status_msg}")
+                return True
         else:
-            session = core_engine.http_session
-            if not session:
-                raise RuntimeError("HTTP session not initialized")
-            async with session.post(url, headers=headers, json=payload) as resp:
-                data = await resp.json(content_type=None)
+            data_str = str(auth_err)
+            status_msg = data_str
+            await logger_api.warn(f"🔑 [AliceBlue {flow_label} Auth Rejected] ({cred.client_id}) {pos.symbol}: {data_str}")
 
-        if isinstance(data, str):
+        # Check if auth expired (via PermissionError or nested result payload), attempt 1 re-auth retry
+        if _is_alice_auth_error(data, auth_err):
             try:
-                data = json.loads(data)
-            except Exception:
-                pass
-
-        data_str = json.dumps(data, default=str) if isinstance(data, (dict, list)) else str(data)
-        await logger_api.info(f"📥 [AliceBlue {flow_label} Exit Response] ({cred.client_id}) {pos.symbol}: {data_str}")
-
-        is_ok, status_msg = _check_order_success(data, flow_mode)
-        if is_ok:
-            await logger_api.info(f"✅ [AliceBlue Exit Success] ({cred.client_id}) {pos.symbol}: {status_msg}")
-            return True
-
-        # Check if auth expired, attempt 1 re-auth retry if possible
-        data_obj = data[0] if isinstance(data, list) and len(data) > 0 else data
-        if isinstance(data_obj, dict):
-            emsg = str(data_obj.get("message") or data_obj.get("emsg") or "").lower()
-            if any(x in emsg for x in ("session expired", "invalid token", "unauthorized", "login", "401")):
-                try:
-                    from credentials.aliceblue import login_aliceblue
-                    await logger_exit.warn(f"🔑 AliceBlue auth expired during {flow_label.lower()} exit for {pos.symbol}, attempting automatic re-auth...")
-                    new_token = await login_aliceblue(cred)
-                    if new_token:
-                        headers["Authorization"] = f"Bearer {new_token}"
-                        if cred.static_ip:
-                            data = await proxy_request("POST", url, str(cred.static_ip), headers=headers, json_data=payload)
-                        else:
-                            session = core_engine.http_session
-                            if not session:
-                                raise RuntimeError("HTTP session not initialized")
-                            async with session.post(url, headers=headers, json=payload) as resp:
-                                data = await resp.json(content_type=None)
-                        if isinstance(data, str):
-                            try:
-                                data = json.loads(data)
-                            except Exception:
-                                pass
-                        data_str = json.dumps(data, default=str) if isinstance(data, (dict, list)) else str(data)
-                        await logger_api.info(f"📥 [AliceBlue {flow_label} Exit Retry Response] ({cred.client_id}) {pos.symbol}: {data_str}")
-                        is_ok_retry, retry_msg = _check_order_success(data, flow_mode)
-                        if is_ok_retry:
-                            await logger_api.info(f"✅ [AliceBlue Exit Retry Success] ({cred.client_id}) {pos.symbol}: {retry_msg}")
-                            return True
-                        status_msg = retry_msg
-                except Exception as retry_err:
-                    await logger_api.error(f"❌ [AliceBlue Exit Re-Auth Failed] ({cred.client_id}): {retry_err}")
-                    await logger_exit.error(f"AliceBlue {flow_label.lower()} exit re-auth retry failed: {retry_err}")
+                from credentials.aliceblue import login_aliceblue
+                await logger_exit.warn(f"🔑 AliceBlue auth expired during {flow_label.lower()} exit for {pos.symbol}, attempting automatic re-auth...")
+                new_token = await login_aliceblue(cred)
+                if new_token:
+                    headers["Authorization"] = f"Bearer {new_token}"
+                    data, retry_auth_err = await _post_alice_order(url, headers, payload, cred.static_ip)
+                    if retry_auth_err is not None:
+                        raise retry_auth_err
+                    data_str = json.dumps(data, default=str) if isinstance(data, (dict, list)) else str(data)
+                    await logger_api.info(f"📥 [AliceBlue {flow_label} Exit Retry Response] ({cred.client_id}) {pos.symbol}: {data_str}")
+                    is_ok_retry, retry_msg = _check_order_success(data, flow_mode)
+                    if is_ok_retry:
+                        await logger_api.info(f"✅ [AliceBlue Exit Retry Success] ({cred.client_id}) {pos.symbol}: {retry_msg}")
+                        return True
+                    status_msg = retry_msg
+            except Exception as retry_err:
+                await logger_api.error(f"❌ [AliceBlue Exit Re-Auth Failed] ({cred.client_id}): {retry_err}")
+                await logger_exit.error(f"AliceBlue {flow_label.lower()} exit re-auth retry failed: {retry_err}")
 
         await logger_api.error(f"❌ [AliceBlue {flow_label} Exit Failed] ({cred.client_id}) {pos.symbol} | Status: {status_msg} | Full Response: {data_str}")
         await logger_exit.error(f"AliceBlue {flow_label.lower()} exit failed for {pos.symbol} ({cred.client_id}) | Status: {status_msg}")

@@ -242,10 +242,13 @@ async def _probe_kotak_session(cred: Credential) -> Tuple[int, Any]:
     except PermissionError as pe:
         return 401, {"error": str(pe)}
     except Exception as e:
+        import re
         err_s = str(e)
         if any(code in err_s for code in ("401", "403", "100010", "100022", "100008", "invalid session token", "Unauthorized")):
             return 401, {"error": err_s}
-        return 500, {"error": err_s}
+        sc_match = re.search(r"Broker HTTP (\d+) Error:", err_s)
+        parsed_sc = int(sc_match.group(1)) if sc_match else 500
+        return parsed_sc, {"error": err_s}
 
 
 async def login_kotakneo(cred: Credential) -> str:
@@ -283,6 +286,11 @@ async def login_kotakneo(cred: Credential) -> str:
     if not is_no_data and (sc in (401, 403) or st_code in (100010, 100022, 100008, 401, 403, 1037) or stat.lower() == "not_ok"):
         msg = err_msg or "Session expired"
         raise ValueError(f"Kotak Neo Auth Error for {cred.client_id}: {msg}")
+
+    # Fail closed on transient 5xx / 400 / error-payload probes instead of saving an unverified token
+    if not is_no_data and (sc >= 400 or not isinstance(resp, dict) or "error" in resp):
+        detail = str(resp.get("error") or err_msg or f"HTTP {sc}") if isinstance(resp, dict) else str(resp)
+        raise RuntimeError(f"Kotak Neo session verification failed for {cred.client_id} (HTTP {sc}): {detail}")
 
     # Success: persist working credential
     cred.token_updated_at = datetime.now()

@@ -57,17 +57,18 @@ async def ensure_mstock_instruments_cached(cred: Credential) -> bool:
             symbol = item.get("symbol")
             itype = (item.get("instrumenttype") or "").upper()
             is_eq = itype in ("EQ", "EQUITY")
+            trading_sym = symbol or name
 
-            if token and name and exch:
+            if token and trading_sym and exch:
                 key = f"{exch}:{token}"
                 # Prioritize EQ over non-EQ for overlapping tokens on the same exchange
                 if key not in token_map or is_eq:
-                    token_map[key] = name
+                    token_map[key] = trading_sym
 
-            if symbol and name and exch:
+            if symbol and trading_sym and exch:
                 key = f"{exch}:{symbol}"
                 if key not in symbol_map or is_eq:
-                    symbol_map[key] = name
+                    symbol_map[key] = trading_sym
 
         if token_map:
             # Batch write to Redis

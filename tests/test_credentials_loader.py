@@ -462,6 +462,24 @@ class TestCredentialsLoader(unittest.IsolatedAsyncioTestCase):
                         f.write(_make_csv("tok_fresh_csv", "2026-11-26 12:00:00"))
                     await fetch_and_sync_credentials()
                     self.assertEqual(get_dynamic_credentials("FZ59716")["token"], "tok_fresh_csv")
+
+                    # 5. Server restart hydration: CSV has blank token/timestamp, SQLite holds today's runtime token
+                    async with get_db() as db:
+                        await db.execute(
+                            "UPDATE credentials SET token = 'tok_db_today', token_updated_at = '2026-11-26 09:15:00' WHERE client_id = 'FZ59716'"
+                        )
+                        await db.commit()
+                    dl._client_creds.clear()
+                    with (
+                        patch("settings.settings.USE_DROPBOX_CREDENTIALS", False),
+                        patch("settings.settings.CREDENTIALS_CSV_PATH", temp_csv_path),
+                    ):
+                        with open(temp_csv_path, "w", encoding="utf-8") as f:
+                            f.write(_make_csv("", ""))
+                        await fetch_and_sync_credentials()
+                    hydrated = get_dynamic_credentials("FZ59716")
+                    self.assertEqual(hydrated["token"], "tok_db_today")
+                    self.assertEqual(hydrated["token_created_at"], "2026-11-26 09:15:00")
             finally:
                 dl._configured_cids.clear()
                 dl._client_creds.clear()

@@ -20,6 +20,7 @@ from models.schemas import Credential
 from credentials.crypto import sha256_hex, encrypt_password_alice, totp_now, md5_hex
 from core.engine import core_engine
 from credentials.dedup import save_working_credential
+from credentials.httpclient import proxy_request
 from logger.logger import logger_api, logger_auth
 
 logger = logging.getLogger("DRMT.SCM")
@@ -65,22 +66,35 @@ async def login_aliceblue(cred: Credential) -> str:
     """Full 6-step AliceBlue login. Returns userSession token."""
     logger.info(f"Logging in AliceBlue {cred.client_id}")
 
-    session = core_engine.http_session
-    if not session:
+    session = None if cred.static_ip else core_engine.http_session
+    if not cred.static_ip and not session:
         raise RuntimeError("Core Engine HTTP session not initialized")
 
     common_headers = {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
 
     async def post_json(url: str, payload: dict, auth_header: str = "") -> dict:
-        # Sends a secure JSON POST request to a remote server.
+        # Sends a JSON POST request via DRMT proxy when static_ip is configured, or directly otherwise.
         headers = dict(common_headers)
         if auth_header:
             headers["Authorization"] = auth_header
-        async with session.post(url, json=payload, headers=headers) as resp:
-            data = await resp.json(content_type=None)
-            resp_str = json.dumps(data, default=str) if isinstance(data, (dict, list)) else str(data)
-            await logger_api.info(f"📥 [AliceBlue Login Step] ({cred.client_id}) {url.split('/')[-1]} -> HTTP {resp.status} | Body: {resp_str}")
-            return data
+        if cred.static_ip:
+            try:
+                data = await proxy_request("POST", url, str(cred.static_ip), headers=headers, json_data=payload)
+                resp_status = 200
+            except PermissionError as pe:
+                raise ValueError(f"AliceBlue login auth rejected ({cred.client_id}): {pe}") from pe
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except Exception:
+                    data = {"emsg": data}
+        else:
+            async with session.post(url, json=payload, headers=headers) as resp:
+                resp_status = resp.status
+                data = await resp.json(content_type=None)
+        resp_str = json.dumps(data, default=str) if isinstance(data, (dict, list)) else str(data)
+        await logger_api.info(f"📥 [AliceBlue Login Step] ({cred.client_id}) {url.split('/')[-1]} -> HTTP {resp_status} | Body: {resp_str}")
+        return data if isinstance(data, dict) else {"emsg": str(data)}
 
     # ── Step 1: Verify User ──────────────────────────────────────────────────
     resp = await post_json(ALICE_VERIFY_USER, {"userId": cred.client_id})

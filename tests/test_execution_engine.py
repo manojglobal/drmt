@@ -3,7 +3,8 @@
 import json
 import time
 import unittest
-from unittest.mock import AsyncMock, patch
+import urllib.parse
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from execution.alice_instruments import resolve_alice_exchange
 from execution.aliceblue import _check_order_success, exit_aliceblue
@@ -89,8 +90,9 @@ class TestExecutionEngineAndAdapters(unittest.IsolatedAsyncioTestCase):
         # Long option exit (SELL) with LTP=100 -> 100 * 0.95 = 95.0
         opt_pos = _pos("FLATTRADE", "FZ59716", "NIFTY26NOV25000CE", 50, exchange="NFO", prd="NRML", ltp=100.0)
         form_opt = PayloadMaster.build_flattrade_sdk_payload(opt_pos, cred)
-        self.assertIn("&jKey=sdk_tok", form_opt)
-        j_opt = json.loads(form_opt.split("jData=")[1].split("&jKey=")[0])
+        parsed_opt = urllib.parse.parse_qs(form_opt)
+        self.assertEqual(parsed_opt["jKey"][0], "sdk_tok")
+        j_opt = json.loads(parsed_opt["jData"][0])
         self.assertEqual(j_opt["prctyp"], "LMT")
         self.assertEqual(j_opt["trantype"], "S")
         self.assertEqual(j_opt["prd"], "M")
@@ -99,10 +101,21 @@ class TestExecutionEngineAndAdapters(unittest.IsolatedAsyncioTestCase):
         # Short equity exit (BUY) with LTP=200 -> 200 * 1.01 = 202.0
         eq_pos = _pos("FLATTRADE", "FZ59716", "RELIANCE-EQ", -5, exchange="NSE", prd="MIS", ltp=200.0)
         form_eq = PayloadMaster.build_flattrade_sdk_payload(eq_pos, cred)
-        j_eq = json.loads(form_eq.split("jData=")[1].split("&jKey=")[0])
+        parsed_eq = urllib.parse.parse_qs(form_eq)
+        j_eq = json.loads(parsed_eq["jData"][0])
         self.assertEqual(j_eq["trantype"], "B")
         self.assertEqual(j_eq["prd"], "I")
         self.assertEqual(float(j_eq["prc"]), 202.0)
+
+        # '&' symbol (e.g. M&M-EQ) must keep raw JSON braces (PiConnect requirement) while escaping '&' as \u0026
+        amp_pos = _pos("FLATTRADE", "FZ59716", "M&M-EQ", 10, exchange="NSE", prd="MIS", ltp=100.0)
+        form_amp = PayloadMaster.build_flattrade_sdk_payload(amp_pos, cred)
+        self.assertTrue(form_amp.startswith("jData={"))
+        raw_jdata_part = form_amp.split("jData=", 1)[1].split("&jKey=", 1)[0]
+        self.assertNotIn("&", raw_jdata_part)
+        self.assertIn("\\u0026", raw_jdata_part)
+        j_amp = json.loads(raw_jdata_part)
+        self.assertEqual(j_amp["tsym"], "M&M-EQ")
 
         # Exchange resolvers
         self.assertEqual(resolve_flattrade_exchange("BSE", "SENSEX26N1282300PE"), "BFO")
@@ -213,6 +226,95 @@ class TestExecutionEngineAndAdapters(unittest.IsolatedAsyncioTestCase):
                 ])),
             ):
                 self.assertTrue(await exit_axisdirect(ax_pos, ax_cred))
+
+    async def test_static_ip_permission_error_triggers_inflight_reauth_and_mstock_contract_symbol(self):
+        """Static-IP 401 PermissionError triggers re-auth in Flattrade/AliceBlue/Kotak, and mStock caches contract symbol."""
+        import execution.mstock_instruments as mstock_instruments
+        from execution.mstock_instruments import REDIS_KEY_TOKEN_MAP, ensure_mstock_instruments_cached
+        from core.engine import core_engine
+
+        async with suppress_email_notifications():
+            # 1. Flattrade Web & SDK static_ip PermissionError -> re-auth retry
+            ft_pos = _pos("FLATTRADE", "FZ59716", "WIPRO-EQ", 1)
+            ft_cred = Credential(
+                broker="FLATTRADE", client_id="FZ59716", token="old_ft", api_key="ak", api_secret="as",
+                static_ip="1.2.3.4", fingerprint="FLATTRADE:FZ59716", status="working",
+            )
+            with (
+                patch("execution.flattrade.settings.FLATTRADE_FLOW", "WEB"),
+                patch("execution.flattrade.login_flattrade", new=AsyncMock(return_value="new_ft")),
+                patch("execution.flattrade.proxy_request", new=AsyncMock(side_effect=[
+                    PermissionError("Broker Auth Error (HTTP 401): expired"),
+                    {"status": "S", "orderid": "FT_WEB_OK"},
+                ])),
+            ):
+                self.assertTrue(await exit_flattrade(ft_pos, ft_cred))
+
+            # 2. AliceBlue static_ip PermissionError + nested result error -> re-auth retry
+            ab_pos = _pos("ALICE BLUE", "AB123", "SBIN-EQ", 5)
+            ab_cred = Credential(
+                broker="ALICE BLUE", client_id="AB123", token="old_ab", static_ip="1.2.3.4",
+                fingerprint="ALICE BLUE:AB123", status="working",
+            )
+            with (
+                patch("execution.aliceblue.settings.ALICE_BLUE_FLOW", "WEB"),
+                patch("credentials.aliceblue.login_aliceblue", new=AsyncMock(return_value="new_ab")),
+                patch("execution.aliceblue.proxy_request", new=AsyncMock(side_effect=[
+                    PermissionError("Broker Auth Error (HTTP 401): expired"),
+                    {"stat": "Ok", "result": [{"orderNo": "AB_OK_1"}]},
+                ])),
+            ):
+                self.assertTrue(await exit_aliceblue(ab_pos, ab_cred))
+
+            with (
+                patch("execution.aliceblue.settings.ALICE_BLUE_FLOW", "WEB"),
+                patch("credentials.aliceblue.login_aliceblue", new=AsyncMock(return_value="new_ab2")),
+                patch("execution.aliceblue.proxy_request", new=AsyncMock(side_effect=[
+                    {"stat": "Ok", "result": [{"stat": "Not_Ok", "message": "Session expired"}]},
+                    {"stat": "Ok", "result": [{"orderNo": "AB_OK_2"}]},
+                ])),
+            ):
+                self.assertTrue(await exit_aliceblue(ab_pos, ab_cred))
+
+            # 3. Kotak Neo static_ip PermissionError -> re-auth retry
+            k_pos = _pos("KOTAK NEO", "VFIU2", "HDFCBANK-EQ", 5)
+            k_cred = Credential(
+                broker="KOTAK NEO", client_id="VFIU2", token="old_k", api_key="ka", sid="ks",
+                static_ip="1.2.3.4", fingerprint="KOTAK NEO:VFIU2", status="working",
+            )
+            with (
+                patch("execution.kotakneo.login_kotakneo", new=AsyncMock(return_value="new_k")),
+                patch("execution.kotakneo.proxy_request", new=AsyncMock(side_effect=[
+                    PermissionError("Broker Auth Error (HTTP 401): unauthorized"),
+                    {"stat": "Ok", "nOrdNo": "K_OK_9"},
+                ])),
+            ):
+                self.assertTrue(await exit_kotakneo(k_pos, k_cred))
+
+            # 4. mStock instrument cache stores contract symbol instead of bare underlying name
+            fake_redis = MagicMock()
+            fake_redis.hlen = AsyncMock(return_value=0)
+            fake_redis.hset = AsyncMock()
+            fake_redis.expire = AsyncMock()
+            ms_cred = Credential(
+                broker="MSTOCK", client_id="M1", token="mt", api_key="mk",
+                static_ip="1.2.3.4", fingerprint="MSTOCK:M1", status="working",
+            )
+            scrip_rows = [
+                {"token": "2885", "name": "RELIANCE", "exch_seg": "NSE", "symbol": "RELIANCE-EQ", "instrumenttype": "EQ"},
+                {"token": "54321", "name": "NIFTY", "exch_seg": "NFO", "symbol": "NIFTY26NOV25000CE", "instrumenttype": "OPTIDX"},
+            ]
+            mstock_instruments._is_loading = False
+            with (
+                patch.object(core_engine, "redis_pool", fake_redis),
+                patch("execution.mstock_instruments.proxy_request", new=AsyncMock(return_value=scrip_rows)),
+            ):
+                ok = await ensure_mstock_instruments_cached(ms_cred)
+                self.assertTrue(ok)
+                token_call = [c for c in fake_redis.hset.call_args_list if c.args[0] == REDIS_KEY_TOKEN_MAP][0]
+                mapping = token_call.kwargs["mapping"]
+                self.assertEqual(mapping["NSE:2885"], "RELIANCE-EQ")
+                self.assertEqual(mapping["NFO:54321"], "NIFTY26NOV25000CE")
 
 
 if __name__ == "__main__":

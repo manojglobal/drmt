@@ -80,16 +80,14 @@ class PositionManager:
                 except (ValueError, TypeError):
                     qty = 0
             else:
-                qty_raw = (
-                    raw.get("netQty")
-                    or raw.get("netQuantity")
-                    or raw.get("quantity")
-                    or raw.get("netqty")
-                    or raw.get("Netqty")
-                    or 0
-                )
+                qty_raw = None
+                for qk in ("netQty", "netQuantity", "quantity", "netqty", "Netqty"):
+                    qv = raw.get(qk)
+                    if qv is not None and str(qv).strip() != "":
+                        qty_raw = qv
+                        break
                 try:
-                    qty = int(qty_raw)
+                    qty = int(float(str(qty_raw).strip())) if qty_raw is not None else 0
                 except (ValueError, TypeError):
                     qty = 0
             
@@ -136,20 +134,30 @@ class PositionManager:
                 or any(x in sym_upper for x in ("-CE", "-PE", " CE", " PE", " FUT", "-FUT"))
             )
 
-            # Rule: Map BSE/NSE derivatives to their dedicated F&O exchange segments (BFO/NFO).
-            # If explicit BSE/NSE cash stock, preserve BSE/NSE.
-            if "BFO" in raw_exch_upper or "'BFO'" in payload_str or '"BFO"' in payload_str:
+            # Rule: Prefer explicit structured exchange field first so symbol names like BSE-EQ on NSE are not misrouted.
+            # Map BSE/NSE derivatives to their dedicated F&O exchange segments (BFO/NFO).
+            if raw_exch_upper == "BFO" or ("BSE" in raw_exch_upper and is_derivative):
                 exchange = "BFO"
-            elif ("BSE" in raw_exch_upper or "'BSE'" in payload_str or '"BSE"' in payload_str or "SENSEX" in sym_upper or "BANKEX" in sym_upper) and is_derivative:
-                exchange = "BFO"
-            elif "BSE" in raw_exch_upper or "'BSE'" in payload_str or '"BSE"' in payload_str:
+            elif raw_exch_upper == "BSE":
                 exchange = "BSE"
-            elif "NFO" in raw_exch_upper or "'NFO'" in payload_str or '"NFO"' in payload_str:
-                exchange = "NFO"
-            elif raw_exch_upper == "NSE" and is_derivative:
+            elif raw_exch_upper == "NFO" or (raw_exch_upper == "NSE" and is_derivative):
                 exchange = "NFO"
             elif raw_exch_upper in ("NSE", "MCX", "CDS", "BCD"):
                 exchange = raw_exch_upper
+            elif not raw_exch_upper and (("SENSEX" in sym_upper or "BANKEX" in sym_upper) and is_derivative):
+                exchange = "BFO"
+            elif not raw_exch_upper and ("'BFO'" in payload_str or '"BFO"' in payload_str):
+                exchange = "BFO"
+            elif not raw_exch_upper and ("'BSE'" in payload_str or '"BSE"' in payload_str) and is_derivative:
+                exchange = "BFO"
+            elif not raw_exch_upper and ("'BSE'" in payload_str or '"BSE"' in payload_str):
+                exchange = "BSE"
+            elif not raw_exch_upper and ("'NFO'" in payload_str or '"NFO"' in payload_str):
+                exchange = "NFO"
+            elif "NSE" in raw_exch_upper:
+                exchange = "NFO" if is_derivative else "NSE"
+            elif "BSE" in raw_exch_upper:
+                exchange = "BFO" if is_derivative else "BSE"
             else:
                 exchange = "BFO" if is_derivative else "BSE"
             raw_product = None
@@ -304,6 +312,8 @@ class PositionManager:
             
             token_val = str(
                 raw.get("instrumentId")
+                or raw.get("instrument_token")
+                or raw.get("instrumentToken")
                 or raw.get("token")
                 or raw.get("symboltoken")
                 or raw.get("symbolToken")

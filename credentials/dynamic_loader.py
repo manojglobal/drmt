@@ -517,7 +517,7 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
             upsert_query = """
                 INSERT INTO credentials 
                 (broker, client_id, api_key, api_secret, totp_secret, password, static_ip, fingerprint, status, token, token_updated_at, user_id, sid, base_url, sub_account_id, public_key, refresh_token, mobile_number, mpin)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working', ?, COALESCE(?, datetime('now', 'localtime')), ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'working', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(fingerprint) DO UPDATE SET
                     status = 'working',
                     token = CASE 
@@ -525,7 +525,8 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
                         ELSE credentials.token 
                     END,
                     token_updated_at = CASE 
-                        WHEN excluded.token IS NOT NULL AND excluded.token != '' THEN excluded.token_updated_at 
+                        WHEN excluded.token IS NOT NULL AND excluded.token != '' AND excluded.token_updated_at IS NOT NULL AND excluded.token_updated_at != '' THEN excluded.token_updated_at
+                        WHEN excluded.token IS NOT NULL AND excluded.token != '' AND excluded.token != credentials.token THEN NULL
                         ELSE credentials.token_updated_at 
                     END,
                     api_key = excluded.api_key,
@@ -577,6 +578,41 @@ async def fetch_and_sync_credentials(url: Optional[str] = None) -> int:
             await db.execute(archive_query, list(new_configured_cids))
 
         await db.commit()
+
+        # Hydrate in-memory cache from SQLite whenever CSV omitted runtime token/session fields (e.g., on restart)
+        if new_configured_cids:
+            placeholders = ",".join("?" for _ in new_configured_cids)
+            db.row_factory = None
+            async with db.execute(
+                f"""
+                SELECT client_id, token, token_updated_at, sid, base_url, sub_account_id, public_key, refresh_token, mobile_number, mpin
+                FROM credentials
+                WHERE status = 'working' AND client_id IN ({placeholders})
+                """,
+                list(new_configured_cids),
+            ) as cursor:
+                db_rows = await cursor.fetchall()
+
+            for row in db_rows:
+                cid = str(row[0] or "").strip()
+                c_rec = _client_creds.get(cid)
+                if not c_rec:
+                    continue
+                if not c_rec.get("token") and row[1]:
+                    c_rec["token"] = str(row[1]).strip()
+                    if not c_rec.get("token_created_at") and row[2]:
+                        c_rec["token_created_at"] = str(row[2])
+                for idx, field in (
+                    (3, "sid"),
+                    (4, "base_url"),
+                    (5, "sub_account_id"),
+                    (6, "public_key"),
+                    (7, "refresh_token"),
+                    (8, "mobile_number"),
+                    (9, "mpin"),
+                ):
+                    if not c_rec.get(field) and row[idx]:
+                        c_rec[field] = str(row[idx]).strip()
 
     source_label = "Dropbox" if use_dropbox and parsed[3] else "CSV"
     logger.info(f"✅ Successfully synced {upserted_count} credentials from {source_label} into SQLite.")

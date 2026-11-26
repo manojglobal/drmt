@@ -292,6 +292,12 @@ class PayloadMaster:
         }
 
     @staticmethod
+    def encode_flattrade_sdk_form(j_data: str, j_key: str) -> str:
+        """Builds Pi Connect jData/jKey body preserving raw JSON syntax while escaping '&' as \\u0026."""
+        safe_j_data = str(j_data or "").replace("&", "\\u0026")
+        return f"jData={safe_j_data}&jKey={j_key or ''}"
+
+    @staticmethod
     def build_flattrade_sdk_payload(pos: Position, cred: Credential) -> str:
         """Builds Flattrade Pi Connect form-encoded order payload (jData=...&jKey=...)."""
         tran_type = "S" if pos.quantity > 0 else "B"
@@ -343,7 +349,7 @@ class PayloadMaster:
             "remarks": remarks,
         }, separators=(",", ":"))
 
-        return f"jData={j_data}&jKey={cred.token}"
+        return PayloadMaster.encode_flattrade_sdk_form(j_data, cred.token)
 
     @staticmethod
     def build_fyers_payload(pos: Position) -> Dict[str, Any]:

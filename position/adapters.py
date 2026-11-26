@@ -9,6 +9,7 @@ from settings import settings
 from models.schemas import Credential, Position
 from credentials.httpclient import proxy_request
 from core.engine import core_engine
+from position.blocklist import is_auth_failure_message
 from position.manager import PositionManager
 from execution.mstock_instruments import ensure_mstock_instruments_cached
 from credentials.fyers import get_fyers_auth_header
@@ -142,8 +143,8 @@ async def poll_mstock(cred: Credential) -> List[Position]:
             await logger_api.info(f"✅ [mStock Active Open Positions] ({cred.client_id}): Total={len(positions)} | {'; '.join(norm_details)}")
         return positions
     except Exception as e:
-        if "401" in str(e) or "403" in str(e) or isinstance(e, PermissionError) or any(x in str(e).lower() for x in ("invalid token", "token expired", "unauthorized", "jwt", "session expired", "invalid session", "auth error")):
-            await logger_api.error(f"❌ [mStock Auth Error] ({cred.client_id}): {e}")
+        if isinstance(e, PermissionError) or is_auth_failure_message(str(e)):
+            await logger_api.error(f"❌ [MStock Auth Error] ({cred.client_id}): {e}")
             raise PermissionError(f"MStock Auth Error: {e}")
         await logger_api.error(f"❌ [mStock Poll Error] ({cred.client_id}): {e}")
         raise
@@ -163,9 +164,10 @@ async def poll_flattrade(cred: Credential) -> List[Position]:
 
 async def _poll_flattrade_sdk(cred: Credential) -> List[Position]:
     """Flattrade Position Polling via Official Pi Connect SDK flow."""
+    from execution.payload_master import PayloadMaster
     url = "https://piconnect.flattrade.in/PiConnectAPI/PositionBook"
     j_data = json.dumps({"uid": cred.client_id, "actid": cred.client_id}, separators=(",", ":"))
-    form_body = f"jData={j_data}&jKey={cred.token}"
+    form_body = PayloadMaster.encode_flattrade_sdk_form(j_data, cred.token)
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
         "User-Agent": "DRMT/2.0"
@@ -241,7 +243,7 @@ async def _poll_flattrade_sdk(cred: Credential) -> List[Position]:
             await logger_api.info(f"✅ [Flattrade Pi SDK Active Open Positions] ({cred.client_id}): Total={len(normalized)} | {'; '.join(norm_details)}")
         return normalized
     except Exception as e:
-        if "401" in str(e) or "403" in str(e) or isinstance(e, PermissionError) or any(x in str(e).lower() for x in ("invalid session", "session expired", "invalid key", "not logged in", "token expired", "unauthorized", "invalid token", "forbidden", "account locked")):
+        if isinstance(e, PermissionError) or is_auth_failure_message(str(e)):
             await logger_api.error(f"❌ [Flattrade Pi SDK Auth Error] ({cred.client_id}): {e}")
             raise PermissionError(f"Flattrade Auth Error: {e}")
         await logger_api.error(f"❌ [Flattrade Pi SDK Poll Error] ({cred.client_id}): {e}")
@@ -423,75 +425,87 @@ async def _poll_flattrade_web(cred: Credential) -> List[Position]:
             await logger_api.info(f"✅ [Flattrade Active Open Positions] ({cred.client_id}): Total={len(normalized)} | {'; '.join(norm_details)}")
         return normalized
     except Exception as e:
-        if "401" in str(e) or "403" in str(e) or isinstance(e, PermissionError) or any(x in str(e).lower() for x in ("invalid session", "session expired", "invalid key", "not logged in", "token expired", "unauthorized", "invalid token", "forbidden", "account locked")):
+        if isinstance(e, PermissionError) or is_auth_failure_message(str(e)):
             await logger_api.error(f"❌ [Flattrade Auth Error] ({cred.client_id}): {e}")
             raise PermissionError(f"Flattrade Auth Error: {e}")
         await logger_api.error(f"❌ [Flattrade Poll Error] ({cred.client_id}): {e}")
         raise
 
 async def poll_aliceblue(cred: Credential) -> List[Position]:
-    """AliceBlue Position Polling (Direct HTTP)."""
-    session = core_engine.http_session
-    if not session:
-        raise RuntimeError("HTTP Session not initialized")
-        
+    """AliceBlue Position Polling (via DRMT Proxy when static_ip is set, or Direct HTTP)."""
     url = "https://ant.aliceblueonline.com/open-api/od/v1/positions"
     headers = {
         "Authorization": f"Bearer {cred.token}",
         "Content-Type": "application/json"
     }
-    
-    try:
-        async with session.get(url, headers=headers) as resp:
-            if resp.status in (401, 403):
-                raise PermissionError(f"AliceBlue Auth Error: HTTP {resp.status}")
-            resp.raise_for_status()
-            data = await resp.json(content_type=None)
-            raw_data_str = json.dumps(data, default=str) if isinstance(data, (dict, list)) else str(data)
-            await logger_api.info(f"📥 [DIRECT RESP] GET {url} -> HTTP {resp.status} | Body: {raw_data_str}")
-            if _last_raw_payloads.get(f"aliceblue:{cred.client_id}") != raw_data_str:
-                _last_raw_payloads[f"aliceblue:{cred.client_id}"] = raw_data_str
-                await logger_api.info(f"📥 [AliceBlue Positions Response] ({cred.client_id}): {raw_data_str}")
-            
-            # Check for error or session expiration in 200 OK responses (both stat and status keys)
-            stat = str(data.get("stat") or data.get("status") or "").lower()
-            emsg = str(data.get("emsg", "") or data.get("message", ""))
-            
-            if stat == "not_ok":
-                # Rule: AliceBlue EC920 means no positions, not an error.
-                if "ec920" in emsg.lower():
-                    await logger_api.info(f"📋 [AliceBlue Position Book] ({cred.client_id}): 0 positions (EC920: No open positions)")
-                    return []
-                if any(x in emsg.lower() for x in ("login", "session", "token", "unauthorized", "expired", "invalid user", "access denied", "forbidden", "authentication failed", "user not found")):
-                    await logger_api.error(f"❌ [AliceBlue Auth Failed] ({cred.client_id}): {emsg}")
-                    raise PermissionError(f"AliceBlue Auth Error: {emsg}")
-                await logger_api.error(f"❌ [AliceBlue Broker Error] ({cred.client_id}): {emsg}")
-                raise RuntimeError(f"AliceBlue Poll Error: {emsg}")
-                
-            result = data.get("result", [])
-            if isinstance(result, list) and result:
-                item_details = [
-                    f"{p.get('TradingSymbol') or p.get('symbol')}[Net:{p.get('Netqty', 0)},Buy:{p.get('Buyqty', 0)},Sell:{p.get('Sellqty', 0)},Avg:{p.get('Netavgprc', 0)},LTP:{p.get('LTP', 0)},PnL:{p.get('MtoM', 0)}]"
-                    for p in result if isinstance(p, dict)
-                ]
-                await logger_api.info(f"📋 [AliceBlue Position Book Items] ({cred.client_id}): Total={len(result)} | Details: {'; '.join(item_details)}")
-            else:
-                await logger_api.info(f"📋 [AliceBlue Position Book Items] ({cred.client_id}): 0 positions returned")
 
-            asyncio.create_task(ensure_alice_instruments_cached(cred))
-            normalized = PositionManager.normalize_positions(result, cred.broker, cred.client_id) if isinstance(result, list) else []
-            if normalized:
-                norm_details = [
-                    f"{p.symbol} Qty:{p.quantity} Side:{p.transaction_type} Prd:{p.product_type} Avg:₹{p.avg_price} LTP:₹{p.ltp} PnL:₹{p.pnl}"
-                    for p in normalized
-                ]
-                await logger_api.info(f"✅ [AliceBlue Active Open Positions] ({cred.client_id}): Total={len(normalized)} | {'; '.join(norm_details)}")
-            return normalized
+    try:
+        if cred.static_ip:
+            data = await proxy_request("GET", url, str(cred.static_ip), headers=headers)
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except Exception:
+                    data = {}
+            raw_data_str = json.dumps(data, default=str) if isinstance(data, (dict, list)) else str(data)
+            await logger_api.info(f"📥 [PROXY RESP] GET {url} -> Body: {raw_data_str}")
+        else:
+            session = core_engine.http_session
+            if not session:
+                raise RuntimeError("HTTP Session not initialized")
+            async with session.get(url, headers=headers) as resp:
+                if resp.status in (401, 403):
+                    raise PermissionError(f"AliceBlue Auth Error: HTTP {resp.status}")
+                resp.raise_for_status()
+                data = await resp.json(content_type=None)
+                raw_data_str = json.dumps(data, default=str) if isinstance(data, (dict, list)) else str(data)
+                await logger_api.info(f"📥 [DIRECT RESP] GET {url} -> HTTP {resp.status} | Body: {raw_data_str}")
+
+        if not isinstance(data, dict):
+            data = {}
+        if _last_raw_payloads.get(f"aliceblue:{cred.client_id}") != raw_data_str:
+            _last_raw_payloads[f"aliceblue:{cred.client_id}"] = raw_data_str
+            await logger_api.info(f"📥 [AliceBlue Positions Response] ({cred.client_id}): {raw_data_str}")
+
+        # Check for error or session expiration in 200 OK responses (both stat and status keys)
+        stat = str(data.get("stat") or data.get("status") or "").lower()
+        emsg = str(data.get("emsg", "") or data.get("message", ""))
+
+        if stat == "not_ok":
+            # Rule: AliceBlue EC920 means no positions, not an error.
+            if "ec920" in emsg.lower():
+                await logger_api.info(f"📋 [AliceBlue Position Book] ({cred.client_id}): 0 positions (EC920: No open positions)")
+                return []
+            if any(x in emsg.lower() for x in ("login", "session", "token", "unauthorized", "expired", "invalid user", "access denied", "forbidden", "authentication failed", "user not found")):
+                await logger_api.error(f"❌ [AliceBlue Auth Failed] ({cred.client_id}): {emsg}")
+                raise PermissionError(f"AliceBlue Auth Error: {emsg}")
+            await logger_api.error(f"❌ [AliceBlue Broker Error] ({cred.client_id}): {emsg}")
+            raise RuntimeError(f"AliceBlue Poll Error: {emsg}")
+
+        result = data.get("result", [])
+        if isinstance(result, list) and result:
+            item_details = [
+                f"{p.get('TradingSymbol') or p.get('symbol')}[Net:{p.get('Netqty', 0)},Buy:{p.get('Buyqty', 0)},Sell:{p.get('Sellqty', 0)},Avg:{p.get('Netavgprc', 0)},LTP:{p.get('LTP', 0)},PnL:{p.get('MtoM', 0)}]"
+                for p in result if isinstance(p, dict)
+            ]
+            await logger_api.info(f"📋 [AliceBlue Position Book Items] ({cred.client_id}): Total={len(result)} | Details: {'; '.join(item_details)}")
+        else:
+            await logger_api.info(f"📋 [AliceBlue Position Book Items] ({cred.client_id}): 0 positions returned")
+
+        asyncio.create_task(ensure_alice_instruments_cached(cred))
+        normalized = PositionManager.normalize_positions(result, cred.broker, cred.client_id) if isinstance(result, list) else []
+        if normalized:
+            norm_details = [
+                f"{p.symbol} Qty:{p.quantity} Side:{p.transaction_type} Prd:{p.product_type} Avg:₹{p.avg_price} LTP:₹{p.ltp} PnL:₹{p.pnl}"
+                for p in normalized
+            ]
+            await logger_api.info(f"✅ [AliceBlue Active Open Positions] ({cred.client_id}): Total={len(normalized)} | {'; '.join(norm_details)}")
+        return normalized
     except PermissionError:
         raise
     except Exception as e:
         await logger_api.error(f"❌ [AliceBlue Poll Exception] ({cred.client_id}): {e}")
-        if "401" in str(e) or "403" in str(e) or any(x in str(e).lower() for x in ("login", "session", "token", "unauthorized", "expired", "invalid user", "access denied", "forbidden", "auth")):
+        if is_auth_failure_message(str(e)):
             raise PermissionError(f"AliceBlue Auth Error: {e}")
         raise RuntimeError(f"AliceBlue Poll Error: {e}")
 
@@ -568,7 +582,7 @@ async def poll_fyers(cred: Credential) -> List[Position]:
         return normalized
     except Exception as e:
         await logger_api.error(f"❌ [Fyers Poll Exception] ({cred.client_id}): {e}")
-        if "401" in str(e) or "403" in str(e) or "-17" in str(e) or isinstance(e, PermissionError) or any(x in str(e).lower() for x in ("token", "session", "unauthorized", "forbidden", "authenticate")):
+        if isinstance(e, PermissionError) or is_auth_failure_message(str(e)):
             raise PermissionError(f"Fyers Auth Error: {e}")
         raise
 
@@ -723,7 +737,7 @@ async def poll_kotakneo(cred: Credential) -> List[Position]:
         return positions
     except Exception as e:
         await logger_api.error(f"❌ [Kotak Neo Poll Exception] ({cred.client_id}): {e}")
-        if "401" in str(e) or "403" in str(e) or "100010" in str(e) or "100022" in str(e) or "100008" in str(e) or isinstance(e, PermissionError) or any(x in str(e).lower() for x in ("session", "token", "unauthorized", "not logged in")):
+        if isinstance(e, PermissionError) or is_auth_failure_message(str(e)):
             raise PermissionError(f"Kotak Neo Auth Error: {e}")
         raise
 
@@ -923,7 +937,7 @@ async def poll_axisdirect(cred: Credential) -> List[Position]:
         return positions
     except Exception as e:
         await logger_api.error(f"❌ [Axis Direct Poll Exception] ({cred.client_id}): {e}")
-        if "401" in str(e) or "403" in str(e) or isinstance(e, PermissionError) or any(x in str(e).lower() for x in ("session", "token", "unauthorized", "expired", "handshake")):
+        if isinstance(e, PermissionError) or is_auth_failure_message(str(e)):
             raise PermissionError(f"Axis Direct Auth Error: {e}")
         raise
 

@@ -7,6 +7,7 @@ from credentials.dedup import save_working_credential
 from credentials.httpclient import proxy_request
 from logger.logger import logger_auth, logger_api, sanitize_log_message
 from models.schemas import Credential
+from position.blocklist import is_auth_failure_message, is_transient_error
 
 logger = logging.getLogger("DRMT.SCM")
 
@@ -95,10 +96,19 @@ async def login_fyers(cred: Credential) -> str:
             return cred.token
         else:
             await logger_api.error(f"❌ [Fyers Auth Error] ({cred.client_id}): code={code_val}, message='{msg}' | Full Response: {resp_str}")
-            raise ValueError(
-                f"Fyers authentication failed for {cred.client_id} (code={code_val}, message='{msg}'). "
-                "Token expired or invalid — please refresh access_token in CSV."
-            )
+            is_gateway_err = False
+            try:
+                is_gateway_err = code_val is not None and int(code_val) >= 500
+            except (ValueError, TypeError):
+                pass
+            if is_gateway_err and not is_auth_failure_message(str(msg)):
+                raise RuntimeError(f"Fyers gateway error (HTTP {code_val}) for {cred.client_id}: {msg}")
+            if code_val in (401, 403, -17, -50, -16, -8) or is_auth_failure_message(str(msg)):
+                raise ValueError(
+                    f"Fyers authentication failed for {cred.client_id} (code={code_val}, message='{msg}'). "
+                    "Token expired or invalid — please refresh access_token in CSV."
+                )
+            raise RuntimeError(f"Fyers profile verification failed for {cred.client_id} (code={code_val}, message='{msg}')")
 
     except PermissionError as pe:
         await logger_api.error(f"❌ [Fyers Auth Error] ({cred.client_id}): {pe}")
@@ -110,4 +120,6 @@ async def login_fyers(cred: Credential) -> str:
         raise
     except Exception as e:
         await logger_api.error(f"❌ [Fyers Auth Exception] ({cred.client_id}): {e}")
+        if is_transient_error(e):
+            raise
         raise ValueError(f"Fyers login check error for {cred.client_id}: {e}")

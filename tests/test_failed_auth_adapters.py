@@ -358,6 +358,18 @@ class TestFailedAuthAdapters(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(ok)
             self.assertTrue(is_blocked(cred.client_id))
 
+        # 3. Infra 'Core Engine HTTP session not initialized' and HTTP 503 must NOT falsely blocklist
+        clear_blocklist()
+        with patch("position.chronos.login_mstock", side_effect=RuntimeError("Core Engine HTTP session not initialized")):
+            ok = await refresh_token_with_backoff(cred, send_email=False)
+            self.assertFalse(ok)
+            self.assertFalse(is_blocked(cred.client_id))
+
+        with patch("position.chronos.login_mstock", side_effect=RuntimeError("Broker HTTP 503 Error: Service Unavailable - session retry")):
+            ok = await refresh_token_with_backoff(cred, send_email=False)
+            self.assertFalse(ok)
+            self.assertFalse(is_blocked(cred.client_id))
+
 
 if __name__ == "__main__":
     unittest.main()
