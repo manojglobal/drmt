@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
+import contextvars
 import logging
 import os
 
@@ -9,11 +10,17 @@ from settings import settings
 
 logger = logging.getLogger("DRMT.DB")
 
+# Tracks the asyncio.Task holding a connection so same-task re-entrant get_db() fails fast instead of deadlocking.
+_active_db_task: contextvars.ContextVar[asyncio.Task | None] = contextvars.ContextVar("_active_db_task", default=None)
+
 class DatabasePool:
-    def __init__(self, db_path: str, max_connections: int = 5):
+    def __init__(self, db_path: str, max_connections: int = 5, acquire_timeout: float = 15.0):
         # Initializes the class with default values and state.
         self.db_path = db_path
+        self.max_connections = max_connections
+        self.acquire_timeout = acquire_timeout
         self._semaphore = asyncio.Semaphore(max_connections)
+        self._semaphore_loop: asyncio.AbstractEventLoop | None = None
         self._connections = []
         self._initialized = False
 
@@ -105,16 +112,41 @@ class DatabasePool:
         self._initialized = True
         logger.info("🗄️  Database initialized successfully.")
 
+    def _get_semaphore(self) -> asyncio.Semaphore:
+        """Returns a semaphore bound to the active running event loop."""
+        loop = asyncio.get_running_loop()
+        if self._semaphore_loop is not loop:
+            # Lazily rebind semaphore when accessed from a new event loop (e.g. reloaders/tests).
+            self._semaphore = asyncio.Semaphore(self.max_connections)
+            self._semaphore_loop = loop
+        return self._semaphore
+
     @asynccontextmanager
     async def get_connection(self):
         """Context manager yielding a DB connection restricted by semaphore."""
-        async with self._semaphore:
-            conn = await aiosqlite.connect(self.db_path)
+        current_task = asyncio.current_task()
+        if current_task is not None and _active_db_task.get() is current_task:
+            raise RuntimeError(
+                "Reentrant get_db() call detected on the same task; exit outer get_db() before acquiring another."
+            )
+
+        sem = self._get_semaphore()
+        acquired = False
+        try:
+            acquired = await asyncio.wait_for(sem.acquire(), timeout=self.acquire_timeout)
+            token = _active_db_task.set(current_task)
+            conn = None
             try:
+                conn = await aiosqlite.connect(self.db_path)
                 await conn.execute("PRAGMA foreign_keys=ON;")
                 yield conn
             finally:
-                await conn.close()
+                _active_db_task.reset(token)
+                if conn is not None:
+                    await conn.close()
+        finally:
+            if acquired:
+                sem.release()
 
 db_pool = DatabasePool(settings.DB_PATH, settings.DB_POOL_SIZE)
 

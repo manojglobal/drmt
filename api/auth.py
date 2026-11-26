@@ -73,18 +73,19 @@ async def login(request: web.Request):
             ) as cursor:
                 row = await cursor.fetchone()
 
-            if not row:
-                await record_audit_log(None, username, "LOGIN_FAILED", "FAILURE", ip, ua, "User does not exist")
-                return web.json_response({"success": False, "message": "Invalid credentials"}, status=401)
+        if not row:
+            await record_audit_log(None, username, "LOGIN_FAILED", "FAILURE", ip, ua, "User does not exist")
+            return web.json_response({"success": False, "message": "Invalid credentials"}, status=401)
 
-            if not verify_password(password, row[2]):
-                await record_audit_log(row[0], username, "LOGIN_FAILED", "FAILURE", ip, ua, "Invalid password")
-                return web.json_response({"success": False, "message": "Invalid credentials"}, status=401)
+        if not verify_password(password, row[2]):
+            await record_audit_log(row[0], username, "LOGIN_FAILED", "FAILURE", ip, ua, "Invalid password")
+            return web.json_response({"success": False, "message": "Invalid credentials"}, status=401)
 
-            user_id = row[0]
-            token = generate_session_token()
-            expires = datetime.now() + timedelta(days=1)
+        user_id = row[0]
+        token = generate_session_token()
+        expires = datetime.now() + timedelta(days=1)
 
+        async with get_db() as db:
             await db.execute(
                 "INSERT INTO sessions (user_id, token, expires_at) VALUES (?, ?, ?)",
                 (user_id, token, expires.isoformat()),
@@ -163,11 +164,13 @@ async def require_auth(request: web.Request) -> User:
             content_type='application/json'
         )
 
+    is_expired = False
     async with get_db() as db:
-        # Join sessions + users to get the full user record in one query
+        db.row_factory = None
+        # Join sessions + users to fetch user record and expiry in one query
         async with db.execute(
             """
-            SELECT u.id, u.username, u.password_hash, u.created_at
+            SELECT u.id, u.username, u.password_hash, u.created_at, s.expires_at
             FROM sessions s
             JOIN users u ON s.user_id = u.id
             WHERE s.token = ?
@@ -176,29 +179,28 @@ async def require_auth(request: web.Request) -> User:
         ) as cursor:
             row = await cursor.fetchone()
 
-        if not row:
-            await record_audit_log(None, "unauthorized", "SESSION_INVALID", "FAILURE", ip, ua, f"Invalid session token for {request.path}")
-            raise web.HTTPUnauthorized(
-                text=json.dumps({"success": False, "message": "Invalid session"}),
-                content_type='application/json'
-            )
+        if row is not None:
+            expires_str = row[4]
+            expires = datetime.fromisoformat(expires_str) if isinstance(expires_str, str) else expires_str
+            if datetime.now() > expires:
+                is_expired = True
+                await db.execute("DELETE FROM sessions WHERE token = ?", (token,))
+                await db.commit()
 
-        # Check expiry
-        async with db.execute(
-            "SELECT expires_at FROM sessions WHERE token = ?", (token,)
-        ) as cursor:
-            session_row = await cursor.fetchone()
+    # Release the outer DB connection before auditing to prevent nested get_db() semaphore deadlock
+    if not row:
+        await record_audit_log(None, "unauthorized", "SESSION_INVALID", "FAILURE", ip, ua, f"Invalid session token for {request.path}")
+        raise web.HTTPUnauthorized(
+            text=json.dumps({"success": False, "message": "Invalid session"}),
+            content_type='application/json'
+        )
 
-        expires_str = session_row[0]
-        expires = datetime.fromisoformat(expires_str) if isinstance(expires_str, str) else expires_str
-        if datetime.now() > expires:
-            await db.execute("DELETE FROM sessions WHERE token = ?", (token,))
-            await db.commit()
-            await record_audit_log(row[0], row[1], "SESSION_EXPIRED", "FAILURE", ip, ua, f"Session expired for {request.path}")
-            raise web.HTTPUnauthorized(
-                text=json.dumps({"success": False, "message": "Session expired"}),
-                content_type='application/json'
-            )
+    if is_expired:
+        await record_audit_log(row[0], row[1], "SESSION_EXPIRED", "FAILURE", ip, ua, f"Session expired for {request.path}")
+        raise web.HTTPUnauthorized(
+            text=json.dumps({"success": False, "message": "Session expired"}),
+            content_type='application/json'
+        )
 
     return User(
         id=row[0],
