@@ -29,8 +29,11 @@ class PayloadMaster:
     @staticmethod
     def build_axis_payload(pos: Position, cred: Credential) -> Dict[str, Any]:
         """Builds Axis Direct order payload with Market Protection Pricing (MPP) for Options."""
-        txn_type = "SELL" if pos.quantity > 0 else "BUY"
-        qty = abs(int(pos.quantity))
+        raw_qty = int(pos.quantity)
+        if raw_qty == 0:
+            raise ValueError(f"Cannot build Axis Direct exit order for zero-quantity position: {pos.symbol}")
+        txn_type = "SELL" if raw_qty > 0 else "BUY"
+        qty = abs(raw_qty)
 
         exch_upper = str(pos.exchange or "").upper().strip()
         sym_upper = str(pos.symbol or "").upper().strip()

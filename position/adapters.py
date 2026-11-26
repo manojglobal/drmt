@@ -729,7 +729,7 @@ async def poll_kotakneo(cred: Credential) -> List[Position]:
 
 
 async def poll_axisdirect(cred: Credential) -> List[Position]:
-    """Axis Direct Position Polling via RAPID API (get-positions with order-book fallback)."""
+    """Axis Direct Position Polling via RAPID API (/trading/portfolio/get-positions)."""
     api_client_id = cred.api_key or ""
     authorization_key = cred.api_secret or ""
     sub_account_id = getattr(cred, "sub_account_id", "") or cred.client_id or ""
@@ -746,7 +746,7 @@ async def poll_axisdirect(cred: Credential) -> List[Position]:
 
     all_raw_items = []
     try:
-        # 1. First probe portfolio positions endpoint
+        # Probe portfolio open positions across F&O and Equity segments
         for seg in ("FO", "EQ"):
             url = f"{AXIS_INVEST_BASE_URL.rstrip('/')}/trading/portfolio/get-positions"
             status_code, resp = await send_axis_api_request(
@@ -763,11 +763,17 @@ async def poll_axisdirect(cred: Credential) -> List[Position]:
 
             err_dict = resp.get("error", {}) if isinstance(resp, dict) else {}
             err_code = str(err_dict.get("code") or "")
-            err_msg_axis = str(err_dict.get("message") or "")
-            if status_code in (401, 403) or err_code in ("1001", "1002", "1003", "1004", "1005", "1010", "1081", "1082", "1090", "1091", "1200") or any(x in err_msg_axis.lower() for x in ("session", "token", "unauthorized", "invalid user", "expired")):
+            err_msg_axis = str(err_dict.get("message") or err_dict.get("error") or "")
+            if status_code in (401, 403) or err_code in ("1002", "1003", "1004", "1005", "1010", "1081", "1082", "1090", "1091", "1200") or any(x in err_msg_axis.lower() for x in ("session", "token", "unauthorized", "invalid user", "expired")):
                 raise PermissionError(
-                    f"Axis Direct Auth Error for {cred.client_id} (code={err_code or status_code}): {err_dict.get('message', 'Session expired')}"
+                    f"Axis Direct Auth Error for {cred.client_id} (code={err_code or status_code}): {err_msg_axis or 'Session expired'}"
                 )
+
+            if err_dict or (isinstance(resp, dict) and int(resp.get("statusCode") or status_code or 200) >= 400):
+                await logger_api.warn(
+                    f"⚠️ [Axis Direct get-positions Non-Auth Error] ({cred.client_id}, seg={seg}): {json.dumps(resp, default=str)}"
+                )
+                continue
 
             if isinstance(resp, dict):
                 data = resp.get("data") if ("data" in resp and resp.get("data") is not None) else resp
@@ -784,156 +790,22 @@ async def poll_axisdirect(cred: Credential) -> List[Position]:
             if isinstance(items, list):
                 all_raw_items.extend(items)
 
-        # 2. If portfolio positions were empty or returned 404, fallback to order-book to derive positions
-        if not all_raw_items:
-            for seg in ("FO", "EQ"):
-                ob_url = f"{AXIS_INVEST_BASE_URL.rstrip('/')}/trading/orders/get-order-book"
-                status_code, ob_resp = await send_axis_api_request(
-                    method="POST",
-                    url=ob_url,
-                    static_ip=str(cred.static_ip or ""),
-                    authorization_key=authorization_key,
-                    api_client_id=api_client_id,
-                    sub_account_id=sub_account_id,
-                    access_token=access_token,
-                    public_key=public_key,
-                    body={"segment": seg, "omsOrderId": "", "orderStatus": "-1"},
-                )
-                err_dict = ob_resp.get("error", {}) if isinstance(ob_resp, dict) else {}
-                err_code = str(err_dict.get("code") or "")
-                err_msg_axis = str(err_dict.get("message") or "")
-                if status_code in (401, 403) or err_code in ("1001", "1002", "1003", "1004", "1005", "1010", "1081", "1082", "1090", "1091", "1200") or any(x in err_msg_axis.lower() for x in ("session", "token", "unauthorized", "invalid user", "expired")):
-                    raise PermissionError(
-                        f"Axis Direct Auth Error for {cred.client_id} (code={err_code or status_code}): {err_dict.get('message', 'Session expired')}"
-                    )
-
-                ob_data = ob_resp.get("data") if isinstance(ob_resp, dict) else ob_resp
-                ob_orders = []
-                if isinstance(ob_data, dict):
-                    ob_orders = ob_data.get("orders") or []
-                elif isinstance(ob_data, list):
-                    ob_orders = ob_data
-                if isinstance(ob_orders, list):
-                    all_raw_items.extend(ob_orders)
-
-        # If orderbook orders, derive open net positions from executed trades
+        # Deduplicate portfolio positions across segments; never infer open positions from day order-book
         positions_to_normalize = []
-        if all_raw_items and any("orderStatus" in x or "omsOrderId" in x for x in all_raw_items if isinstance(x, dict)):
-            # Deduplicate raw order records by unique order identifier (omsOrderId / orderRefId)
-            seen_order_ids = set()
-            unique_orders = []
-            for o in all_raw_items:
-                if not isinstance(o, dict):
+        seen_pos_keys = set()
+        for it in all_raw_items:
+            if not isinstance(it, dict):
+                continue
+            pkey = (
+                str(it.get("exchange") or ""),
+                str(it.get("scriptId") or it.get("token") or ""),
+                str(it.get("product") or ""),
+            )
+            if pkey != ("", "", ""):
+                if pkey in seen_pos_keys:
                     continue
-                oid = str(o.get("omsOrderId") or o.get("orderRefId") or o.get("exchangeOrderId") or "").strip()
-                if oid:
-                    if oid in seen_order_ids:
-                        continue
-                    seen_order_ids.add(oid)
-                unique_orders.append(o)
-
-            order_groups: Dict[str, Dict[str, Any]] = {}
-            for o in unique_orders:
-                if not isinstance(o, dict):
-                    continue
-                st = str(o.get("orderStatus") or "").upper()
-                if st not in ("TRADED", "COMPLETE", "EXECUTED"):
-                    continue
-                sym = str(o.get("scriptId") or o.get("tradingSymbol") or "").strip()
-                if not sym:
-                    continue
-                exch = str(o.get("exchange") or "").strip()
-                key = f"{exch}:{sym}"
-                txn = str(o.get("transactionType") or "").upper()
-                qty = float(o.get("executedQty") or o.get("tradeQty") or o.get("totalQty") or 0)
-                
-                # Extract executed price across multiple potential broker keys (both camelCase and snake_case)
-                price = 0.0
-                for pk in (
-                    "average_price", "avg_price", "averagePrice", "avgPrice",
-                    "tradedPrice", "tradePrice", "traded_price", "trade_price",
-                    "executionPrice", "execution_price", "executedPrice", "executed_price",
-                    "orderPrice", "order_price", "price", "rate", "costPrice", "buyAvgPrice"
-                ):
-                    pv = o.get(pk)
-                    if pv is not None:
-                        try:
-                            fp = float(pv)
-                            if fp > 0:
-                                price = fp
-                                break
-                        except (ValueError, TypeError):
-                            pass
-
-                # Also inspect nested trade details if present in order record
-                if price == 0.0:
-                    for nested_k in ("tradeDetails", "executedDetails", "trades", "orderDetails", "fillDetails"):
-                        nested_items = o.get(nested_k)
-                        if isinstance(nested_items, list) and nested_items:
-                            for n_item in nested_items:
-                                if isinstance(n_item, dict):
-                                    for npk in ("tradePrice", "tradedPrice", "price", "rate", "avgPrice", "averagePrice"):
-                                        nv = n_item.get(npk)
-                                        if nv is not None:
-                                            try:
-                                                fp = float(nv)
-                                                if fp > 0:
-                                                    price = fp
-                                                    break
-                                            except (ValueError, TypeError):
-                                                pass
-                                if price > 0:
-                                    break
-                        if price > 0:
-                            break
-
-                prod = str(o.get("productType") or "DELIVERY").strip()
-
-                if key not in order_groups:
-                    order_groups[key] = {
-                        "scriptId": sym,
-                        "exchange": exch,
-                        "product": prod,
-                        "buyQty": 0.0,
-                        "sellQty": 0.0,
-                        "buyVal": 0.0,
-                        "sellVal": 0.0,
-                    }
-                if txn in ("BUY", "B"):
-                    order_groups[key]["buyQty"] += qty
-                    order_groups[key]["buyVal"] += qty * price
-                else:
-                    order_groups[key]["sellQty"] += qty
-                    order_groups[key]["sellVal"] += qty * price
-
-            for key, g in order_groups.items():
-                net_qty = g["buyQty"] - g["sellQty"]
-                if net_qty != 0:
-                    if net_qty > 0 and g["buyQty"] > 0:
-                        avg_p = g["buyVal"] / g["buyQty"]
-                    elif net_qty < 0 and g["sellQty"] > 0:
-                        avg_p = g["sellVal"] / g["sellQty"]
-                    else:
-                        avg_p = 0.0
-                    positions_to_normalize.append({
-                        "scriptId": g["scriptId"],
-                        "exchange": g["exchange"],
-                        "product": g["product"],
-                        "netQty": int(net_qty),
-                        "avgPrice": round(avg_p, 2),
-                        "transactionType": "BUY" if net_qty > 0 else "SELL",
-                    })
-        else:
-            # Deduplicate portfolio positions if identical items returned across segments
-            seen_pos_keys = set()
-            for it in all_raw_items:
-                if isinstance(it, dict):
-                    pkey = (str(it.get("exchange") or ""), str(it.get("scriptId") or it.get("token") or ""), str(it.get("product") or ""))
-                    if pkey != ("", "", ""):
-                        if pkey in seen_pos_keys:
-                            continue
-                        seen_pos_keys.add(pkey)
-                positions_to_normalize.append(it)
+                seen_pos_keys.add(pkey)
+            positions_to_normalize.append(it)
 
         # Ensure Axis Direct Script Master is cached in Redis (non-blocking)
         asyncio.create_task(ensure_axis_instruments_cached(cred))
@@ -953,8 +825,16 @@ async def poll_axisdirect(cred: Credential) -> List[Position]:
             await logger_api.info(f"📥 [Axis Direct Positions Response] ({cred.client_id}): {payload_str}")
 
         if positions_to_normalize:
+            def _raw_side(item: Dict[str, Any]) -> str:
+                if item.get("transactionType"):
+                    return str(item["transactionType"]).upper()
+                try:
+                    return "SELL" if float(item.get("netQty") or 0) < 0 else "BUY"
+                except (ValueError, TypeError):
+                    return "BUY"
+
             item_details = [
-                f"{p.get('tradingSymbol') or p.get('symbol') or p.get('scriptId')}[Net:{p.get('netQty', 0)},Avg:{p.get('avgPrice', 0)},Side:{p.get('transactionType', 'BUY')},Prd:{p.get('product', '')}]"
+                f"{p.get('tradingSymbol') or p.get('symbol') or p.get('scriptId')}[Net:{p.get('netQty', 0)},Avg:{p.get('avgPrice', 0)},Side:{_raw_side(p)},Prd:{p.get('product', '')}]"
                 for p in positions_to_normalize if isinstance(p, dict)
             ]
             await logger_api.info(f"📋 [Axis Direct Position Book Items] ({cred.client_id}): Total={len(positions_to_normalize)} | Details: {'; '.join(item_details)}")

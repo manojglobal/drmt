@@ -198,9 +198,32 @@ class TestFailedAuthAdapters(unittest.IsolatedAsyncioTestCase):
     @patch("position.adapters.send_axis_api_request")
     @patch("position.adapters.get_axis_public_key", new_callable=AsyncMock)
     async def test_axisdirect_zero_positions_not_blocked(self, mock_pk, mock_send):
-        """AXIS DIRECT: Empty positions response returns [] without blocking."""
+        """AXIS DIRECT: Empty positions returns [] without calling get-order-book or blocking."""
         mock_pk.return_value = "mock_public_key"
         mock_send.return_value = (200, AXIS_EMPTY_SUCCESS)
+        cred = Credential(
+            broker="AXIS DIRECT", client_id="AXIS123", token="valid_tok",
+            api_key="client_id_val", api_secret="auth_key_val", public_key="pk_val",
+            static_ip="172.31.8.142", fingerprint="AXIS:AXIS123", status="working"
+        )
+        positions = await poll_axisdirect(cred)
+        self.assertEqual(positions, [])
+        self.assertFalse(is_blocked(cred.client_id))
+        called_urls = [c.kwargs["url"] for c in mock_send.call_args_list]
+        self.assertEqual(len(called_urls), 2)
+        self.assertTrue(all(u.endswith("/trading/portfolio/get-positions") for u in called_urls))
+        self.assertFalse(any("get-order-book" in u for u in called_urls))
+
+    @patch("position.adapters.send_axis_api_request")
+    @patch("position.adapters.get_axis_public_key", new_callable=AsyncMock)
+    async def test_axisdirect_validation_error_1001_not_auth_error(self, mock_pk, mock_send):
+        """AXIS DIRECT: API validation code 1001 returns [] without falsely raising PermissionError."""
+        mock_pk.return_value = "mock_public_key"
+        mock_send.return_value = (200, {
+            "statusCode": 400,
+            "status": "Bad Request",
+            "error": {"code": "1001", "error": "failed validation for type", "field": "type", "value": "open"},
+        })
         cred = Credential(
             broker="AXIS DIRECT", client_id="AXIS123", token="valid_tok",
             api_key="client_id_val", api_secret="auth_key_val", public_key="pk_val",

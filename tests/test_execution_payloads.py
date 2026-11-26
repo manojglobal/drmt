@@ -229,6 +229,15 @@ class TestExecutionPayloadMaster(unittest.TestCase):
         self.assertEqual(ax_p["transactionType"], "BUY")
         self.assertEqual(ax_p["totalQty"], 5)
 
+        pos_ax_long = pos_ax.model_copy(update={"quantity": 5, "transaction_type": "BUY"})
+        ax_p_long = PayloadMaster.build_axis_payload(pos_ax_long, self.axis_cred)
+        self.assertEqual(ax_p_long["transactionType"], "SELL")
+        self.assertEqual(ax_p_long["totalQty"], 5)
+
+        pos_ax_zero = pos_ax.model_copy(update={"quantity": 0})
+        with self.assertRaises(ValueError):
+            PayloadMaster.build_axis_payload(pos_ax_zero, self.axis_cred)
+
 
 if __name__ == "__main__":
     unittest.main()
