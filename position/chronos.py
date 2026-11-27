@@ -139,7 +139,12 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
         
         # 2. Stale Cache Fix: Push immediately from Redis
         redis_key = f"positions:{user_id}"
-        last_snapshot_str = await engine.redis_pool.get(redis_key)
+        last_snapshot_str = None
+        if getattr(engine, "redis_pool", None):
+            try:
+                last_snapshot_str = await engine.redis_pool.get(redis_key)
+            except Exception as redis_err:
+                logger.warning(f"Failed to read cached positions from Redis for user {user_id}: {redis_err}")
         
         if last_snapshot_str:
             try:
@@ -396,7 +401,11 @@ async def polling_loop(user_id: str, ws: web.WebSocketResponse, credentials: lis
                         ws.send_bytes(json.dumps({"type": "positions", "data": new_data}).encode("utf-8")),
                         timeout=3.0
                     )
-                    await engine.redis_pool.set(redis_key, json.dumps(new_data))
+                    if getattr(engine, "redis_pool", None):
+                        try:
+                            await engine.redis_pool.set(redis_key, json.dumps(new_data))
+                        except Exception as redis_err:
+                            logger.warning(f"Failed to sync positions to Redis for user {user_id}: {redis_err}")
                     await logger_system.info(f"⚡ [POSITION PUSH] Pushed {len(new_data)} position(s) to WebSocket and synced Redis cache")
                     await logger_monitor.info(f"⚡ [POSITION PUSH] user={user_id} | Pushed {len(new_data)} position(s) to WebSocket: {json.dumps(new_data, default=str)}")
                     last_snapshot = new_data

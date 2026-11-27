@@ -59,6 +59,96 @@ class TestChronosAndWebSocketEngine(unittest.IsolatedAsyncioTestCase):
             await engine.stop()
             self.assertTrue(engine.http_session.closed)
 
+    async def test_core_engine_stop_deletes_only_position_keys_and_preserves_instruments(self):
+        """CoreEngine.stop() deletes only positions:* keys while preserving instrument caches and unrelated keys."""
+        fake_redis = FakeRedis()
+        engine = CoreEngine()
+        with patch("core.engine.redis.from_url", return_value=fake_redis):
+            await engine.start()
+
+        await fake_redis.set("positions:1", json.dumps([{"id": "p1"}]))
+        await fake_redis.set("positions:205", json.dumps([{"id": "p2"}]))
+        await fake_redis.set("positions_other:1", "keep-me")
+        await fake_redis.hset("axis:instrument_tokens", {"TCS": "123"})
+        await fake_redis.expire("axis:instrument_tokens", 86400)
+        await fake_redis.hset("kotak:symbols", {"NSE:INFY": "456"})
+        await fake_redis.hset("mstock:token_to_tsym", {"NSE:1": "WIPRO-EQ"})
+
+        await engine.stop()
+
+        self.assertIsNone(await fake_redis.get("positions:1"))
+        self.assertIsNone(await fake_redis.get("positions:205"))
+        self.assertEqual(await fake_redis.get("positions_other:1"), "keep-me")
+        self.assertEqual(await fake_redis.hgetall("axis:instrument_tokens"), {"TCS": "123"})
+        self.assertEqual(fake_redis.ttls.get("axis:instrument_tokens"), 86400)
+        self.assertEqual(await fake_redis.hgetall("kotak:symbols"), {"NSE:INFY": "456"})
+        self.assertEqual(await fake_redis.hgetall("mstock:token_to_tsym"), {"NSE:1": "WIPRO-EQ"})
+        self.assertTrue(fake_redis.closed)
+
+    async def test_core_engine_stop_closes_pool_when_redis_scan_fails(self):
+        """CoreEngine.stop() catches scan_iter errors and still closes redis_pool cleanly."""
+        class _FailingScanRedis:
+            def __init__(self):
+                self.close = AsyncMock()
+
+            async def scan_iter(self, match=None):
+                raise ConnectionError("redis unreachable")
+                yield match  # pragma: no cover
+
+        failing_redis = _FailingScanRedis()
+        engine = CoreEngine()
+        with patch("core.engine.redis.from_url", return_value=failing_redis):
+            await engine.start()
+
+        await engine.stop()
+        failing_redis.close.assert_awaited_once()
+
+    async def test_chronos_polling_loop_survives_redis_failure_or_none(self):
+        """polling_loop streams positions and deduplicates snapshots even if redis_pool is None or failing."""
+        class _BrokenRedis:
+            async def get(self, key):
+                raise ConnectionError("redis read down")
+
+            async def set(self, key, val):
+                raise ConnectionError("redis write down")
+
+        today_dt = datetime.now(tz=_IST)
+        cred = Credential(
+            broker="FLATTRADE", client_id="FZ59716", token="tok_today",
+            token_updated_at=today_dt, fingerprint="FLATTRADE:FZ59716", status="working"
+        )
+        pos_live = Position(
+            id="FLATTRADE:FZ59716:WIPRO-EQ:NSE:INTRADAY", broker="FLATTRADE", client_id="FZ59716",
+            symbol="WIPRO-EQ", token="3787", exchange="NSE", product_type="INTRADAY",
+            order_type="MKT", transaction_type="BUY", quantity=5, avg_price=200.0, ltp=205.0, pnl=25.0
+        )
+
+        for pool in (None, _BrokenRedis()):
+            engine = CoreEngine()
+            engine.redis_pool = pool
+            ws = FakeWebSocket()
+            sleep_calls = 0
+
+            async def _fake_sleep(secs):
+                nonlocal sleep_calls
+                sleep_calls += 1
+                if sleep_calls >= 3:
+                    engine.last_ping["205"] = time.monotonic() - 60.0
+
+            with (
+                patch("position.chronos.is_before_daily_refresh", return_value=False),
+                patch("position.chronos.is_morning_refresh_running", return_value=False),
+                patch("position.chronos.random.uniform", return_value=0.0),
+                patch("position.chronos.asyncio.sleep", side_effect=_fake_sleep),
+                patch("position.chronos.broker_poll", new=AsyncMock(return_value=[pos_live])),
+            ):
+                await polling_loop("205", ws, [cred], engine)
+
+            self.assertEqual(len(ws.sent_bytes), 1)
+            msg = json.loads(ws.sent_bytes[0].decode("utf-8"))
+            self.assertEqual([p["symbol"] for p in msg["data"]], ["WIPRO-EQ"])
+            self.assertTrue(ws.closed)
+
     async def test_chronos_polling_loop_hydrates_redis_diffs_and_filters_exited(self):
         """polling_loop sends cached snapshot immediately, strips recently exited positions, and pushes diffs only."""
         engine = CoreEngine()

@@ -1,6 +1,7 @@
 """Reusable test helpers, mocks, and temporary fixtures for unit tests."""
 
 from contextlib import asynccontextmanager
+import fnmatch
 import os
 import shutil
 import tempfile
@@ -101,6 +102,7 @@ class FakeRedis:
         self.kv: Dict[str, str] = {}
         self.hashes: Dict[str, Dict[str, str]] = {}
         self.ttls: Dict[str, int] = {}
+        self.closed: bool = False
 
     async def get(self, key: str) -> Optional[str]:
         return self.kv.get(key)
@@ -121,6 +123,27 @@ class FakeRedis:
         self.ttls[key] = seconds
         return True
 
+    async def scan_iter(self, match: Optional[str] = None):
+        keys = list(dict.fromkeys([*self.kv.keys(), *self.hashes.keys()]))
+        for key in keys:
+            if match is None or fnmatch.fnmatchcase(str(key), str(match)):
+                yield key
+
+    async def delete(self, *keys: str) -> int:
+        deleted = 0
+        for key in keys:
+            removed = False
+            if key in self.kv:
+                del self.kv[key]
+                removed = True
+            if key in self.hashes:
+                del self.hashes[key]
+                removed = True
+            self.ttls.pop(key, None)
+            if removed:
+                deleted += 1
+        return deleted
+
     async def flushdb(self) -> bool:
         self.kv.clear()
         self.hashes.clear()
@@ -128,6 +151,7 @@ class FakeRedis:
         return True
 
     async def close(self) -> None:
+        self.closed = True
         return None
 
 

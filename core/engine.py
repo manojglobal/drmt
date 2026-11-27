@@ -144,9 +144,21 @@ class CoreEngine:
             
         if self.redis_pool:
             try:
-                await self.redis_pool.flushdb()
+                if hasattr(self.redis_pool, "scan_iter"):
+                    batch = []
+                    async for key in self.redis_pool.scan_iter(match="positions:*"):
+                        batch.append(key)
+                        if len(batch) >= 500:
+                            await self.redis_pool.delete(*batch)
+                            batch.clear()
+                    if batch:
+                        await self.redis_pool.delete(*batch)
             except Exception as e:
-                logger.error(f"Error flushing Redis on shutdown: {e}")
-            await self.redis_pool.close()
+                logger.error(f"Error cleaning up Redis position keys on shutdown: {e}")
+            finally:
+                try:
+                    await self.redis_pool.close()
+                except Exception as close_err:
+                    logger.error(f"Error closing Redis connection on shutdown: {close_err}")
 
 core_engine = CoreEngine()
