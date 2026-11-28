@@ -150,9 +150,10 @@ class ServiceLogger:
 
     MAX_HISTORY = 100
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, auto_email: bool = True) -> None:
         # Initializes the class with default values and state.
         self.name = name
+        self._auto_email = auto_email
         self._history: List[LogEntry] = []
         self._lock = asyncio.Lock()
         tag = "DRMT.SCM" if name in ("system", "monitor", "chronos") else f"DRMT.{name.capitalize()}"
@@ -173,7 +174,7 @@ class ServiceLogger:
         module = self._caller_module()
         await self._log("ERROR", msg, module_override=module)
         # Fire-and-forget: never blocks, never raises to caller
-        if notify_email:
+        if notify_email and self._auto_email:
             try:
                 asyncio.create_task(
                     send_error_email(f"DRMT ERROR [{self.name}]: {module}", msg),
@@ -363,8 +364,8 @@ def setup_logging(level: int = logging.INFO) -> None:
 # ─── Module-level singletons ──────────────────────────────────────────────────
 
 logger_auth:    ServiceLogger = ServiceLogger("auth")
-logger_audit:   ServiceLogger = ServiceLogger("audit")
-logger_api:     ServiceLogger = ServiceLogger("api")
+logger_audit:   ServiceLogger = ServiceLogger("audit", auto_email=False)
+logger_api:     ServiceLogger = ServiceLogger("api", auto_email=False)
 logger_exit:    ServiceLogger = ServiceLogger("exit")
 logger_monitor: ServiceLogger = ServiceLogger("monitor")
 logger_system:  ServiceLogger = ServiceLogger("system")

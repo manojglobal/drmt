@@ -100,6 +100,56 @@ class TestLoggingAndEmailUtilities(unittest.IsolatedAsyncioTestCase):
         with patch("utils.email.settings.EMAIL_USER", ""), patch("utils.email.settings.EMAIL_PASS", ""):
             await email_mod.send_error_email("Should Skip Gracefully", "Body")
 
+    async def test_logger_api_no_auto_email_and_consolidated_per_account_dedup(self):
+        """logger_api logs to file/history with zero error emails, while consolidated alerts dedup per account set."""
+        import glob
+        from unittest.mock import AsyncMock
+        from logger.logger import logger_api
+
+        async with isolated_log_dir() as tmp_log_dir:
+            mock_err_send = AsyncMock()
+            with patch("logger.logger.send_error_email", mock_err_send):
+                await logger_api.error("❌ [BROKER AUTH FAIL] simulated 401")
+                await asyncio.sleep(0.05)
+
+            self.assertEqual(mock_err_send.await_count, 0)
+            self.assertIn("[BROKER AUTH FAIL]", logger_api.get_history()[0].message)
+            api_err_logs = glob.glob(os.path.join(tmp_log_dir, "api", "error_*.log"))
+            self.assertTrue(api_err_logs)
+
+            # Standard operational logger still auto-emails unless notify_email=False
+            svc_sys = ServiceLogger("test_sys_auto")
+            mock_sys_send = AsyncMock()
+            with patch("logger.logger.send_error_email", mock_sys_send):
+                await svc_sys.error("Critical system alert")
+                await svc_sys.error("Suppressed alert", notify_email=False)
+                await asyncio.sleep(0.05)
+            self.assertEqual(mock_sys_send.await_count, 1)
+
+        # Two different single-account failures within 30s must both be sent; repeat of first is deduped
+        email_mod._RECENT_SUBJECTS.clear()
+        email_mod._EMAIL_SEMAPHORE = asyncio.Semaphore(1)
+        sent_subjects = []
+
+        def _capture(subject, plain_body, html_body, *args):
+            sent_subjects.append((subject, html_body))
+
+        with (
+            patch("utils.email.settings.EMAIL_USER", "sender@example.com"),
+            patch("utils.email.settings.EMAIL_PASS", "smtp_pass"),
+            patch("utils.email.settings.EMAIL_TO", "ops@example.com"),
+            patch("utils.email._send_email_sync", side_effect=_capture),
+        ):
+            acc_a = [{"broker": "FLATTRADE", "client_id": "FZ59716", "username": "User A", "user_email": "a@example.com", "reason": "Expired"}]
+            acc_b = [{"broker": "MSTOCK", "client_id": "P645M2", "username": "User B", "user_email": "b@example.com", "reason": "Expired"}]
+            await email_mod.send_consolidated_auth_failed_email(acc_a, source="Live Polling Session Expired")
+            await email_mod.send_consolidated_auth_failed_email(acc_b, source="Live Polling Session Expired")
+            await email_mod.send_consolidated_auth_failed_email(acc_a, source="Live Polling Session Expired")
+
+        self.assertEqual(len(sent_subjects), 2)
+        self.assertIn("FZ59716", sent_subjects[0][1])
+        self.assertIn("P645M2", sent_subjects[1][1])
+
     async def test_flattrade_missing_keys_single_merged_email_and_sdk_toggle(self):
         """Merged Flattrade missing API key/secret alert sends one email for all users only in SDK mode."""
         from credentials.flattrade import (

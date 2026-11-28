@@ -352,6 +352,88 @@ class TestChronosAndWebSocketEngine(unittest.IsolatedAsyncioTestCase):
         self.assertIn("FZ58776", plain_body)
         self.assertIn("FZ48062", plain_body)
 
+    async def test_flattrade_401_poll_sends_only_consolidated_html_email_no_api_emails(self):
+        """HTTP 401 via proxy -> _poll_flattrade_sdk -> polling_loop sends only 1 consolidated HTML email."""
+        import utils.email as email_mod
+        from tests.helpers import isolated_log_dir
+
+        class _MockProxyResp:
+            status = 200
+            async def json(self, content_type=None):
+                return {
+                    "status_code": 401,
+                    "json": {"stat": "Not_Ok", "emsg": "Session Expired : Invalid Session Key"},
+                }
+            def raise_for_status(self):
+                return None
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class _MockProxySession:
+            def post(self, url, **kwargs):
+                return _MockProxyResp()
+
+        email_mod._RECENT_SUBJECTS.clear()
+        email_mod._EMAIL_SEMAPHORE = asyncio.Semaphore(1)
+        dispatched = []
+
+        def _capture_sync(subject, plain_body, html_body, *args):
+            dispatched.append((subject, plain_body, html_body))
+
+        engine = CoreEngine()
+        engine.redis_pool = FakeRedis()
+        ws = FakeWebSocket()
+        today = datetime.now(tz=_IST)
+        cred = Credential(
+            broker="FLATTRADE", client_id="FZ59716", api_key="ak", api_secret="as",
+            static_ip="172.31.8.133", token="expired_tok", token_updated_at=today,
+            fingerprint="FLATTRADE:FZ59716", status="working",
+        )
+
+        async def _fake_sleep(secs):
+            if secs >= 1.0:
+                engine.last_ping["205"] = time.monotonic() - 60.0
+
+        prev_session = core_engine.http_session
+        core_engine.http_session = _MockProxySession()
+        try:
+            async with isolated_log_dir():
+                with (
+                    patch("position.adapters.settings.FLATTRADE_FLOW", "SDK"),
+                    patch("credentials.flattrade.settings.FLATTRADE_FLOW", "SDK"),
+                    patch("position.chronos.is_before_daily_refresh", return_value=False),
+                    patch("position.chronos.is_morning_refresh_running", return_value=False),
+                    patch("position.chronos.random.uniform", return_value=0.0),
+                    patch("position.chronos.asyncio.sleep", side_effect=_fake_sleep),
+                    patch("utils.user_mapping.get_client_username", return_value="Jagdeesh Sawant"),
+                    patch("position.chronos.get_client_username", return_value="Jagdeesh Sawant"),
+                    patch("credentials.dynamic_loader.get_client_email", return_value="jagdeesh@gmail.com"),
+                    patch("utils.email.settings.EMAIL_USER", "sender@example.com"),
+                    patch("utils.email.settings.EMAIL_PASS", "smtp_pass"),
+                    patch("utils.email.settings.EMAIL_TO", "ops@example.com"),
+                    patch("utils.email._send_email_sync", side_effect=_capture_sync),
+                ):
+                    await polling_loop("205", ws, [cred], engine)
+                    email_tasks = [
+                        t for t in asyncio.all_tasks()
+                        if t.get_name() == "email_poll_expired_consolidated" or t.get_name().startswith("err_email_")
+                    ]
+                    if email_tasks:
+                        await asyncio.gather(*email_tasks)
+        finally:
+            core_engine.http_session = prev_session
+
+        self.assertTrue(is_blocked("FZ59716"))
+        self.assertEqual(len(dispatched), 1)
+        subj, _, html_body = dispatched[0]
+        self.assertIn("Live Polling Session Expired: 1 Credential(s) Failed Authentication", subj)
+        self.assertNotIn("DRMT ERROR [api]", subj)
+        self.assertIn("<table", html_body)
+        self.assertIn("FZ59716", html_body)
+        self.assertIn("Jagdeesh Sawant", html_body)
+
 
 class TestWebSocketRoutes(AioHTTPTestCase):
     """Tests /ws/positions authentication, TEXT/BINARY ping handling, and disconnect cleanup."""

@@ -48,6 +48,7 @@ async def poll_mstock(cred: Credential) -> List[Position]:
         "User-Agent": "Mozilla/5.0"
     }
     
+    already_logged = False
     try:
         resp = await proxy_request("GET", url, str(cred.static_ip), headers=headers)
         if isinstance(resp, dict):
@@ -55,6 +56,7 @@ async def poll_mstock(cred: Credential) -> List[Position]:
             st_val = str(resp.get("status") or resp.get("stat") or "").lower()
             err_msg = str(resp.get("message") or resp.get("errMsg") or resp.get("error") or "")
             if st_val in ("error", "failed", "fail") or any(x in err_msg.lower() for x in ("invalid token", "token expired", "unauthorized", "jwt", "session expired", "invalid session", "user not logged in")):
+                already_logged = True
                 await logger_api.error(f"❌ [mStock Auth Expired] ({cred.client_id}): status={st_val}, msg={err_msg}")
                 raise PermissionError(f"mStock Auth Error for {cred.client_id}: {err_msg or 'Session expired / invalid token'}")
 
@@ -144,9 +146,11 @@ async def poll_mstock(cred: Credential) -> List[Position]:
         return positions
     except Exception as e:
         if isinstance(e, PermissionError) or is_auth_failure_message(str(e)):
-            await logger_api.error(f"❌ [MStock Auth Error] ({cred.client_id}): {e}")
+            if not already_logged:
+                await logger_api.error(f"❌ [MStock Auth Error] ({cred.client_id}): {e}")
             raise PermissionError(f"MStock Auth Error: {e}")
-        await logger_api.error(f"❌ [mStock Poll Error] ({cred.client_id}): {e}")
+        if not already_logged:
+            await logger_api.error(f"❌ [mStock Poll Error] ({cred.client_id}): {e}")
         raise
 
 async def poll_flattrade(cred: Credential) -> List[Position]:
@@ -173,6 +177,7 @@ async def _poll_flattrade_sdk(cred: Credential) -> List[Position]:
         "User-Agent": "DRMT/2.0"
     }
 
+    already_logged = False
     try:
         if cred.static_ip:
             resp = await proxy_request("POST", url, str(cred.static_ip), headers=headers, data=form_body)
@@ -202,6 +207,7 @@ async def _poll_flattrade_sdk(cred: Credential) -> List[Position]:
 
             # 1. Genuine Auth/Session Failures -> Raise PermissionError to trigger quarantine/re-auth
             if any(x in emsg for x in ("invalid key", "session expired", "not logged in", "user not logged in", "token expired", "unauthorized", "invalid token", "forbidden", "session revoked", "user blocked", "account locked", "invalid user", "access denied")):
+                already_logged = True
                 await logger_api.error(f"❌ [Flattrade Pi SDK Auth Expired] ({cred.client_id}): {resp.get('emsg') or resp.get('errMsg')}")
                 raise PermissionError(
                     f"Flattrade Auth Error: Invalid/Expired session ({resp.get('emsg') or resp.get('errMsg')})"
@@ -213,6 +219,7 @@ async def _poll_flattrade_sdk(cred: Credential) -> List[Position]:
 
             # 3. Broker Error Responses
             if stat == "not_ok":
+                already_logged = True
                 await logger_api.error(f"❌ [Flattrade Pi SDK Broker Error] ({cred.client_id}): {resp.get('emsg') or resp.get('errMsg')}")
                 raise RuntimeError(
                     f"Flattrade Poll Error: {resp.get('emsg') or resp.get('errMsg')}"
@@ -244,9 +251,11 @@ async def _poll_flattrade_sdk(cred: Credential) -> List[Position]:
         return normalized
     except Exception as e:
         if isinstance(e, PermissionError) or is_auth_failure_message(str(e)):
-            await logger_api.error(f"❌ [Flattrade Pi SDK Auth Error] ({cred.client_id}): {e}")
+            if not already_logged:
+                await logger_api.error(f"❌ [Flattrade Pi SDK Auth Error] ({cred.client_id}): {e}")
             raise PermissionError(f"Flattrade Auth Error: {e}")
-        await logger_api.error(f"❌ [Flattrade Pi SDK Poll Error] ({cred.client_id}): {e}")
+        if not already_logged:
+            await logger_api.error(f"❌ [Flattrade Pi SDK Poll Error] ({cred.client_id}): {e}")
         raise
 
 
@@ -266,6 +275,7 @@ async def _poll_flattrade_web(cred: Credential) -> List[Position]:
         "Referer": "https://emerge.flattrade.in/"
     }
     
+    already_logged = False
     try:
         if cred.static_ip:
             resp = await proxy_request("POST", url, str(cred.static_ip), headers=headers, json_data=payload)
@@ -297,6 +307,7 @@ async def _poll_flattrade_web(cred: Credential) -> List[Position]:
 
             # 1. Genuine Auth/Session Failures -> Raise PermissionError to trigger quarantine/re-auth
             if any(x in emsg for x in ("invalid session", "session expired", "invalid key", "not logged in", "user not logged in", "token expired", "unauthorized", "invalid token", "forbidden", "session revoked", "user blocked", "account locked", "invalid user", "access denied")):
+                already_logged = True
                 await logger_api.error(f"❌ [Flattrade Auth Expired] ({cred.client_id}) status={status}, msg={resp.get('errMsg') or resp.get('emsg')}")
                 raise PermissionError(
                     f"Flattrade Auth Error: Invalid/Expired session (status={status}, msg={resp.get('errMsg') or resp.get('emsg')})"
@@ -344,6 +355,7 @@ async def _poll_flattrade_web(cred: Credential) -> List[Position]:
                     if isinstance(h_resp, dict):
                         h_emsg = str(h_resp.get("errMsg", "") or h_resp.get("emsg", "")).lower()
                         if any(x in h_emsg for x in ("invalid session", "session expired", "invalid key", "not logged in", "user not logged in", "token expired")):
+                            already_logged = True
                             await logger_api.error(f"❌ [Flattrade Auth Expired via Holdings] ({cred.client_id}): {h_resp.get('errMsg') or h_resp.get('emsg')}")
                             raise PermissionError(
                                 f"Flattrade Auth Error: {h_resp.get('errMsg') or h_resp.get('emsg')}"
@@ -402,10 +414,12 @@ async def _poll_flattrade_web(cred: Credential) -> List[Position]:
             # 4. Broker Error Responses -> Transient error, do NOT blacklist account unless explicitly auth failed
             if status == "E" or (stat == "not_ok" and status != "S"):
                 if any(x in emsg for x in ("invalid session", "session expired", "invalid key", "not logged in", "user not logged in", "token expired", "unauthorized", "invalid token", "forbidden", "session revoked", "user blocked", "account locked", "invalid user", "access denied")):
+                    already_logged = True
                     await logger_api.error(f"❌ [Flattrade Auth Expired] ({cred.client_id}) status={status}, msg={resp.get('errMsg') or resp.get('emsg')}")
                     raise PermissionError(
                         f"Flattrade Auth Error: Invalid/Expired session (status={status}, msg={resp.get('errMsg') or resp.get('emsg')})"
                     )
+                already_logged = True
                 await logger_api.error(f"❌ [Flattrade Broker Error] ({cred.client_id}): status={status}, msg={resp.get('errMsg') or resp.get('emsg')}")
                 raise RuntimeError(
                     f"Flattrade Poll Error: status={status}, msg={resp.get('errMsg') or resp.get('emsg')}"
@@ -426,9 +440,11 @@ async def _poll_flattrade_web(cred: Credential) -> List[Position]:
         return normalized
     except Exception as e:
         if isinstance(e, PermissionError) or is_auth_failure_message(str(e)):
-            await logger_api.error(f"❌ [Flattrade Auth Error] ({cred.client_id}): {e}")
+            if not already_logged:
+                await logger_api.error(f"❌ [Flattrade Auth Error] ({cred.client_id}): {e}")
             raise PermissionError(f"Flattrade Auth Error: {e}")
-        await logger_api.error(f"❌ [Flattrade Poll Error] ({cred.client_id}): {e}")
+        if not already_logged:
+            await logger_api.error(f"❌ [Flattrade Poll Error] ({cred.client_id}): {e}")
         raise
 
 async def poll_aliceblue(cred: Credential) -> List[Position]:

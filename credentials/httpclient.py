@@ -85,6 +85,7 @@ async def _proxy_request_inner(
     await logger_api.info(f"📤 [PROXY REQ] {method} {safe_url} (source_ip={source_ip}){retry_tag} | Payload: {sanitized_req}")
 
     async with session.post(settings.DRMT_PROXY_URL, json=payload) as resp:
+        already_logged = False
         try:
             resp_data = await resp.json()
 
@@ -124,9 +125,11 @@ async def _proxy_request_inner(
                 await logger_api.info(f"📥 [PROXY RESP] {method} {safe_url} -> HTTP {target_sc} in {elapsed_ms:.1f}ms | Body: {sanitized_resp}")
 
                 if target_sc in (401, 403):
+                    already_logged = True
                     await logger_api.error(f"❌ [BROKER AUTH FAIL] {method} {safe_url} -> HTTP {target_sc} | Body: {sanitized_resp}")
                     raise PermissionError(f"Broker Auth Error (HTTP {target_sc}): {broker_body}")
                 elif target_sc and target_sc >= 400:
+                    already_logged = True
                     await logger_api.error(f"❌ [BROKER HTTP ERR] {method} {safe_url} -> HTTP {target_sc} | Body: {sanitized_resp}")
                     raise RuntimeError(f"Broker HTTP {target_sc} Error: {broker_body}")
 
@@ -158,6 +161,7 @@ async def _proxy_request_inner(
             elapsed_ms = (time.monotonic() - t0) * 1000
             safe_err = sanitize_log_message(str(e))
             logger.debug(f"❌ API Error ({elapsed_ms:.1f}ms): {safe_err}")
-            await logger_api.error(f"❌ [PROXY ERR] {method} {safe_url} after {elapsed_ms:.1f}ms: {safe_err}")
+            if not already_logged:
+                await logger_api.error(f"❌ [PROXY ERR] {method} {safe_url} after {elapsed_ms:.1f}ms: {safe_err}")
             raise
 

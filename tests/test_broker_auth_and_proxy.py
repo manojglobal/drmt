@@ -157,6 +157,37 @@ class TestBrokerAuthAndProxy(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(RuntimeError):
                 await proxy_request("POST", "https://api.example.com/order", "1.1.1.1")
 
+    async def test_proxy_request_logs_broker_errors_once_without_duplicate_proxy_err(self):
+        """HTTP 401/400/transport errors each invoke logger_api.error once without re-catching and double-logging."""
+        async with suppress_email_notifications():
+            core_engine.http_session = _SequencedSession([
+                _FakeResponse({"status_code": 401, "json": {"stat": "Not_Ok", "emsg": "Session Expired"}}, status=200)
+            ])
+            with patch("credentials.httpclient.logger_api.error", new=AsyncMock()) as mock_err_401:
+                with self.assertRaises(PermissionError):
+                    await proxy_request("POST", "https://piconnect.flattrade.in/PiConnectAPI/PositionBook", "172.31.8.133")
+            self.assertEqual(mock_err_401.await_count, 1)
+            self.assertIn("[BROKER AUTH FAIL]", mock_err_401.await_args.args[0])
+            self.assertNotIn("[PROXY ERR]", mock_err_401.await_args.args[0])
+
+            core_engine.http_session = _SequencedSession([
+                _FakeResponse({"status_code": 400, "json": {"message": "Bad request"}}, status=200)
+            ])
+            with patch("credentials.httpclient.logger_api.error", new=AsyncMock()) as mock_err_400:
+                with self.assertRaises(RuntimeError):
+                    await proxy_request("POST", "https://api.example.com/order", "172.31.8.133")
+            self.assertEqual(mock_err_400.await_count, 1)
+            self.assertIn("[BROKER HTTP ERR]", mock_err_400.await_args.args[0])
+
+            core_engine.http_session = _SequencedSession([
+                _FakeResponse({"error": "upstream bad gateway"}, status=502)
+            ])
+            with patch("credentials.httpclient.logger_api.error", new=AsyncMock()) as mock_err_502:
+                with self.assertRaises(RuntimeError):
+                    await proxy_request("GET", "https://api.example.com/positions", "172.31.8.133")
+            self.assertEqual(mock_err_502.await_count, 1)
+            self.assertIn("[PROXY ERR]", mock_err_502.await_args.args[0])
+
     async def test_flattrade_sdk_login_success_and_missing_keys_guard(self):
         """Flattrade SDK flow completes 3-step handshake and rejects missing api_key/api_secret."""
         async with isolated_test_db(), suppress_email_notifications():

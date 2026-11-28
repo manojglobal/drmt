@@ -127,20 +127,21 @@ def _build_env_subject(subject: str) -> str:
         return f"{tag} {subject.strip()}"
     return subject.strip()
 
-async def send_email_notification(subject: str, body: str, html_body: str | None = None) -> None:
+async def send_email_notification(subject: str, body: str, html_body: str | None = None, dedup_key: str | None = None) -> None:
     """Dispatches general alert / success email via SMTP with environment tagging."""
-    await send_error_email(subject, body, html_body=html_body)
+    await send_error_email(subject, body, html_body=html_body, dedup_key=dedup_key)
 
-async def send_error_email(subject: str, body: str, html_body: str | None = None) -> None:
+async def send_error_email(subject: str, body: str, html_body: str | None = None, dedup_key: str | None = None) -> None:
     """Dispatches simple, structured alert email via SMTP.
 
-    Throttled: max 1 concurrent SMTP connection; duplicate subjects
+    Throttled: max 1 concurrent SMTP connection; duplicate subjects (or dedup_key)
     are suppressed for _EMAIL_DEDUP_SECONDS seconds.
     """
     subject = _build_env_subject(subject)
-    # Dedup: skip if same subject was sent recently
+    cache_key = _build_env_subject(dedup_key) if dedup_key else subject
+    # Dedup: skip if same key was sent recently
     now = time.monotonic()
-    last_sent = _RECENT_SUBJECTS.get(subject, 0.0)
+    last_sent = _RECENT_SUBJECTS.get(cache_key, 0.0)
     if now - last_sent < _EMAIL_DEDUP_SECONDS:
         return
 
@@ -167,11 +168,11 @@ async def send_error_email(subject: str, body: str, html_body: str | None = None
         async with _EMAIL_SEMAPHORE:
             # Re-check dedup after acquiring semaphore (another coroutine may have just sent)
             now = time.monotonic()
-            if now - _RECENT_SUBJECTS.get(subject, 0.0) < _EMAIL_DEDUP_SECONDS:
+            if now - _RECENT_SUBJECTS.get(cache_key, 0.0) < _EMAIL_DEDUP_SECONDS:
                 logger.debug(f"SMTP dedup (post-lock): suppressing '{subject}'")
                 return
 
-            _RECENT_SUBJECTS[subject] = now
+            _RECENT_SUBJECTS[cache_key] = now
             logger.debug("SMTP email provider request started")
             await asyncio.to_thread(
                 _send_email_sync,
@@ -323,7 +324,13 @@ async def send_consolidated_auth_failed_email(
     </div>
     """
 
-    await send_error_email(subject, plain_body, html_body=html_body)
+    client_ids_sig = ",".join(sorted(str(a.get("client_id", "")).strip() for a in failed_accounts))
+    await send_error_email(
+        subject,
+        plain_body,
+        html_body=html_body,
+        dedup_key=f"{subject}::{client_ids_sig}",
+    )
 
 
 FLATTRADE_MISSING_KEYS_MESSAGE = (
